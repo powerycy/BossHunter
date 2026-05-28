@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Verify CLI entry point
+        run: bosshunter --help
+
+      - name: Verify version output
+        run: bosshunter --version
+
+      - name: Run import check
+        run: python -c "import bosshunter; print(bosshunter.__version__)"
+
+      - name: Lint with ruff (if available)
+        run: |
+          pip install ruff
+          ruff check src/
+        continue-on-error: true

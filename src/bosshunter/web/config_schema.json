@@ -1,0 +1,91 @@
+{
+  "sections": [
+    {
+      "key": "profile",
+      "label": "个人信息",
+      "icon": "User",
+      "fields": [
+        {"key": "resume_path", "label": "简历文件路径", "type": "file", "description": "上传 .md 格式简历"},
+        {"key": "target_cities", "label": "目标城市", "type": "multi-select", "options_from": "cities", "description": "支持多城市"},
+        {"key": "salary_min", "label": "最低薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
+        {"key": "salary_max", "label": "最高薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
+        {"key": "deal_breakers", "label": "排除关键词", "type": "tags", "description": "含这些词的岗位自动跳过"}
+      ]
+    },
+    {
+      "key": "search",
+      "label": "搜索设置",
+      "icon": "Search",
+      "fields": [
+        {"key": "keywords", "label": "搜索关键词", "type": "tags", "description": "BOSS 搜索框使用的关键词"},
+        {"key": "cities", "label": "搜索城市", "type": "multi-select", "options_from": "cities", "description": "留空则使用目标城市"},
+        {"key": "salary_range", "label": "薪资范围", "type": "text", "placeholder": "如 15-25K", "default": ""},
+        {"key": "max_pages", "label": "每关键词翻页数", "type": "number", "min": 1, "max": 10, "default": 3}
+      ]
+    },
+    {
+      "key": "scoring",
+      "label": "评分设置",
+      "icon": "Star",
+      "fields": [
+        {"key": "threshold", "label": "通过阈值", "type": "slider", "min": 0, "max": 100, "default": 71, "description": "低于此分自动过滤"},
+        {"key": "prefilter_threshold", "label": "预筛阈值", "type": "slider", "min": 0, "max": 100, "default": 40},
+        {"key": "max_candidates", "label": "每轮最大候选数", "type": "number", "min": 1, "max": 100, "default": 20}
+      ]
+    },
+    {
+      "key": "throttle",
+      "label": "反检测设置",
+      "icon": "Shield",
+      "fields": [
+        {"key": "daily_limit", "label": "每日发送上限", "type": "number", "min": 1, "max": 200, "default": 30},
+        {"key": "interval_min", "label": "最短间隔 (秒)", "type": "number", "min": 10, "max": 600, "default": 60},
+        {"key": "interval_max", "label": "最长间隔 (秒)", "type": "number", "min": 10, "max": 600, "default": 180},
+        {"key": "browse_before_greet", "label": "发送前模拟浏览", "type": "switch", "default": true},
+        {"key": "browse_duration_min", "label": "浏览最短时长 (秒)", "type": "number", "min": 5, "max": 120, "default": 15},
+        {"key": "browse_duration_max", "label": "浏览最长时长 (秒)", "type": "number", "min": 5, "max": 120, "default": 30},
+        {"key": "send_windows", "label": "发送时间窗口", "type": "tags", "default": ["09:00-16:00"], "description": "格式: HH:MM-HH:MM"},
+        {"key": "day_off_probability", "label": "随机休息概率", "type": "number", "min": 0, "max": 1, "step": 0.01, "default": 0.05}
+      ]
+    },
+    {
+      "key": "ai",
+      "label": "AI 设置",
+      "icon": "Brain",
+      "fields": [
+        {"key": "provider", "label": "提供商", "type": "select", "options": ["anthropic", "openai", "custom"], "default": "anthropic"},
+        {"key": "model", "label": "模型名称", "type": "text", "default": "claude-sonnet-4-6"},
+        {"key": "api_key", "label": "API Key", "type": "password", "description": "也可通过环境变量设置"},
+        {"key": "base_url", "label": "Base URL", "type": "text", "placeholder": "留空使用默认", "default": ""}
+      ]
+    },
+    {
+      "key": "monitor",
+      "label": "监控设置",
+      "icon": "Eye",
+      "fields": [
+        {"key": "interval", "label": "检查间隔 (分钟)", "type": "number", "min": 1, "max": 120, "default": 30},
+        {"key": "chat_url", "label": "聊天页 URL", "type": "text", "default": "https://www.zhipin.com/web/geek/chat"},
+        {"key": "max_resume_sends_per_cycle", "label": "每轮最多发简历数", "type": "number", "min": 1, "max": 20, "default": 5}
+      ]
+    },
+    {
+      "key": "follow_up",
+      "label": "跟进设置",
+      "icon": "MessageCircle",
+      "fields": [
+        {"key": "enabled", "label": "启用自动跟进", "type": "switch", "default": true, "description": "对超时未回复的HR自动发送跟进消息"},
+        {"key": "interval_hours", "label": "跟进间隔 (小时)", "type": "number", "min": 12, "max": 168, "default": 48, "description": "发送后多久未回复则跟进"},
+        {"key": "skip_weekends", "label": "跳过周末节假日", "type": "switch", "default": true, "description": "周末和节假日不发送跟进消息"}
+      ]
+    },
+    {
+      "key": "dedup",
+      "label": "去重设置",
+      "icon": "Filter",
+      "fields": [
+        {"key": "history_file", "label": "历史记录文件路径", "type": "text", "default": "./data/history.jsonl"}
+      ]
+    }
+  ]
+}

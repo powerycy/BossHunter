@@ -1,0 +1,80 @@
+import { useState, useEffect, useCallback } from 'react'
+
+export function useConfig() {
+  const [config, setConfig] = useState<Record<string, any> | null>(null)
+  const [schema, setSchema] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const fetchConfig = async () => {
+    try {
+      const [configRes, schemaRes] = await Promise.all([
+        fetch('/api/config'),
+        fetch('/api/config/schema'),
+      ])
+      const configData = await configRes.json()
+      const schemaData = await schemaRes.json()
+      setConfig(configData)
+      setSchema(schemaData)
+      setDirty(false)
+    } catch (err) {
+      console.error('Failed to fetch config:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchConfig()
+  }, [])
+
+  const updateConfig = useCallback((path: string, value: any) => {
+    setConfig(prev => {
+      if (!prev) return prev
+      const keys = path.split('.')
+      const next = JSON.parse(JSON.stringify(prev))
+      let obj = next
+      for (let i = 0; i < keys.length - 1; i++) {
+        if (!obj[keys[i]]) obj[keys[i]] = {}
+        obj = obj[keys[i]]
+      }
+      obj[keys[keys.length - 1]] = value
+      return next
+    })
+    setDirty(true)
+  }, [])
+
+  const saveConfig = async () => {
+    if (!config) return
+    setSaving(true)
+    setMessage(null)
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setMessage({ type: 'success', text: '配置已保存' })
+        setDirty(false)
+      } else {
+        setMessage({ type: 'error', text: data.error || '保存失败' })
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: '网络错误' })
+    } finally {
+      setSaving(false)
+      setTimeout(() => setMessage(null), 3000)
+    }
+  }
+
+  const resetConfig = () => {
+    setLoading(true)
+    fetchConfig()
+  }
+
+  return { config, schema, loading, saving, dirty, message, updateConfig, saveConfig, resetConfig }
+}

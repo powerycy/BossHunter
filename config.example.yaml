@@ -1,0 +1,61 @@
+# BossHunter 配置文件
+# 复制此文件为 config.yaml 并修改为你的实际配置
+
+profile:
+  resume_path: "./resume.md"
+  resume_output_dir: "./data/resumes"
+  target_roles: ["你的目标岗位1", "目标岗位2", "目标岗位3"]
+  target_cities: ["北京"]
+  salary_min: 15  # K
+  salary_max: 25  # K
+  deal_breakers: ["外包", "996"]
+  # 可选：个人亮点（用于招呼语生成）
+  extra_highlights:
+    - "你的核心竞争力描述"
+  # 可选：在线作品集链接
+  portfolio_url: ""
+
+search:
+  keywords: ["关键词1", "关键词2"]
+  city: "北京"
+  salary_range: "15-25K"
+  max_pages: 5
+  sort: newest
+
+scoring:
+  threshold: 70
+  prefilter_threshold: 40
+  max_candidates: 20
+
+throttle:
+  daily_limit: 30
+  interval_min: 60
+  interval_max: 180
+  browse_before_greet: true
+  browse_duration_min: 15
+  browse_duration_max: 30
+  send_windows:
+    - "09:00-17:00"
+  day_off_probability: 0.05
+
+ai:
+  provider: "anthropic"
+  model: "claude-sonnet-4-6"
+  greeting_review_threshold: 7
+  greeting_max_iterations: 2
+  # api_key 通过环境变量 ANTHROPIC_API_KEY 设置，或在此填写
+  # api_key: "sk-your-api-key"
+  # base_url: "https://api.anthropic.com"
+
+monitor:
+  interval: 30
+  chat_url: "https://www.zhipin.com/web/geek/chat"
+  max_resume_sends_per_cycle: 5
+
+follow_up:
+  enabled: true
+  interval_hours: 30
+  skip_weekends: true
+
+dedup:
+  history_file: "./data/history.jsonl"
