@@ -188,15 +188,16 @@ def send_greetings(config: dict, force: bool = False) -> int:
             greeting_escaped = json.dumps(greeting)
             send_msg_js = f"""
             (() => {{
-                const input = document.querySelector('.chat-input[contenteditable], #chat-input, .chat-input');
+                const input = document.querySelector('.chat-input');
                 if (!input) return JSON.stringify({{success: false, error: 'no_chat_input'}});
 
-                // Focus and insert text (triggers Vue reactivity without needing Vue instance)
+                // Set text and trigger Vue reactivity (execCommand fails in CDP)
                 input.focus();
-                document.execCommand('insertText', false, {greeting_escaped});
+                input.innerText = {greeting_escaped};
+                input.dispatchEvent(new Event('input', {{bubbles: true}}));
 
                 // Click send button
-                const sendBtn = document.querySelector('.btn-send, .send-btn, button[class*="send"]');
+                const sendBtn = document.querySelector('.btn-send');
                 if (!sendBtn) return JSON.stringify({{success: false, error: 'no_send_button'}});
                 sendBtn.click();
                 return JSON.stringify({{success: true}});
