@@ -188,29 +188,18 @@ def send_greetings(config: dict, force: bool = False) -> int:
             greeting_escaped = json.dumps(greeting)
             send_msg_js = f"""
             (() => {{
-                const input = document.querySelector('#chat-input, .chat-input[contenteditable]');
+                const input = document.querySelector('.chat-input[contenteditable], #chat-input, .chat-input');
                 if (!input) return JSON.stringify({{success: false, error: 'no_chat_input'}});
 
-                // Find Vue component
-                let vue = null;
-                let el = input;
-                for (let i = 0; i < 15 && el; i++) {{
-                    if (el.__vue__) {{ vue = el.__vue__; break; }}
-                    el = el.parentElement;
-                }}
-                if (!vue) return JSON.stringify({{success: false, error: 'no_vue_instance'}});
+                // Focus and insert text (triggers Vue reactivity without needing Vue instance)
+                input.focus();
+                document.execCommand('insertText', false, {greeting_escaped});
 
-                // Set greeting text and enable submit
-                input.innerText = {greeting_escaped};
-                vue._data.enableSubmit = true;
-
-                // Call Vue's submit handler directly
-                try {{
-                    vue.handleSubmit();
-                    return JSON.stringify({{success: true}});
-                }} catch(e) {{
-                    return JSON.stringify({{success: false, error: e.message}});
-                }}
+                // Click send button
+                const sendBtn = document.querySelector('.btn-send, .send-btn, button[class*="send"]');
+                if (!sendBtn) return JSON.stringify({{success: false, error: 'no_send_button'}});
+                sendBtn.click();
+                return JSON.stringify({{success: true}});
             }})()
             """
             result = evaluate(target_id, send_msg_js)

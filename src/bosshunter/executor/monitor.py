@@ -147,7 +147,7 @@ def _call_claude(prompt: str, config: dict) -> str | None:
 def _detect_rejection(messages: list[dict]) -> bool:
     """Check if HR is rejecting in messages AFTER user's last reply."""
     rejection_keywords = ["不合适", "不匹配", "不太合适", "暂时没有", "不符合", "不太符合",
-                          "很遗憾", "无法推进", "不考虑", "已招满", "岗位已关闭"]
+                          "很遗憾", "无法推进", "不考虑", "已招满", "岗位已关闭", "对不起"]
     # Only check HR messages after my last reply
     hr_msgs_after = _get_hr_messages_after_last_reply(messages)
     for msg in hr_msgs_after:
