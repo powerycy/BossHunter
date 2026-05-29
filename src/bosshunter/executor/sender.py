@@ -177,8 +177,12 @@ def send_greetings(config: dict, force: bool = False) -> int:
             """
             evaluate(target_id, click_confirm_js)
 
-            # Wait for navigation to chat page
-            time.sleep(4)
+            # Wait for navigation to chat page (/web/geek/chat)
+            for _ in range(20):
+                time.sleep(0.5)
+                url_now = evaluate(target_id, "location.pathname")
+                if url_now and "/web/geek/chat" in url_now:
+                    break
 
             # Step 2: On chat page, type and send personalized greeting
             greeting_escaped = json.dumps(greeting)
