@@ -209,7 +209,7 @@ export default function ConfigPage() {
               <Input value={config.ai?.model || ''} onChange={e => updateConfig('ai.model', e.target.value)} />
             </Field>
             <Field label="API Key">
-              <Input type="password" value={config.ai?.api_key || ''} onChange={e => updateConfig('ai.api_key', e.target.value)} placeholder="也可通过环境变量设置" />
+              <Input type="password" value={config.ai?.api_key || ''} onChange={e => updateConfig('ai.api_key', e.target.value)} placeholder={config.ai?.api_key_masked || '也可通过环境变量设置'} />
             </Field>
             <Field label="Base URL">
               <Input value={config.ai?.base_url || ''} onChange={e => updateConfig('ai.base_url', e.target.value)} placeholder="留空使用默认" />

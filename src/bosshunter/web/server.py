@@ -6,8 +6,8 @@ Serves:
 """
 
 import json
-import os
 import time
+from copy import deepcopy
 from pathlib import Path
 
 from bottle import Bottle, request, response, static_file, abort
@@ -34,6 +34,54 @@ def _json_response(data, status_code=200):
 	response.content_type = "application/json; charset=utf-8"
 	response.status = status_code
 	return json.dumps(data, ensure_ascii=False, default=str)
+
+
+def _mask_api_key(key):
+	"""Return a display-safe API key marker."""
+	if not key:
+		return ""
+	if len(key) > 8:
+		return key[:4] + "***" + key[-4:]
+	return "***"
+
+
+def _redact_config_for_response(config):
+	"""Hide secrets before returning config to the browser."""
+	redacted = deepcopy(config)
+	ai_cfg = redacted.get("ai")
+	if isinstance(ai_cfg, dict):
+		key = ai_cfg.pop("api_key", None)
+		if key:
+			ai_cfg["api_key_masked"] = _mask_api_key(str(key))
+	return redacted
+
+
+def _sanitize_config_for_write(data):
+	"""Remove browser-only fields and preserve existing secrets on blank posts."""
+	cleaned = deepcopy(data)
+	ai_cfg = cleaned.get("ai")
+	if not isinstance(ai_cfg, dict):
+		return cleaned
+
+	ai_cfg.pop("api_key_masked", None)
+	ai_cfg.pop("has_api_key", None)
+
+	posted_key = ai_cfg.get("api_key")
+	existing_key = load_config(CONFIG_PATH).get("ai", {}).get("api_key")
+	existing_mask = _mask_api_key(str(existing_key)) if existing_key else ""
+	should_preserve = (
+		posted_key is None
+		or str(posted_key).strip() == ""
+		or (existing_mask and posted_key == existing_mask)
+	)
+
+	if should_preserve:
+		if existing_key:
+			ai_cfg["api_key"] = existing_key
+		else:
+			ai_cfg.pop("api_key", None)
+
+	return cleaned
 
 
 # ─── Health ───────────────────────────────────────────────
@@ -126,14 +174,7 @@ def api_history():
 @app.route("/api/config")
 def api_config_get():
 	try:
-		config = load_config(CONFIG_PATH)
-		# Mask api_key for security
-		if "ai" in config and "api_key" in config["ai"]:
-			key = config["ai"]["api_key"]
-			if key and len(key) > 8:
-				config["ai"]["api_key_masked"] = key[:4] + "***" + key[-4:]
-			else:
-				config["ai"]["api_key_masked"] = "***"
+		config = _redact_config_for_response(load_config(CONFIG_PATH))
 		return _json_response(config)
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
@@ -146,6 +187,9 @@ def api_config_post():
 		data = request.json
 		if not data:
 			return _json_response({"error": "Empty body"}, 400)
+		if not isinstance(data, dict):
+			return _json_response({"error": "Config body must be an object"}, 400)
+		data = _sanitize_config_for_write(data)
 
 		# Basic validation
 		profile = data.get("profile", {})
