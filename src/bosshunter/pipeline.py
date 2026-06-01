@@ -60,7 +60,7 @@ def run_pipeline(config: dict) -> None:
     console.print(f"\n[bold green]═══ 发送完成！{sent} 条招呼语 ═══[/bold green]")
 
     # Step 6: Auto-start monitor loop
-    console.print(f"\n[bold]Step 6/6: 启动持续监测[/bold]")
+    console.print("\n[bold]Step 6/6: 启动持续监测[/bold]")
     interval_min = config.get("monitor", {}).get("interval", 30)
     interval_sec = interval_min * 60
     console.print(f"[dim]每 {interval_min} 分钟检查一次HR回复和跟进，按 Ctrl+C 停止[/dim]\n")

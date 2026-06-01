@@ -166,6 +166,9 @@ cd BossHunter
 # 2. 安装 Python 依赖
 pip install -e .
 
+# 可选：仅在需要 xhtml2pdf fallback 渲染时安装
+pip install -e ".[pdf]"
+
 # 3. 复制并编辑配置（或通过 Web 面板配置）
 cp config.example.yaml config.yaml
 

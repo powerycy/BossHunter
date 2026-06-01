@@ -5,7 +5,7 @@ import json
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
-from bosshunter.browser import new_tab, close_tab, evaluate, click, wait_for_load
+from bosshunter.browser import new_tab, close_tab, evaluate
 from bosshunter.db import get_db, get_jobs_by_status, update_job_status, add_history, add_risk_event
 from bosshunter.throttle import RequestThrottle, SendWindowChecker, ProgressiveBackoff, should_take_day_off
 
@@ -67,7 +67,7 @@ def send_greetings(config: dict, force: bool = False) -> int:
     window_checker = SendWindowChecker(send_windows)
     if not window_checker.is_active():
         info = window_checker.next_window_info()
-        console.print(f"[yellow]⏰ 当前不在发送时间窗口内，暂不发送[/yellow]")
+        console.print("[yellow]⏰ 当前不在发送时间窗口内，暂不发送[/yellow]")
         console.print(f"[dim]  {info}[/dim]")
         add_risk_event(db, "outside_window", info)
         db.close()

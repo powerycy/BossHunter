@@ -242,7 +242,7 @@ def web(ctx: click.Context, port: int, no_open: bool) -> None:
     """启动 Web Dashboard（本地看板 + 配置管理）"""
     from bosshunter.web.server import run_server
 
-    console.print(f"[bold cyan]═══ BossHunter Web Dashboard ═══[/bold cyan]")
+    console.print("[bold cyan]═══ BossHunter Web Dashboard ═══[/bold cyan]")
     console.print(f"[dim]http://127.0.0.1:{port}[/dim]\n")
     run_server(host="127.0.0.1", port=port, open_browser=not no_open)
 

@@ -6,12 +6,12 @@ import os
 
 from rich.console import Console
 
-from bosshunter.browser import new_tab, close_tab, evaluate, click, navigate, wait_for_load, get_page_info
+from bosshunter.browser import new_tab, close_tab, evaluate, click, wait_for_load, get_page_info
 from bosshunter.db import (
     get_db, get_jobs_by_status,
     update_job_status, add_history,
 )
-from bosshunter.throttle import RequestThrottle, SendWindowChecker, ProgressiveBackoff, should_take_day_off
+from bosshunter.throttle import RequestThrottle, SendWindowChecker
 
 console = Console()
 
@@ -829,7 +829,6 @@ def monitor_and_send_resumes(config: dict) -> dict:
     Returns summary dict with counts.
     """
     throttle_config = config.get("throttle", {})
-    monitor_cfg = config.get("monitor", {})
 
     # Time window check (09:00-16:00)
     window_checker = SendWindowChecker(throttle_config.get("send_windows", ["09:00-16:00"]))
@@ -873,7 +872,7 @@ def monitor_and_send_resumes(config: dict) -> dict:
 
             throttle.wait()
 
-        console.print(f"\n[bold green]═══ 回复处理完成 ═══[/bold green]")
+        console.print("\n[bold green]═══ 回复处理完成 ═══[/bold green]")
         console.print(f"  跳过(已手动回复): {summary['skipped']}")
         console.print(f"  自动回复: {summary['replied']}")
         if summary.get("needs_resume"):

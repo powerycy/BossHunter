@@ -200,7 +200,6 @@ def generate_greetings(config: dict) -> int:
         for job in jobs:
             # Generate with self-review loop
             best_greeting = None
-            best_score = 0.0
 
             for iteration in range(max_iterations + 1):
                 critique = ""

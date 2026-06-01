@@ -5,14 +5,13 @@ import random
 import re
 import time
 import hashlib
-from typing import Any
 from urllib.parse import quote
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from bosshunter.browser import (
-    new_tab, close_tab, evaluate, scroll, wait_for_load, get_page_info
+    new_tab, close_tab, evaluate, scroll, wait_for_load
 )
 from bosshunter.config import CITY_CODES
 from bosshunter.db import get_db, job_exists, insert_job

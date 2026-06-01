@@ -5,7 +5,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from bosshunter.db import get_db, get_jobs_by_status
+from bosshunter.db import get_db
 
 console = Console()
 
@@ -255,7 +255,7 @@ def generate_tailored_resume(job_id: str, config: dict) -> Path | None:
         return pdf_path
     else:
         console.print(f"[yellow]PDF 渲染库未安装，已保存为 Markdown: {md_path}[/yellow]")
-        console.print("[dim]  安装 PDF 支持: pip install markdown2 xhtml2pdf[/dim]")
+        console.print('[dim]  安装 PDF fallback 支持: pip install -e ".[pdf]"[/dim]')
         db.execute(
             "UPDATE jobs SET resume_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (str(md_path), job_id)

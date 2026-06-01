@@ -2,7 +2,6 @@
 
 from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
 from rich.prompt import Prompt
 
 from bosshunter.db import get_db, get_jobs_by_status, update_job_status, add_history

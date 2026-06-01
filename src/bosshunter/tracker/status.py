@@ -4,8 +4,6 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.columns import Columns
-from rich.text import Text
-from rich.layout import Layout
 
 from bosshunter.db import (
     get_db, get_stats, get_funnel_stats,

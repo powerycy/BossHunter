@@ -1,6 +1,5 @@
 """Browser connection module - CDP Proxy connection to user's Chrome."""
 
-import json
 import time
 from typing import Any
 
