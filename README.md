@@ -186,16 +186,16 @@ bosshunter connect
 bosshunter run
 ```
 
-自动执行：采集 → 评分 → 招呼语 → 确认 → 发送 → 自动监测
+自动执行：采集 → 评分 → 确认 → 招呼语 → 发送 → 自动监测
 
 ### 分步执行
 
 ```bash
 bosshunter scrape -k "Python开发" -l 30   # 采集
 bosshunter score                            # AI 评分
-bosshunter greet                            # 生成招呼语
 bosshunter confirm                          # 人工确认（交互式）
-bosshunter send                             # 发送已确认的招呼语
+bosshunter greet                            # 为已确认岗位生成招呼语
+bosshunter send                             # 发送已生成的招呼语
 ```
 
 ### 监听模式

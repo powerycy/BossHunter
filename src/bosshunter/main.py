@@ -119,7 +119,7 @@ def score(ctx: click.Context) -> None:
 @cli.command()
 @click.pass_context
 def greet(ctx: click.Context) -> None:
-    """为通过评分的岗位生成招呼语"""
+    """为已确认的岗位生成招呼语"""
     from bosshunter.ai.greeter import generate_greetings
 
     config = ctx.obj["config"]
@@ -142,7 +142,7 @@ def confirm(ctx: click.Context) -> None:
 @click.option("--force", is_flag=True, help="跳过随机休息日检查")
 @click.pass_context
 def send(ctx: click.Context, force: bool) -> None:
-    """自动发送已确认的招呼语"""
+    """自动发送已生成的招呼语"""
     from bosshunter.executor.sender import send_greetings
 
     config = ctx.obj["config"]
@@ -168,7 +168,7 @@ def status(ctx: click.Context, full: bool) -> None:
 @cli.command()
 @click.pass_context
 def run(ctx: click.Context) -> None:
-    """一键运行完整流程: 采集→评分→招呼语→确认→发送"""
+    """一键运行完整流程: 采集→评分→确认→招呼语→发送"""
     from bosshunter.pipeline import run_pipeline
 
     config = ctx.obj["config"]

@@ -176,7 +176,7 @@ def generate_greetings(config: dict) -> int:
     jobs = get_jobs_by_status(db, "approved")
 
     if not jobs:
-        console.print("[yellow]没有需要生成招呼语的岗位[/yellow]")
+        console.print("[yellow]没有已确认的岗位可生成招呼语。请先运行 `bosshunter confirm`，或使用 `bosshunter run` 执行完整流程。[/yellow]")
         return 0
 
     resume_summary = _get_resume_summary(config)

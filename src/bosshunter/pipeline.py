@@ -8,7 +8,7 @@ console = Console()
 
 
 def run_pipeline(config: dict) -> None:
-    """Run the full pipeline: scrape → score → greet → confirm → send → monitor."""
+    """Run the full pipeline: scrape → score → confirm → greet → send → monitor."""
     # Step 1: Check Chrome connection
     console.print("[bold]Step 1/6: 检测浏览器连接[/bold]")
     version_info = check_chrome_connection()
