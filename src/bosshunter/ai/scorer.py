@@ -7,6 +7,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from bosshunter.ai.credentials import get_anthropic_api_key
 from bosshunter.db import get_db, get_jobs_by_status, update_job_score, update_job_status, update_job_quick_score
 from bosshunter.ai.prefilter import quick_score
 
@@ -55,7 +56,7 @@ def _call_claude(prompt: str, config: dict) -> str | None:
         return None
 
     ai_cfg = config.get("ai", {})
-    api_key = os.environ.get("ANTHROPIC_AUTH_TOKEN") or ai_cfg.get("api_key")
+    api_key = get_anthropic_api_key(config)
     if not api_key:
         console.print("[red]未设置 ANTHROPIC_API_KEY 环境变量或 config.yaml ai.api_key[/red]")
         return None

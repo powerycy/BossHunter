@@ -5,6 +5,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from bosshunter.ai.credentials import get_anthropic_api_key
 from bosshunter.db import get_db, get_jobs_by_status
 
 console = Console()
@@ -40,7 +41,7 @@ def _call_claude(prompt: str, config: dict) -> str | None:
         return None
 
     ai_cfg = config.get("ai", {})
-    api_key = os.environ.get("ANTHROPIC_AUTH_TOKEN") or ai_cfg.get("api_key")
+    api_key = get_anthropic_api_key(config)
     if not api_key:
         return None
 
