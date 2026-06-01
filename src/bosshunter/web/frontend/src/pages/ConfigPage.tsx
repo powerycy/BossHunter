@@ -201,8 +201,6 @@ export default function ConfigPage() {
             <Field label="提供商">
               <Select value={config.ai?.provider || 'anthropic'} onChange={e => updateConfig('ai.provider', e.target.value)}>
                 <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
-                <option value="custom">Custom</option>
               </Select>
             </Field>
             <Field label="模型名称">

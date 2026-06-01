@@ -53,7 +53,7 @@
       "label": "AI 设置",
       "icon": "Brain",
       "fields": [
-        {"key": "provider", "label": "提供商", "type": "select", "options": ["anthropic", "openai", "custom"], "default": "anthropic"},
+        {"key": "provider", "label": "提供商", "type": "select", "options": ["anthropic"], "default": "anthropic", "description": "当前后端仅支持 Anthropic"},
         {"key": "model", "label": "模型名称", "type": "text", "default": "claude-sonnet-4-6"},
         {"key": "api_key", "label": "API Key", "type": "password", "description": "也可通过环境变量设置"},
         {"key": "base_url", "label": "Base URL", "type": "text", "placeholder": "留空使用默认", "default": ""}

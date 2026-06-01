@@ -139,7 +139,7 @@ bosshunter run
 | Python | 3.10+ | 核心运行时 |
 | Node.js | 22+ | CDP Proxy（浏览器桥接） |
 | Chrome | 最新稳定版 | 需开启远程调试 |
-| AI API Key | — | Anthropic / OpenAI / 兼容接口 |
+| AI API Key | — | Anthropic (Claude) |
 
 ### Chrome 远程调试开启方式
 
@@ -295,7 +295,7 @@ BossHunter/
 A: 存在风险。本项目通过多种策略降低概率，但平台随时可能更新检测逻辑。建议保守配置（降低日限、增大间隔）。
 
 ### Q: 支持哪些 AI 服务？
-A: 支持 Anthropic (Claude)、OpenAI (GPT)、以及任何兼容 OpenAI API 格式的自定义服务。
+A: 当前后端仅支持 Anthropic (Claude)。README 中的依赖精简也已经移除了 OpenAI SDK；如果未来要支持 OpenAI 或兼容接口，需要先补齐后端 provider routing。
 
 ### Q: 简历是什么格式？
 A: Markdown 格式。AI 会根据具体岗位 JD 动态定制简历内容。
