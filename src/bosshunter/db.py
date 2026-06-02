@@ -130,6 +130,29 @@ def get_jobs_by_status(conn: sqlite3.Connection, status: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def get_jobs_pending_confirmation(conn: sqlite3.Connection) -> list[dict]:
+    """Get scored jobs that still need manual confirmation."""
+    rows = conn.execute("""
+        SELECT * FROM jobs
+        WHERE status = 'ready'
+          AND (greeting IS NULL OR TRIM(greeting) = '')
+        ORDER BY score DESC
+    """).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_jobs_ready_to_send(conn: sqlite3.Connection) -> list[dict]:
+    """Get jobs that have generated greetings and are ready to send."""
+    rows = conn.execute("""
+        SELECT * FROM jobs
+        WHERE status = 'ready'
+          AND greeting IS NOT NULL
+          AND TRIM(greeting) != ''
+        ORDER BY score DESC
+    """).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_pending_scored_jobs(conn: sqlite3.Connection, threshold: int = 60) -> list[dict]:
     """Get jobs that passed scoring and are pending confirmation."""
     rows = conn.execute(
