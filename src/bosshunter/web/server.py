@@ -6,6 +6,7 @@ Serves:
 """
 
 import json
+import mimetypes
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -35,6 +36,11 @@ from bosshunter.db import (
 from bosshunter.web.preflight import check_ai_connection, collect_preflight_checks, error_messages
 from bosshunter.web.resume_upload import ResumeUploadError, prepare_resume_content
 from bosshunter.web.tasks import TaskAlreadyRunningError, WorkbenchTask, WorkbenchTaskRunner
+
+mimetypes.add_type("application/javascript", ".js", strict=True)
+mimetypes.add_type("application/javascript", ".mjs", strict=True)
+mimetypes.add_type("text/javascript", ".cjs", strict=True)
+mimetypes.add_type("text/css", ".css", strict=True)
 
 app = Bottle()
 task_runner = WorkbenchTaskRunner()
@@ -174,7 +180,7 @@ def _sanitize_config_for_write(data):
 def _preflight_messages(mode: str, config: dict) -> list[str]:
 	"""Return user-actionable blockers before starting a dashboard task."""
 	messages: list[str] = []
-	if mode not in {"full", "collect", "monitor"}:
+	if mode not in {"full", "collect", "rescore", "monitor"}:
 		messages.append(f"不支持的任务模式：{mode}")
 
 	profile = config.get("profile", {})
@@ -185,7 +191,7 @@ def _preflight_messages(mode: str, config: dict) -> list[str]:
 	if mode in {"full", "collect"} and not config.get("search", {}).get("keywords"):
 		messages.append("请先在配置页填写搜索关键词。")
 
-	if mode in {"full", "collect"} and not get_ai_api_key(config):
+	if mode in {"full", "collect", "rescore"} and not get_ai_api_key(config):
 		messages.append("请先在配置页填写当前 AI 服务的 API Key，或设置对应的标准环境变量。")
 
 	return messages
@@ -213,8 +219,27 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 		return
 	_log(task, "开始 AI 评分")
 	score_config = dict(config)
+	score_config["_workbench_stop_event"] = task.stop_requested
 	score_config["_workbench_log"] = lambda message: _log(task, message)
+	score_config["_workbench_score_progress"] = lambda state: _log(
+		task,
+		f"AI 评分进度 {state['completed']}/{state['total']}：通过 {state['scored']}，过滤 {state['filtered']}，失败 {state['failed']}",
+	)
 	score_jobs(score_config)
+
+
+def _execute_rescore(task: WorkbenchTask, config: dict) -> None:
+	from bosshunter.ai.scorer import score_jobs
+
+	score_config = dict(config)
+	score_config["_workbench_stop_event"] = task.stop_requested
+	score_config["_workbench_log"] = lambda message: _log(task, message)
+	score_config["_workbench_score_progress"] = lambda state: _log(
+		task,
+		f"AI 评分进度 {state['completed']}/{state['total']}：通过 {state['scored']}，过滤 {state['filtered']}，失败 {state['failed']}",
+	)
+	_log(task, "开始重新评分")
+	score_jobs(score_config, rescore_filtered=True)
 
 
 def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
@@ -283,18 +308,30 @@ def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
 	config = dict(config)
 	config["_workbench_stop_event"] = task.stop_requested
 	config["_workbench_log"] = lambda message: _log(task, message)
+	selected_job_ids = [str(job_id) for job_id in config.get("_workbench_job_ids", []) if str(job_id)]
 	if not config.get("_workbench_skip_greeting"):
 		_log(task, "生成招呼语")
-		generate_greetings(config)
+		generated_count = generate_greetings(config)
+		_log(task, f"招呼语生成完成：{generated_count}/{len(selected_job_ids) or generated_count}")
 		if task.stop_requested.is_set():
 			return
+		if selected_job_ids and generated_count != len(selected_job_ids):
+			raise RuntimeError(
+				f"招呼语生成失败：选择 {len(selected_job_ids)} 个岗位，仅成功生成 {generated_count} 条；未发送任何消息"
+			)
 	_log(task, "发送招呼语")
-	send_greetings(config, force=True)
+	sent_count = send_greetings(config, force=True)
+	_log(task, f"招呼语发送完成：{sent_count}/{len(selected_job_ids) or sent_count}")
+	if selected_job_ids and sent_count != len(selected_job_ids):
+		raise RuntimeError(
+			f"招呼语发送未完成：选择 {len(selected_job_ids)} 个岗位，仅成功发送 {sent_count} 条；请查看失败记录后重试"
+		)
 
 
 task_runner._executors.update({
 	"full": _execute_full,
 	"collect": _execute_collect,
+	"rescore": _execute_rescore,
 	"monitor": _execute_monitor,
 	"deliver": _execute_deliver,
 })
@@ -789,9 +826,26 @@ def api_resume_delete():
 
 # ─── Static Files + SPA Fallback ─────────────────────────
 
+_STATIC_MIME_TYPES = {
+	".css": "text/css; charset=utf-8",
+	".cjs": "text/javascript; charset=utf-8",
+	".html": "text/html; charset=utf-8",
+	".js": "application/javascript; charset=utf-8",
+	".json": "application/json; charset=utf-8",
+	".mjs": "application/javascript; charset=utf-8",
+	".svg": "image/svg+xml",
+}
+
+
+def _serve_static(filename: str, root: Path):
+	"""Serve static assets with stable MIME types while retaining range/cache support."""
+	mimetype = _STATIC_MIME_TYPES.get(Path(filename).suffix.lower(), "auto")
+	return static_file(filename, root=str(root), mimetype=mimetype)
+
+
 @app.route("/assets/<filepath:path>")
 def serve_assets(filepath):
-	return static_file(filepath, root=str(FRONTEND_DIR / "assets"))
+	return _serve_static(filepath, FRONTEND_DIR / "assets")
 
 
 @app.route("/")
@@ -803,9 +857,9 @@ def serve_spa(filepath="index.html"):
 	# Try serving the exact file first
 	file_path = FRONTEND_DIR / filepath
 	if file_path.is_file():
-		return static_file(filepath, root=str(FRONTEND_DIR))
+		return _serve_static(filepath, FRONTEND_DIR)
 	# SPA fallback: return index.html for all non-API routes
-	return static_file("index.html", root=str(FRONTEND_DIR))
+	return _serve_static("index.html", FRONTEND_DIR)
 
 
 # ─── Error Handlers ──────────────────────────────────────
@@ -816,7 +870,7 @@ def error404(error):
 		response.content_type = "application/json; charset=utf-8"
 		return json.dumps({"error": "Not found"}, ensure_ascii=False)
 	# SPA fallback for non-API 404s
-	return static_file("index.html", root=str(FRONTEND_DIR))
+	return _serve_static("index.html", FRONTEND_DIR)
 
 
 @app.error(500)

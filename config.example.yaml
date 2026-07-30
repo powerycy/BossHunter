@@ -42,6 +42,19 @@ ai:
   provider: "anthropic"
   service: "anthropic"           # anthropic / deepseek / doubao / custom
   model: "claude-sonnet-4-6"
+  thinking: "auto"               # auto / disabled / enabled / off
+  thinking_budget: 2048           # thinking=enabled 时使用，至少 1024
+  timeout_seconds: 180
+  scoring_max_tokens: 8192
+  scoring_max_attempts: 2
+  greeting_max_tokens: 8192
+  greeting_review_max_tokens: 4096
+  greeting_max_attempts: 2
+  # 可选：为不同任务覆盖通用 thinking 与超时设置
+  # scoring_thinking_mode: "enabled"
+  # scoring_timeout_seconds: 180
+  # greeting_thinking_mode: "auto"
+  # greeting_timeout_seconds: 180
   greeting_review_threshold: 7
   greeting_max_iterations: 2
   resume_max_pages: 3

@@ -19,7 +19,7 @@ from bosshunter.ai.credentials import (
 from bosshunter.browser.diagnostics import run_browser_diagnostics
 
 
-VALID_MODES = {"full", "collect", "monitor"}
+VALID_MODES = {"full", "collect", "rescore", "monitor"}
 
 
 def collect_preflight_checks(mode: str, config: dict) -> list[dict[str, str]]:
@@ -29,7 +29,7 @@ def collect_preflight_checks(mode: str, config: dict) -> list[dict[str, str]]:
 		return checks
 
 	with ThreadPoolExecutor(max_workers=2) as executor:
-		ai_future = executor.submit(check_ai_connection, deepcopy(config), mode in {"full", "collect"})
+		ai_future = executor.submit(check_ai_connection, deepcopy(config), mode in {"full", "collect", "rescore"})
 		browser_future = executor.submit(check_browser_connection, deepcopy(config))
 		for future, fallback in (
 			(ai_future, _check("ai_connection", "AI 接口连接", "error", "AI 接口检测失败", "请检查 AI 设置后重试。", "config")),

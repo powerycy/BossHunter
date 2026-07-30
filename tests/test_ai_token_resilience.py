@@ -84,6 +84,40 @@ class AiCredentialErrorTests(unittest.TestCase):
 
 
 class ScorerTokenResilienceTests(unittest.TestCase):
+    def test_invalid_score_json_retries_and_reports_progress(self):
+        db = MagicMock()
+        job = _job("invalid-json")
+        progress_updates: list[dict] = []
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=[job]),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch(
+                "bosshunter.ai.scorer._call_claude",
+                side_effect=[
+                    "这不是完整 JSON",
+                    '{"score": 82, "reason": "匹配", "missing": ""}',
+                ],
+            ) as call_ai,
+            patch("bosshunter.ai.scorer.update_job_quick_score"),
+            patch("bosshunter.ai.scorer.update_job_score"),
+            patch("bosshunter.ai.scorer.update_job_status"),
+        ):
+            scored, filtered = scorer.score_jobs(
+                {
+                    "ai": {"scoring_max_attempts": 2},
+                    "scoring": {"threshold": 70},
+                    "_workbench_score_progress": progress_updates.append,
+                }
+            )
+
+        self.assertEqual((scored, filtered), (1, 0))
+        self.assertEqual(call_ai.call_count, 2)
+        self.assertEqual(progress_updates[-1]["completed"], 1)
+        self.assertEqual(progress_updates[-1]["scored"], 1)
+
     def test_context_limit_retries_once_with_compact_prompt(self):
         db = MagicMock()
         job = _job("long")
@@ -176,7 +210,7 @@ class ScorerTokenResilienceTests(unittest.TestCase):
             )
 
         self.assertEqual((scored, filtered), (1, 0))
-        self.assertEqual(call_ai.call_args_list[1].args[2], 512)
+        self.assertEqual(call_ai.call_args_list[1].args[2], 16384)
         self.assertTrue(any("回答被截断" in message and "增大输出 Token" in message for message in logs))
 
     def test_quota_error_pauses_without_changing_pending_jobs(self):
@@ -211,6 +245,40 @@ class ScorerTokenResilienceTests(unittest.TestCase):
 
 
 class GreeterTokenResilienceTests(unittest.TestCase):
+    def test_empty_greeting_retries_before_leaving_job_pending(self):
+        db = MagicMock()
+        jobs = [_job("retry-empty")]
+
+        with (
+            patch("bosshunter.ai.greeter.get_db", return_value=db),
+            patch("bosshunter.ai.greeter.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.greeter._get_resume_summary", return_value="真实简历摘要"),
+            patch(
+                "bosshunter.ai.greeter._call_claude",
+                side_effect=[None, "第二次生成成功的个性化招呼语"],
+            ) as call_ai,
+            patch("bosshunter.ai.greeter.update_job_greeting") as update_greeting,
+            patch("bosshunter.ai.greeter.update_job_status"),
+            patch("bosshunter.ai.greeter.add_history") as add_history,
+        ):
+            count = greeter.generate_greetings(
+                {
+                    "ai": {
+                        "greeting_max_attempts": 2,
+                        "greeting_max_iterations": 0,
+                    },
+                }
+            )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(call_ai.call_count, 2)
+        update_greeting.assert_called_once_with(
+            db,
+            "retry-empty",
+            "第二次生成成功的个性化招呼语",
+        )
+        add_history.assert_not_called()
+
     def test_review_quota_error_preserves_first_greeting_and_pauses_batch(self):
         db = MagicMock()
         jobs = [_job("1"), _job("2")]
@@ -274,7 +342,7 @@ class GreeterTokenResilienceTests(unittest.TestCase):
 
         self.assertEqual(count, 1)
         self.assertEqual(update_greeting.call_count, 1)
-        self.assertEqual(call_ai.call_args_list[0].args[2], 300)
+        self.assertEqual(call_ai.call_args_list[0].args[2], 8192)
         self.assertEqual(call_ai.call_args_list[1].args[2], 160)
         self.assertTrue(any("降低单次输出 Token 上限后重试招呼语" in message for message in logs))
 
@@ -305,8 +373,8 @@ class GreeterTokenResilienceTests(unittest.TestCase):
             )
 
         self.assertEqual(count, 1)
-        self.assertEqual(call_ai.call_args_list[0].args[2], 300)
-        self.assertEqual(call_ai.call_args_list[1].args[2], 600)
+        self.assertEqual(call_ai.call_args_list[0].args[2], 8192)
+        self.assertEqual(call_ai.call_args_list[1].args[2], 16384)
         self.assertTrue(any("回答被截断" in message and "增大输出 Token" in message for message in logs))
 
 

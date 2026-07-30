@@ -22,6 +22,9 @@ env/
 # Config with secrets
 config.yaml
 
+# Personal resume
+resume.md
+
 # Data (contains personal info, resumes, DB)
 data/
 *.db

@@ -41,7 +41,7 @@ interface TopCompany {
 
 interface WorkbenchTask {
   id: string
-  mode: 'full' | 'collect' | 'monitor' | 'deliver'
+  mode: 'full' | 'collect' | 'rescore' | 'monitor' | 'deliver'
   label: string
   status: string
   logs: string[]
@@ -133,7 +133,7 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
     }
   }
 
-  const startTask = async (mode: 'full' | 'collect' | 'monitor' | 'deliver') => {
+  const startTask = async (mode: 'full' | 'collect' | 'rescore' | 'monitor' | 'deliver') => {
     const res = await fetch('/api/workbench/task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -158,7 +158,7 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
 
   useEffect(() => {
     fetchAll()
-    const interval = setInterval(fetchAll, 30000)
+    const interval = setInterval(fetchAll, 5000)
     return () => clearInterval(interval)
   }, [])
 

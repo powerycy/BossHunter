@@ -201,6 +201,22 @@ def update_job_quick_score(conn: sqlite3.Connection, job_id: str, quick_score: i
     conn.commit()
 
 
+def reset_ai_filtered_jobs(conn: sqlite3.Connection) -> int:
+    """Move only AI-scored low-match jobs back to the pending queue."""
+    cursor = conn.execute("""
+        UPDATE jobs
+        SET status = 'pending', score = 0, score_reason = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE status = 'filtered'
+          AND COALESCE(score_reason, '') != ''
+          AND score_reason NOT LIKE '预筛不通过:%'
+          AND score_reason NOT LIKE 'AI评分失败:%'
+          AND score_reason NOT LIKE 'AI 评分失败:%'
+          AND score_reason NOT LIKE '评分失败:%'
+    """)
+    conn.commit()
+    return cursor.rowcount
+
+
 def add_risk_event(conn: sqlite3.Connection, event_type: str, detail: str = "") -> None:
     """Record a risk/anti-ban event."""
     conn.execute(
@@ -214,7 +230,18 @@ def get_funnel_stats(conn: sqlite3.Connection) -> dict[str, int]:
     """Get funnel stage counts for dashboard."""
     total = conn.execute("SELECT COUNT(*) as cnt FROM jobs").fetchone()["cnt"]
     prefilter_passed = conn.execute("SELECT COUNT(*) as cnt FROM jobs WHERE status != 'filtered' OR (status = 'filtered' AND score > 0)").fetchone()["cnt"]
-    ai_scored = conn.execute("SELECT COUNT(*) as cnt FROM jobs WHERE status IN ('scored', 'ready', 'approved', 'rejected', 'sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent')").fetchone()["cnt"]
+    ai_scored = conn.execute("""
+        SELECT COUNT(*) as cnt FROM jobs
+        WHERE status IN ('scored', 'ready', 'approved', 'rejected', 'sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent')
+           OR (
+                status = 'filtered'
+                AND COALESCE(score_reason, '') != ''
+                AND score_reason NOT LIKE '预筛不通过:%'
+                AND score_reason NOT LIKE 'AI评分失败:%'
+                AND score_reason NOT LIKE 'AI 评分失败:%'
+                AND score_reason NOT LIKE '评分失败:%'
+           )
+    """).fetchone()["cnt"]
     approved = conn.execute("SELECT COUNT(*) as cnt FROM jobs WHERE status IN ('approved', 'sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent')").fetchone()["cnt"]
     sent = conn.execute("SELECT COUNT(*) as cnt FROM jobs WHERE status IN ('sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent')").fetchone()["cnt"]
     replied = conn.execute("SELECT COUNT(*) as cnt FROM jobs WHERE status IN ('replied', 'resume_sent', 'needs_resume')").fetchone()["cnt"]

@@ -132,6 +132,20 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"error": "Not found"})
         self.assertNotIn("<!doctype html", body.lower())
 
+    def test_web_assets_serve_javascript_with_windows_safe_mime_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            frontend_dir = Path(tmp)
+            assets_dir = frontend_dir / "assets"
+            assets_dir.mkdir()
+            (assets_dir / "app.js").write_text("console.log('ok')\n", encoding="utf-8")
+
+            with patch.object(server, "FRONTEND_DIR", frontend_dir):
+                status, headers, body = self._request("/assets/app.js")
+
+        self.assertTrue(status.startswith("200"))
+        self.assertTrue(headers["Content-Type"].startswith("application/javascript"))
+        self.assertIn("console.log", body)
+
     def test_web_api_workbench_preflight_full_returns_json_payload(self):
         # Arrange
         with tempfile.TemporaryDirectory() as tmp:
@@ -170,6 +184,42 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(status.startswith("200"))
         self.assertIn("application/json", headers["Content-Type"])
         self.assertEqual(json.loads(body), {"ok": True, "messages": [], "checks": ready_checks})
+
+    def test_web_api_workbench_preflight_supports_rescore_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            resume_path = base_dir / "resume.md"
+            resume_path.write_text("# Resume", encoding="utf-8")
+            (base_dir / "config.yaml").write_text(
+                yaml.dump(
+                    {
+                        "profile": {"resume_path": str(resume_path)},
+                        "ai": {"api_key": "test-api-key"},
+                    },
+                    allow_unicode=True,
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            server.set_base_dir(base_dir)
+            ready_checks = [
+                {
+                    "id": "ai_credentials",
+                    "title": "AI API",
+                    "status": "pass",
+                    "message": "AI 已连接",
+                    "detail": "",
+                    "action": "",
+                }
+            ]
+
+            with patch.object(server, "collect_preflight_checks", return_value=ready_checks) as collect:
+                status, headers, body = self._request("/api/workbench/preflight?mode=rescore")
+
+        self.assertTrue(status.startswith("200"))
+        self.assertIn("application/json", headers["Content-Type"])
+        self.assertTrue(json.loads(body)["ok"])
+        self.assertEqual(collect.call_args.args[0], "rescore")
 
     def test_web_api_workbench_preflight_full_requires_ai_key(self):
         # Arrange

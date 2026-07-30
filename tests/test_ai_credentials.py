@@ -194,6 +194,105 @@ class AnthropicCredentialTests(unittest.TestCase):
         self.assertEqual(calls["message"]["model"], "Claude Sonnet 4.6")
         self.assertEqual(calls["message"]["max_tokens"], 123)
 
+    def test_anthropic_auto_thinking_retries_without_unsupported_parameter(self):
+        requests = []
+
+        class ThinkingCompatibilityError(RuntimeError):
+            status_code = 400
+
+        class Client:
+            def __init__(self, **kwargs):
+                self.messages = self
+
+            def create(self, **kwargs):
+                requests.append(kwargs)
+                if len(requests) == 1:
+                    raise ThinkingCompatibilityError("unknown parameter: thinking")
+                return SimpleNamespace(content=[SimpleNamespace(text=" fallback ok ")])
+
+        config = {
+            "ai": {
+                "api_key": "key",
+                "model": "claude-sonnet-4-6",
+                "thinking": "auto",
+                "thinking_budget": 2048,
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(credentials, "resolve_anthropic_model", return_value="claude-sonnet-4-6"),
+            patch.dict("sys.modules", {"anthropic": SimpleNamespace(Anthropic=Client)}),
+        ):
+            result = credentials.call_anthropic_text("prompt", config, 256)
+
+        self.assertEqual(result, "fallback ok")
+        self.assertEqual(requests[0]["thinking"], {"type": "disabled"})
+        self.assertNotIn("thinking", requests[1])
+        self.assertEqual(requests[1]["max_tokens"], 3072)
+
+    def test_anthropic_enabled_thinking_reserves_output_budget(self):
+        requests = []
+
+        class Client:
+            def __init__(self, **kwargs):
+                self.messages = self
+
+            def create(self, **kwargs):
+                requests.append(kwargs)
+                return SimpleNamespace(content=[SimpleNamespace(text=" ok ")])
+
+        config = {
+            "ai": {
+                "api_key": "key",
+                "model": "claude-sonnet-4-6",
+                "thinking": "enabled",
+                "thinking_budget": 2048,
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(credentials, "resolve_anthropic_model", return_value="claude-sonnet-4-6"),
+            patch.dict("sys.modules", {"anthropic": SimpleNamespace(Anthropic=Client)}),
+        ):
+            result = credentials.call_anthropic_text("prompt", config, 256)
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(requests[0]["thinking"], {"type": "enabled", "budget_tokens": 2048})
+        self.assertEqual(requests[0]["max_tokens"], 3072)
+
+    def test_anthropic_auto_retries_empty_thinking_response_with_larger_budget(self):
+        requests = []
+
+        class Client:
+            def __init__(self, **kwargs):
+                self.messages = self
+
+            def create(self, **kwargs):
+                requests.append(kwargs)
+                if len(requests) == 1:
+                    return SimpleNamespace(content=[SimpleNamespace(thinking="reasoning only")])
+                return SimpleNamespace(content=[SimpleNamespace(text=" complete text ")])
+
+        config = {
+            "ai": {
+                "api_key": "key",
+                "model": "claude-sonnet-4-6",
+                "thinking": "auto",
+                "thinking_budget": 2048,
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(credentials, "resolve_anthropic_model", return_value="claude-sonnet-4-6"),
+            patch.dict("sys.modules", {"anthropic": SimpleNamespace(Anthropic=Client)}),
+        ):
+            result = credentials.call_anthropic_text("prompt", config, 256)
+
+        self.assertEqual(result, "complete text")
+        self.assertEqual(requests[0]["thinking"], {"type": "disabled"})
+        self.assertEqual(requests[1]["thinking"], {"type": "disabled"})
+        self.assertEqual(requests[1]["max_tokens"], 3072)
+
     def test_deepseek_uses_dedicated_environment_key_and_preset_base_url(self):
         config = {"ai": {"service": "deepseek", "provider": "openai_compatible"}}
 
@@ -247,6 +346,79 @@ class AnthropicCredentialTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[0], "https://api.deepseek.com/chat/completions")
         self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer deepseek-secret")
         self.assertEqual(post.call_args.kwargs["json"]["model"], "provider-current-model")
+
+    def test_openai_compatible_auto_thinking_falls_back_only_for_compatibility_error(self):
+        class UnsupportedThinkingResponse:
+            status_code = 400
+
+            def raise_for_status(self):
+                raise RuntimeError("unsupported parameter: thinking")
+
+            def json(self):
+                return {"error": {"message": "unsupported parameter: thinking"}}
+
+        class CompletionResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": [{"message": {"content": " fallback ok "}}]}
+
+        config = {
+            "ai": {
+                "service": "deepseek",
+                "provider": "openai_compatible",
+                "model": "deepseek-chat",
+                "thinking": "auto",
+                "thinking_budget": 2048,
+            }
+        }
+        with (
+            patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
+            patch(
+                "bosshunter.ai.credentials.httpx.post",
+                side_effect=[UnsupportedThinkingResponse(), CompletionResponse()],
+            ) as post,
+        ):
+            result = credentials.call_openai_compatible_text("prompt", config, 256)
+
+        self.assertEqual(result, "fallback ok")
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args_list[0].kwargs["json"]["thinking"], {"type": "disabled"})
+        self.assertNotIn("thinking", post.call_args_list[1].kwargs["json"])
+        self.assertEqual(post.call_args_list[1].kwargs["json"]["max_tokens"], 3072)
+
+    def test_openai_enabled_thinking_uses_provider_default_reasoning_mode(self):
+        class CompletionResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": [{"message": {"content": " ok "}}]}
+
+        config = {
+            "ai": {
+                "service": "deepseek",
+                "provider": "openai_compatible",
+                "model": "deepseek-reasoner",
+                "thinking": "enabled",
+                "thinking_budget": 2048,
+            }
+        }
+        with (
+            patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
+            patch("bosshunter.ai.credentials.httpx.post", return_value=CompletionResponse()) as post,
+        ):
+            result = credentials.call_openai_compatible_text("prompt", config, 256)
+
+        self.assertEqual(result, "ok")
+        payload = post.call_args.kwargs["json"]
+        self.assertNotIn("thinking", payload)
+        self.assertEqual(payload["max_tokens"], 3072)
 
 
 if __name__ == "__main__":

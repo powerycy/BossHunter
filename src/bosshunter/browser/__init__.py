@@ -51,7 +51,7 @@ def find_boss_tab() -> dict | None:
 
 
 def new_tab(url: str) -> str | None:
-    """Open a new background tab and return target ID."""
+    """Open a foreground tab and return target ID."""
     if not _ready():
         return None
     return _client().new_tab(url)
@@ -92,11 +92,18 @@ def click_at(target_id: str, selector_or_xy: str) -> bool:
     return _client().click_at(target_id, selector_or_xy)
 
 
-def type_text(target_id: str, text: str) -> bool:
+def type_text(target_id: str, text: str, human: bool = False) -> bool:
     """Insert text using CDP input events."""
     if not _ready():
         return False
-    return _client().type_text(target_id, text)
+    return _client().type_text(target_id, text, human=human)
+
+
+def press_key(target_id: str, key: str) -> bool:
+    """Press a supported browser key using CDP keyboard events."""
+    if not _ready():
+        return False
+    return _client().press_key(target_id, key)
 
 
 def set_files(target_id: str, selector: str, files: list[str]) -> bool:

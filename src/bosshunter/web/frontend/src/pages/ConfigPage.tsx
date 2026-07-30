@@ -331,6 +331,39 @@ export default function ConfigPage() {
                 setAiTest({ testing: false })
               }} placeholder="留空使用默认" />
             </Field>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Thinking 模式">
+                <Select
+                  value={config.ai?.thinking || 'auto'}
+                  onChange={e => updateConfig('ai.thinking', e.target.value)}
+                >
+                  <option value="auto">自动兼容（推荐）</option>
+                  <option value="disabled">强制关闭</option>
+                  <option value="enabled">强制开启</option>
+                  <option value="off">不发送参数</option>
+                </Select>
+                <p className="mt-1 text-xs text-muted">自动模式优先获取纯文本；接口不支持 thinking 参数时会安全回退。</p>
+              </Field>
+              <Field label="Thinking 预算 Token">
+                <Input
+                  type="number"
+                  value={config.ai?.thinking_budget || 2048}
+                  onChange={e => updateConfig('ai.thinking_budget', Number(e.target.value))}
+                  min={1024}
+                  max={32768}
+                  disabled={(config.ai?.thinking || 'auto') !== 'enabled'}
+                />
+              </Field>
+            </div>
+            <Field label="AI 请求超时 (秒)">
+              <Input
+                type="number"
+                value={config.ai?.timeout_seconds || 180}
+                onChange={e => updateConfig('ai.timeout_seconds', Number(e.target.value))}
+                min={5}
+                max={600}
+              />
+            </Field>
             <div className="rounded-2xl border border-card-border bg-[#FFFCFA] p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>

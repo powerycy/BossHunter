@@ -54,6 +54,28 @@ class BrowserFacadeTests(unittest.TestCase):
 
     @patch("bosshunter.browser.RuntimeClient")
     @patch("bosshunter.browser.ensure_runtime")
+    def test_type_text_can_request_human_input_events(self, ensure_runtime, client_cls):
+        import bosshunter.browser as browser
+
+        ensure_runtime.return_value = True
+        client_cls.return_value.type_text.return_value = True
+
+        self.assertTrue(browser.type_text("target-1", "hello", human=True))
+        client_cls.return_value.type_text.assert_called_once_with("target-1", "hello", human=True)
+
+    @patch("bosshunter.browser.RuntimeClient")
+    @patch("bosshunter.browser.ensure_runtime")
+    def test_press_key_delegates_to_runtime_client(self, ensure_runtime, client_cls):
+        import bosshunter.browser as browser
+
+        ensure_runtime.return_value = True
+        client_cls.return_value.press_key.return_value = True
+
+        self.assertTrue(browser.press_key("target-1", "SelectAll"))
+        client_cls.return_value.press_key.assert_called_once_with("target-1", "SelectAll")
+
+    @patch("bosshunter.browser.RuntimeClient")
+    @patch("bosshunter.browser.ensure_runtime")
     def test_get_page_info_returns_dict(self, ensure_runtime, client_cls):
         import bosshunter.browser as browser
 

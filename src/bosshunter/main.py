@@ -158,14 +158,15 @@ def scrape(ctx: click.Context, keyword: str | None, limit: int | None) -> None:
 
 
 @cli.command()
+@click.option("--rescore-filtered", is_flag=True, help="同时重新评分之前被 AI 判为低分的岗位")
 @click.pass_context
-def score(ctx: click.Context) -> None:
+def score(ctx: click.Context, rescore_filtered: bool) -> None:
     """对采集的岗位进行AI评分"""
     from bosshunter.ai.scorer import score_jobs
 
     config = ctx.obj["config"]
     console.print("[bold]开始AI评分...[/bold]")
-    scored, filtered = score_jobs(config)
+    scored, filtered = score_jobs(config, rescore_filtered=rescore_filtered)
     console.print(f"[green]✓[/green] 评分完成: {scored} 个通过, {filtered} 个过滤")
     _hint_star_support()
 

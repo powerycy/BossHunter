@@ -10,6 +10,7 @@ from bosshunter.config import AI_SERVICE_PRESETS
 
 
 _MODEL_RESOLVE_CACHE: dict[tuple[str, str, str], str] = {}
+_THINKING_MODES = {"auto", "disabled", "enabled", "off"}
 
 
 class AIRequestError(RuntimeError):
@@ -105,6 +106,132 @@ def normalize_ai_error(exc: Exception, response: object | None = None) -> AIRequ
     if isinstance(exc, httpx.RequestError):
         return AIRequestError("network", "AI 服务连接失败或超时", status_code)
     return AIRequestError("request_failed", "AI 服务请求失败", status_code)
+
+
+def _coerce_int(value: object, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+def _coerce_timeout(value: object, default: float = 60.0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(5.0, min(parsed, 600.0))
+
+
+def resolve_thinking_options(
+    config: dict,
+    purpose: str | None = None,
+) -> tuple[str, int]:
+    """Resolve protocol-agnostic thinking settings for one AI task."""
+    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
+    mode_key = f"{purpose}_thinking_mode" if purpose else ""
+    budget_key = f"{purpose}_thinking_budget" if purpose else ""
+    family_mode = ai_cfg.get("greeting_thinking_mode") if purpose == "greeting_review" else None
+    family_budget = ai_cfg.get("greeting_thinking_budget") if purpose == "greeting_review" else None
+    mode = str(
+        (ai_cfg.get(mode_key) if mode_key else None)
+        or family_mode
+        or ai_cfg.get("thinking")
+        or "off"
+    ).strip().lower()
+    if mode == "default":
+        mode = "off"
+    if mode not in _THINKING_MODES:
+        mode = "auto"
+    budget = _coerce_int(
+        (ai_cfg.get(budget_key) if budget_key else None)
+        or family_budget
+        or ai_cfg.get("thinking_budget")
+        or 2048,
+        2048,
+        1024,
+        32768,
+    )
+    return mode, budget
+
+
+def _thinking_strategies(
+    mode: str,
+    budget: int,
+    max_tokens: int,
+) -> list[tuple[dict, int]]:
+    """Return Anthropic request strategies without hiding non-compatibility errors."""
+    expanded_tokens = max(max_tokens, budget + 1024)
+    if mode == "disabled":
+        strategies = [({"thinking": {"type": "disabled"}}, max_tokens)]
+        if expanded_tokens != max_tokens:
+            strategies.append(({"thinking": {"type": "disabled"}}, expanded_tokens))
+        return strategies
+    if mode == "enabled":
+        return [
+            (
+                {"thinking": {"type": "enabled", "budget_tokens": budget}},
+                expanded_tokens,
+            )
+        ]
+    if mode == "auto":
+        strategies = [({"thinking": {"type": "disabled"}}, max_tokens)]
+        if expanded_tokens != max_tokens:
+            strategies.append(({"thinking": {"type": "disabled"}}, expanded_tokens))
+        strategies.append(({}, expanded_tokens))
+        return strategies
+    strategies = [({}, max_tokens)]
+    if expanded_tokens != max_tokens:
+        strategies.append(({}, expanded_tokens))
+    return strategies
+
+
+def _openai_thinking_strategies(
+    mode: str,
+    budget: int,
+    max_tokens: int,
+) -> list[tuple[dict, int]]:
+    """Return OpenAI-compatible strategies for providers with default reasoning."""
+    expanded_tokens = max(max_tokens, budget + 1024)
+    if mode == "enabled":
+        # Compatible providers generally enable reasoning by default and do not
+        # consistently accept Anthropic's explicit enabled parameter.
+        return [({}, expanded_tokens)]
+    if mode == "disabled":
+        strategies = [({"thinking": {"type": "disabled"}}, max_tokens)]
+        if expanded_tokens != max_tokens:
+            strategies.append(({"thinking": {"type": "disabled"}}, expanded_tokens))
+        return strategies
+    if mode == "auto":
+        strategies = [({"thinking": {"type": "disabled"}}, max_tokens)]
+        if expanded_tokens != max_tokens:
+            strategies.append(({"thinking": {"type": "disabled"}}, expanded_tokens))
+        strategies.append(({}, expanded_tokens))
+        return strategies
+    strategies = [({}, max_tokens)]
+    if expanded_tokens != max_tokens:
+        strategies.append(({}, expanded_tokens))
+    return strategies
+
+
+def _is_thinking_compatibility_error(exc: Exception, response: object | None = None) -> bool:
+    resolved_response = response if response is not None else getattr(exc, "response", None)
+    status_code = getattr(exc, "status_code", None) or getattr(resolved_response, "status_code", None)
+    if status_code not in {400, 404, 422}:
+        return False
+    raw = f"{exc} {_response_error_detail(resolved_response)}".lower()
+    parameter_markers = (
+        "thinking",
+        "budget_tokens",
+        "unknown field",
+        "unknown parameter",
+        "extra inputs",
+        "not permitted",
+        "unsupported parameter",
+        "unrecognized",
+    )
+    return any(marker in raw for marker in parameter_markers)
 
 
 def get_anthropic_api_key(config: dict) -> str | None:
@@ -251,11 +378,24 @@ def resolve_anthropic_model(model: str, config: dict) -> str:
     return resolved
 
 
-def call_anthropic_text(prompt: str, config: dict, max_tokens: int) -> str | None:
+def call_anthropic_text(
+    prompt: str,
+    config: dict,
+    max_tokens: int,
+    *,
+    timeout: float | None = None,
+    purpose: str | None = None,
+) -> str | None:
     """Call Anthropic-compatible Messages API and return the first text block."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
     if ai_cfg.get("provider") == "openai_compatible":
-        return call_openai_compatible_text(prompt, config, max_tokens)
+        return call_openai_compatible_text(
+            prompt,
+            config,
+            max_tokens,
+            timeout=timeout,
+            purpose=purpose,
+        )
 
     try:
         import anthropic
@@ -267,24 +407,52 @@ def call_anthropic_text(prompt: str, config: dict, max_tokens: int) -> str | Non
 
     model = resolve_anthropic_model(ai_cfg.get("model", "claude-sonnet-4-6"), config)
     client = anthropic.Anthropic(**build_anthropic_client_kwargs(config))
-    try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except Exception as exc:
-        raise normalize_ai_error(exc) from exc
-    if getattr(response, "stop_reason", None) == "max_tokens":
+    mode, budget = resolve_thinking_options(config, purpose)
+    strategies = _thinking_strategies(mode, budget, max_tokens)
+    thinking_rejected = False
+    compatibility_error: Exception | None = None
+    output_truncated = False
+    for overrides, token_limit in strategies:
+        if thinking_rejected and "thinking" in overrides:
+            continue
+        request_kwargs = {
+            "model": model,
+            "max_tokens": token_limit,
+            "messages": [{"role": "user", "content": prompt}],
+            **overrides,
+        }
+        if timeout is not None:
+            request_kwargs["timeout"] = _coerce_timeout(timeout)
+        try:
+            response = client.messages.create(**request_kwargs)
+        except Exception as exc:
+            if _is_thinking_compatibility_error(exc):
+                thinking_rejected = True
+                compatibility_error = exc
+                continue
+            raise normalize_ai_error(exc) from exc
+        if getattr(response, "stop_reason", None) == "max_tokens":
+            output_truncated = True
+            continue
+        for block in response.content:
+            text = getattr(block, "text", None)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    if output_truncated:
         raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
-    for block in response.content:
-        text = getattr(block, "text", None)
-        if text is not None:
-            return text.strip()
+    if compatibility_error is not None:
+        raise normalize_ai_error(compatibility_error) from compatibility_error
     return None
 
 
-def call_openai_compatible_text(prompt: str, config: dict, max_tokens: int) -> str | None:
+def call_openai_compatible_text(
+    prompt: str,
+    config: dict,
+    max_tokens: int,
+    *,
+    timeout: float | None = None,
+    purpose: str | None = None,
+) -> str | None:
     """Call an OpenAI-compatible chat completions endpoint."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
     api_key = get_ai_api_key(config)
@@ -293,29 +461,53 @@ def call_openai_compatible_text(prompt: str, config: dict, max_tokens: int) -> s
     if not api_key or not base_url:
         return None
 
-    try:
-        response = httpx.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-                "temperature": 0.2,
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-    except Exception as exc:
-        raise normalize_ai_error(exc, locals().get("response")) from exc
+    mode, budget = resolve_thinking_options(config, purpose)
+    strategies = _openai_thinking_strategies(mode, budget, max_tokens)
+    request_timeout = _coerce_timeout(timeout if timeout is not None else ai_cfg.get("timeout_seconds", 60))
+    thinking_rejected = False
+    compatibility_error: Exception | None = None
+    output_truncated = False
+    for overrides, token_limit in strategies:
+        if thinking_rejected and "thinking" in overrides:
+            continue
+        response = None
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": token_limit,
+            "temperature": 0.2,
+            **overrides,
+        }
+        try:
+            response = httpx.post(
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=request_timeout,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            if _is_thinking_compatibility_error(exc, response):
+                thinking_rejected = True
+                compatibility_error = exc
+                continue
+            raise normalize_ai_error(exc, response) from exc
 
-    choices = response.json().get("choices", [])
-    if not choices:
-        return None
-    if choices[0].get("finish_reason") in {"length", "max_tokens"}:
+        choices = response.json().get("choices", [])
+        if not choices:
+            continue
+        if choices[0].get("finish_reason") in {"length", "max_tokens"}:
+            output_truncated = True
+            continue
+        message = choices[0].get("message", {})
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+    if output_truncated:
         raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
-    content = choices[0].get("message", {}).get("content")
-    return content.strip() if isinstance(content, str) else None
+    if compatibility_error is not None:
+        raise normalize_ai_error(compatibility_error) from compatibility_error
+    return None
 
 
 def _match_model_name(requested: str, available: list[str]) -> str | None:
