@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { BriefcaseBusiness, Github, LayoutDashboard, Radar, Settings } from 'lucide-react'
+import { BriefcaseBusiness, LayoutDashboard, Radar, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 const navItems = [
@@ -8,8 +8,6 @@ const navItems = [
   { to: '/monitor', icon: Radar, label: '监测执行' },
   { to: '/config', icon: Settings, label: '配置' },
 ]
-
-const GITHUB_URL = 'https://github.com/powerycy/BossHunter'
 
 interface SidebarProps {
   pendingReplies?: number
@@ -77,21 +75,6 @@ export function Sidebar({ pendingReplies: pendingRepliesProp }: SidebarProps) {
         ))}
       </nav>
 
-      <div className="px-4 py-4 border-t border-card-border space-y-3">
-        <a
-          href={GITHUB_URL}
-          target="_blank"
-          rel="noreferrer"
-          className="relative flex items-center rounded-2xl border border-card-border bg-[#FFFCFA] px-3 py-3 text-xs font-black text-foreground transition-colors hover:border-primary/60 hover:text-primary"
-        >
-          <Github className="absolute left-3 h-4 w-4" />
-          <span className="mx-auto flex items-center justify-center gap-2">
-            <span className="text-xl leading-none text-yellow-400">★</span>
-            去 GitHub 点 Star
-          </span>
-        </a>
-        <p className="text-center text-[11px] leading-5 text-muted">关注版本更新，也支持项目继续维护</p>
-      </div>
     </aside>
   )
 }

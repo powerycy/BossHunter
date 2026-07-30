@@ -10,7 +10,6 @@ from bosshunter import __version__
 from bosshunter.config import load_config
 
 console = Console()
-GITHUB_URL = "https://github.com/powerycy/BossHunter"
 
 
 def _hint_web():
@@ -33,19 +32,6 @@ def _runtime_base_dir(config_path: Path | None = None) -> Path:
     if Path("config.yaml").exists():
         return Path.cwd()
     return Path.cwd()
-
-
-def _hint_star_support(base_dir: Path | None = None):
-    """Print a lightweight GitHub Star support hint once per local checkout."""
-    marker = (base_dir or _runtime_base_dir()) / "data" / f".star_hint_{__version__}"
-    if marker.exists():
-        return
-    console.print(f"[dim]⭐ 如果 BossHunter 帮你节省了求职时间，欢迎 Star 支持继续维护：{GITHUB_URL}[/dim]")
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("shown\n", encoding="utf-8")
-    except OSError:
-        pass
 
 
 def _is_first_run(config_path: Path | None = None) -> bool:
@@ -154,7 +140,6 @@ def scrape(ctx: click.Context, keyword: str | None, limit: int | None) -> None:
     count = scrape_jobs(config, keywords, limit)
     console.print(f"[green]✓[/green] 采集完成，共获取 {count} 个新岗位")
     _hint_web()
-    _hint_star_support()
 
 
 @cli.command()
@@ -167,7 +152,6 @@ def score(ctx: click.Context) -> None:
     console.print("[bold]开始AI评分...[/bold]")
     scored, filtered = score_jobs(config)
     console.print(f"[green]✓[/green] 评分完成: {scored} 个通过, {filtered} 个过滤")
-    _hint_star_support()
 
 
 @cli.command()
@@ -180,7 +164,6 @@ def greet(ctx: click.Context) -> None:
     console.print("[bold]生成招呼语...[/bold]")
     count = generate_greetings(config)
     console.print(f"[green]✓[/green] 已生成 {count} 条招呼语")
-    _hint_star_support()
 
 
 @cli.command()
@@ -205,7 +188,6 @@ def send(ctx: click.Context, force: bool) -> None:
     sent = send_greetings(config, force=force)
     console.print(f"[green]✓[/green] 发送完成: {sent} 条")
     _hint_web()
-    _hint_star_support()
 
 
 @cli.command()
@@ -231,7 +213,6 @@ def run(ctx: click.Context) -> None:
     console.print("[bold cyan]═══ BossHunter 启动 ═══[/bold cyan]\n")
     run_pipeline(config)
     _hint_web()
-    _hint_star_support()
 
 
 @cli.command()
@@ -302,7 +283,6 @@ def web(ctx: click.Context, port: int, no_open: bool) -> None:
     set_base_dir(ctx.obj["base_dir"])
     console.print("[bold cyan]═══ BossHunter Web Dashboard ═══[/bold cyan]")
     console.print(f"[dim]http://127.0.0.1:{port}[/dim]")
-    _hint_star_support(ctx.obj["base_dir"])
     console.print()
     run_server(host="127.0.0.1", port=port, open_browser=not no_open)
 

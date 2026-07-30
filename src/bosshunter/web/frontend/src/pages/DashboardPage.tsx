@@ -6,18 +6,14 @@ import { parseHistoryDetail } from '@/lib/historyDetail'
 import { getActionLabel, getStatusLabel } from '@/lib/status'
 import {
   AlertTriangle,
-  ArrowRight,
   BriefcaseBusiness,
   CheckCircle2,
   Download,
   ExternalLink,
   Eye,
-  Github,
   MessageCircle,
   Play,
   RefreshCw,
-  ShieldCheck,
-  Sparkles,
   Square,
   XCircle,
 } from 'lucide-react'
@@ -136,30 +132,6 @@ const statItems = [
   { label: 'AI评分', key: 'AI评分' },
   { label: '人工确认', key: '人工确认', highlight: true },
   { label: '简历生成', key: '简历生成', highlight: true },
-]
-
-const GITHUB_URL = 'https://github.com/powerycy/BossHunter'
-
-const releaseNotes = [
-  {
-    date: '2026-07-30',
-    version: 'v2.1.0',
-    category: '体验优化',
-    content: '支持中文名 Markdown 与 Word（.docx）简历；新增 DeepSeek、豆包和自定义兼容 API；启动前可明确诊断 Chrome、远程调试与 AI 配置问题。',
-    latest: true,
-  },
-  {
-    date: '2026-07-27',
-    version: 'v2.0.0',
-    category: '功能改进',
-    content: '优化定制简历投递和监测恢复流程，并整理公开文档中的隐私内容。',
-  },
-  {
-    date: '2026-06-29',
-    version: 'v2.0.0',
-    category: '稳定性',
-    content: '修复工作台任务可能卡住的问题；自动跟进默认关闭，把发送决定留给用户。',
-  },
 ]
 
 function jobSubtitle(job: Job) {
@@ -476,61 +448,6 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
 
   return (
     <div className="space-y-5">
-      <section className="relative overflow-hidden rounded-3xl border border-card-border bg-white shadow-sm">
-        <div className="absolute -right-20 -top-24 h-64 w-64 rounded-full bg-[#FFF0E5]" />
-        <div className="relative grid gap-5 p-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(280px,0.7fr)] lg:p-7">
-          <div className="flex flex-col justify-center">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1 rounded-full bg-[#FFF0E5] px-3 py-1 text-xs font-black text-primary">
-                <Sparkles className="h-3.5 w-3.5" />
-                本地 AI 求职助手
-              </span>
-              <span className="rounded-full border border-card-border bg-white px-3 py-1 text-xs font-bold text-muted">v2.1.0</span>
-            </div>
-            <h2 className="mt-4 max-w-3xl text-3xl font-black leading-tight tracking-tight text-foreground lg:text-4xl">
-              让 AI 帮你筛选机会，
-              <span className="text-primary">把投递决定留给你</span>
-            </h2>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-muted">
-              BossHunter 在本地连接 Chrome，协助完成岗位采集、匹配评分、招呼语准备和 HR 回复整理。所有投递仍需你确认，减少重复操作，也保留求职判断。
-            </p>
-            <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs font-bold text-foreground">
-              <span className="flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-success" />本地运行</span>
-              <span className="flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4 text-success" />人工确认后发送</span>
-              <span className="flex items-center gap-1.5"><Sparkles className="h-4 w-4 text-primary" />支持多种 AI 接口</span>
-            </div>
-            <div className="mt-5 flex flex-wrap gap-2">
-              <Button onClick={() => document.getElementById('today-workbench')?.scrollIntoView({ behavior: 'smooth' })}>
-                开始今日任务
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-              <Button variant="secondary" onClick={() => window.location.assign('/config')}>检查我的配置</Button>
-            </div>
-          </div>
-
-          <div className="relative rounded-3xl border border-primary/20 bg-[#FFF7F0] p-5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-foreground text-white">
-              <Github className="h-5 w-5" />
-            </div>
-            <h3 className="mt-4 text-lg font-black text-foreground">关注项目更新</h3>
-            <p className="mt-2 text-xs leading-6 text-muted">
-              如果 BossHunter 帮你节省了求职时间，欢迎在 GitHub 点一个 Star。你可以更方便地找到新版本、修复说明和使用帮助，也能支持项目继续维护。
-            </p>
-            <a
-              href={GITHUB_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-4 inline-flex h-9 w-full items-center justify-center rounded-md bg-foreground px-4 text-sm font-bold text-white transition-colors hover:bg-foreground/90"
-            >
-              <Github className="mr-2 h-4 w-4" />
-              去 GitHub 点 Star
-              <ExternalLink className="ml-2 h-3.5 w-3.5" />
-            </a>
-            <p className="mt-3 text-center text-[11px] leading-5 text-muted">完全自愿，不影响任何功能使用</p>
-          </div>
-        </div>
-      </section>
-
       <section id="today-workbench" className="scroll-mt-6 rounded-3xl border border-card-border bg-white p-5 shadow-sm">
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
@@ -754,52 +671,6 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         ) : (
           <div className="rounded-2xl border border-dashed border-card-border bg-[#FFFCFA] p-5 text-sm text-muted">今天暂时没有待确认岗位。</div>
         )}
-      </section>
-
-      <section className="overflow-hidden rounded-3xl border border-card-border bg-white">
-        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-card-border px-5 py-4">
-          <div>
-            <div className="text-xs font-black tracking-[0.18em] text-primary">WHAT'S NEW</div>
-            <h3 className="mt-1 text-lg font-black">更新记录</h3>
-            <p className="mt-1 text-xs leading-5 text-muted">按发布日期记录用户可感知的功能、体验和稳定性变化。</p>
-          </div>
-          <a
-            href={`${GITHUB_URL}/commits`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center text-xs font-black text-primary hover:underline"
-          >
-            查看完整提交记录
-            <ExternalLink className="ml-1 h-3.5 w-3.5" />
-          </a>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] border-collapse text-left">
-            <thead className="bg-[#FFFCFA] text-xs text-muted">
-              <tr>
-                <th className="px-5 py-3 font-bold">日期</th>
-                <th className="px-5 py-3 font-bold">版本号</th>
-                <th className="px-5 py-3 font-bold">类型</th>
-                <th className="px-5 py-3 font-bold">更新内容</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-card-border">
-              {releaseNotes.map(item => (
-                <tr key={`${item.date}-${item.category}`} className="align-top">
-                  <td className="whitespace-nowrap px-5 py-4 text-xs font-bold text-foreground">{item.date}</td>
-                  <td className="whitespace-nowrap px-5 py-4">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-black text-foreground">{item.version}</span>
-                      {item.latest && <span className="rounded-full bg-[#FFF0E5] px-2 py-0.5 text-[10px] font-black text-primary">最新</span>}
-                    </div>
-                  </td>
-                  <td className="whitespace-nowrap px-5 py-4 text-xs font-bold text-primary">{item.category}</td>
-                  <td className="px-5 py-4 text-xs leading-6 text-muted">{item.content}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </section>
 
       {selectedJob && <JobDetailModal job={selectedJob} onClose={() => setSelectedJob(null)} />}
