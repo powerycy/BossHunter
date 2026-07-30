@@ -6,6 +6,8 @@ Serves:
 """
 
 import json
+import mimetypes
+import os
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -13,9 +15,17 @@ from threading import Event
 
 from bottle import Bottle, request, response, static_file, abort
 
+# Windows 注册表常把 .js 映射为 text/plain（JScript 文本），导致 Bottle static_file
+# 通过 mimetypes.guess_type 误判 JS 为文本；浏览器对 <script type="module"> 做 MIME
+# 严格检查时会拒绝执行，前端无法挂载 #root，页面表现为一片空白。这里强制注册正确 MIME。
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("text/javascript", ".cjs")
+mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("application/json", ".json")
+
 from bosshunter import __version__
-from bosshunter.ai.credentials import get_ai_api_key
-from bosshunter.config import AI_SERVICE_PRESETS, CITY_CODES, load_config
+from bosshunter.config import load_config, CITY_CODES
 from bosshunter.db import (
 	add_history,
 	count_unresolved_monitor_items,
@@ -32,8 +42,6 @@ from bosshunter.db import (
 	get_top_companies,
 	update_job_status,
 )
-from bosshunter.web.preflight import check_ai_connection, collect_preflight_checks, error_messages
-from bosshunter.web.resume_upload import ResumeUploadError, prepare_resume_content
 from bosshunter.web.tasks import TaskAlreadyRunningError, WorkbenchTask, WorkbenchTaskRunner
 
 app = Bottle()
@@ -138,21 +146,12 @@ def _sanitize_config_for_write(data):
 	ai_cfg.pop("has_auth_token", None)
 
 	existing_ai = load_config(CONFIG_PATH).get("ai", {})
-	service = ai_cfg.get("service") or existing_ai.get("service")
-	if service not in AI_SERVICE_PRESETS:
-		provider = ai_cfg.get("provider") or existing_ai.get("provider") or "anthropic"
-		service = "custom" if provider == "openai_compatible" else "anthropic"
-	ai_cfg["service"] = service
-	ai_cfg["provider"] = AI_SERVICE_PRESETS[service]["provider"]
-
-	clear_credentials = bool(ai_cfg.pop("clear_credentials", False))
+	provider = ai_cfg.get("provider") or existing_ai.get("provider") or "anthropic"
+	if provider not in {"anthropic", "openai_compatible"}:
+		provider = "anthropic"
+	ai_cfg["provider"] = provider
 
 	for field in ("api_key", "auth_token"):
-		if clear_credentials:
-			posted_value = ai_cfg.get(field)
-			if posted_value is None or str(posted_value).strip() == "":
-				ai_cfg.pop(field, None)
-			continue
 		posted_value = ai_cfg.get(field)
 		existing_value = existing_ai.get(field)
 		existing_mask = _mask_api_key(str(existing_value)) if existing_value else ""
@@ -180,13 +179,21 @@ def _preflight_messages(mode: str, config: dict) -> list[str]:
 	profile = config.get("profile", {})
 	resume_path = profile.get("resume_path", "")
 	if not resume_path or not Path(str(resume_path)).exists():
-		messages.append("请先在配置页上传 .md 或 .docx 简历。")
+		messages.append("请先在配置页上传 Markdown 简历。")
 
 	if mode in {"full", "collect"} and not config.get("search", {}).get("keywords"):
 		messages.append("请先在配置页填写搜索关键词。")
 
-	if mode in {"full", "collect"} and not get_ai_api_key(config):
-		messages.append("请先在配置页填写当前 AI 服务的 API Key，或设置对应的标准环境变量。")
+	if mode in {"full", "collect"}:
+		ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
+		has_ai_key = bool(
+			os.environ.get("ANTHROPIC_API_KEY")
+			or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+			or ai_cfg.get("api_key")
+			or ai_cfg.get("auth_token")
+		)
+		if not has_ai_key:
+			messages.append("请先在配置页填写 AI API Key，或设置 ANTHROPIC_API_KEY 环境变量。")
 
 	return messages
 
@@ -212,9 +219,7 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 	if task.stop_requested.is_set():
 		return
 	_log(task, "开始 AI 评分")
-	score_config = dict(config)
-	score_config["_workbench_log"] = lambda message: _log(task, message)
-	score_jobs(score_config)
+	score_jobs(config)
 
 
 def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
@@ -282,7 +287,6 @@ def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
 
 	config = dict(config)
 	config["_workbench_stop_event"] = task.stop_requested
-	config["_workbench_log"] = lambda message: _log(task, message)
 	if not config.get("_workbench_skip_greeting"):
 		_log(task, "生成招呼语")
 		generate_greetings(config)
@@ -433,19 +437,8 @@ def api_workbench_preflight():
 	mode = request.params.get("mode", "")
 	try:
 		config = load_config(CONFIG_PATH)
-		checks = collect_preflight_checks(mode, config)
-		messages = error_messages(checks)
-		return _json_response({"ok": not messages, "messages": messages, "checks": checks})
-	except Exception as e:
-		return _json_response({"ok": False, "messages": [str(e)]}, 500)
-
-
-@app.route("/api/diagnostics/ai")
-def api_ai_diagnostics():
-	try:
-		checks = check_ai_connection(load_config(CONFIG_PATH), required=True)
-		messages = error_messages(checks)
-		return _json_response({"ok": not messages, "messages": messages, "checks": checks})
+		messages = _preflight_messages(mode, config)
+		return _json_response({"ok": not messages, "messages": messages})
 	except Exception as e:
 		return _json_response({"ok": False, "messages": [str(e)]}, 500)
 
@@ -740,18 +733,21 @@ def api_resume_upload():
 		if not upload:
 			return _json_response({"error": "No file uploaded"}, 400)
 
+		# Validate extension
+		name = upload.filename
+		if not name.endswith(".md"):
+			return _json_response({"error": "仅支持 .md 格式"}, 400)
+
 		# Validate size (10MB max)
 		content = upload.file.read()
 		if len(content) > 10 * 1024 * 1024:
 			return _json_response({"error": "文件大小超过 10MB 限制"}, 400)
 
-		# Bottle's normalized `filename` strips non-ASCII characters. Use the
-		# raw browser filename and apply our own Unicode-safe sanitization.
-		raw_name = upload.raw_filename or upload.filename
-		safe_name, stored_content = prepare_resume_content(raw_name, content)
+		# Sanitize filename
+		safe_name = Path(name).name.replace("..", "").replace("/", "").replace("\\", "")
 		RESUME_DIR.mkdir(parents=True, exist_ok=True)
 		dest = RESUME_DIR / safe_name
-		dest.write_bytes(stored_content)
+		dest.write_bytes(content)
 
 		# Update config
 		config = load_config(CONFIG_PATH)
@@ -762,11 +758,9 @@ def api_resume_upload():
 		return _json_response({
 			"success": True,
 			"filename": safe_name,
-			"size": len(stored_content),
+			"size": len(content),
 			"path": str(dest)
 		})
-	except ResumeUploadError as e:
-		return _json_response({"error": str(e)}, 400)
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
 
@@ -789,9 +783,63 @@ def api_resume_delete():
 
 # ─── Static Files + SPA Fallback ─────────────────────────
 
+# 扩展名 → Content-Type 显式映射，兜底覆盖系统 mimetypes 在 Windows 上的误判
+# （典型坑：.js 被识别成 text/plain，导致浏览器拒绝执行模块脚本，页面渲染为空白）。
+_STATIC_MIME = {
+	".html": "text/html; charset=utf-8",
+	".htm": "text/html; charset=utf-8",
+	".js": "application/javascript; charset=utf-8",
+	".mjs": "application/javascript; charset=utf-8",
+	".cjs": "text/javascript; charset=utf-8",
+	".css": "text/css; charset=utf-8",
+	".json": "application/json; charset=utf-8",
+	".svg": "image/svg+xml",
+	".ico": "image/x-icon",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif": "image/gif",
+	".webp": "image/webp",
+	".woff": "font/woff",
+	".woff2": "font/woff2",
+	".map": "application/json; charset=utf-8",
+	".txt": "text/plain; charset=utf-8",
+	".md": "text/markdown; charset=utf-8",
+}
+
+
+def _serve_file(file_path: Path):
+	"""Serve a static file as bytes with an explicit Content-Type.
+
+	Returns bytes instead of a bottle.static_file file object. This both forces
+	correct MIME types (avoiding the Windows .js→text/plain trap) and sidesteps
+	WSGIRefServer occasionally emitting an empty body for file-like responses.
+	"""
+	if not file_path.is_file():
+		abort(404, "Not found")
+	data = file_path.read_bytes()
+	content_type = _STATIC_MIME.get(file_path.suffix.lower())
+	if not content_type:
+		guessed, _ = mimetypes.guess_type(file_path.name)
+		content_type = guessed or "application/octet-stream"
+	response.content_type = content_type
+	response.set_header(
+		"Last-Modified",
+		time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(file_path.stat().st_mtime)),
+	)
+	return data
+
+
 @app.route("/assets/<filepath:path>")
 def serve_assets(filepath):
-	return static_file(filepath, root=str(FRONTEND_DIR / "assets"))
+	root = (FRONTEND_DIR / "assets").resolve()
+	file_path = (root / filepath).resolve()
+	# 防止路径穿越
+	try:
+		file_path.relative_to(root)
+	except ValueError:
+		abort(404, "Not found")
+	return _serve_file(file_path)
 
 
 @app.route("/")
@@ -800,12 +848,18 @@ def serve_spa(filepath="index.html"):
 	if str(filepath).startswith("api/"):
 		return _json_response({"error": "Not found"}, 404)
 
-	# Try serving the exact file first
-	file_path = FRONTEND_DIR / filepath
+	root = FRONTEND_DIR.resolve()
+	file_path = (root / filepath).resolve()
+	# 防止路径穿越
+	try:
+		file_path.relative_to(root)
+	except ValueError:
+		abort(404, "Not found")
+
+	# Try serving the exact file first, then fall back to index.html for SPA routes
 	if file_path.is_file():
-		return static_file(filepath, root=str(FRONTEND_DIR))
-	# SPA fallback: return index.html for all non-API routes
-	return static_file("index.html", root=str(FRONTEND_DIR))
+		return _serve_file(file_path)
+	return _serve_file(root / "index.html")
 
 
 # ─── Error Handlers ──────────────────────────────────────
@@ -816,7 +870,7 @@ def error404(error):
 		response.content_type = "application/json; charset=utf-8"
 		return json.dumps({"error": "Not found"}, ensure_ascii=False)
 	# SPA fallback for non-API 404s
-	return static_file("index.html", root=str(FRONTEND_DIR))
+	return _serve_file(FRONTEND_DIR / "index.html")
 
 
 @app.error(500)

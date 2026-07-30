@@ -6,105 +6,8 @@ import re
 
 import httpx
 
-from bosshunter.config import AI_SERVICE_PRESETS
-
 
 _MODEL_RESOLVE_CACHE: dict[tuple[str, str, str], str] = {}
-
-
-class AIRequestError(RuntimeError):
-    """Normalized AI request failure without exposing credentials or raw payloads."""
-
-    def __init__(self, kind: str, user_message: str, status_code: int | None = None):
-        super().__init__(user_message)
-        self.kind = kind
-        self.user_message = user_message
-        self.status_code = status_code
-
-
-def _response_error_detail(response: object | None) -> str:
-    if response is None:
-        return ""
-    try:
-        payload = response.json()
-    except Exception:
-        return ""
-    if not isinstance(payload, dict):
-        return ""
-    error = payload.get("error", payload)
-    if isinstance(error, dict):
-        return " ".join(
-            str(error.get(key) or "")
-            for key in ("code", "type", "message")
-        ).strip()
-    return str(error or "")
-
-
-def normalize_ai_error(exc: Exception, response: object | None = None) -> AIRequestError:
-    """Classify provider errors into actionable, credential-safe categories."""
-    if isinstance(exc, AIRequestError):
-        return exc
-
-    resolved_response = response if response is not None else getattr(exc, "response", None)
-    status_code = getattr(exc, "status_code", None) or getattr(resolved_response, "status_code", None)
-    raw = f"{type(exc).__name__} {exc} {_response_error_detail(resolved_response)}".lower()
-
-    output_limit_markers = (
-        "max_tokens",
-        "max completion tokens",
-        "maximum output tokens",
-        "tokens to sample",
-    )
-    context_markers = (
-        "context_length",
-        "context length",
-        "maximum context",
-        "max context",
-        "input tokens",
-        "prompt tokens",
-        "too many tokens",
-        "prompt is too long",
-        "request too large",
-        "上下文",
-        "输入过长",
-    )
-    quota_markers = (
-        "insufficient_quota",
-        "quota exceeded",
-        "token quota",
-        "billing",
-        "balance",
-        "credit",
-        "budget",
-        "overdue",
-        "payment required",
-        "余额不足",
-        "额度不足",
-    )
-    rate_markers = (
-        "rate limit",
-        "too many requests",
-        "requests per minute",
-        "tokens per minute",
-        " tpm",
-        " rpm",
-        "限流",
-        "频率限制",
-    )
-
-    if any(marker in raw for marker in context_markers):
-        return AIRequestError("context_limit", "请求内容超过当前模型的上下文限制", status_code)
-    if any(marker in raw for marker in output_limit_markers):
-        return AIRequestError("output_limit", "当前模型不接受设置的输出 Token 上限", status_code)
-    if status_code == 402 or any(marker in raw for marker in quota_markers):
-        return AIRequestError("token_quota", "AI Token 额度或账户余额不足", status_code)
-    if status_code == 429 or any(marker in raw for marker in rate_markers):
-        return AIRequestError("rate_limit", "AI 服务触发请求或 Token 频率限制", status_code)
-    if status_code in {401, 403}:
-        return AIRequestError("auth", "AI API Key 无效或当前模型没有访问权限", status_code)
-    if isinstance(exc, httpx.RequestError):
-        return AIRequestError("network", "AI 服务连接失败或超时", status_code)
-    return AIRequestError("request_failed", "AI 服务请求失败", status_code)
 
 
 def get_anthropic_api_key(config: dict) -> str | None:
@@ -116,88 +19,6 @@ def get_anthropic_api_key(config: dict) -> str | None:
         or ai_cfg.get("api_key")
         or ai_cfg.get("auth_token")
     )
-
-
-def get_ai_service(config: dict) -> str:
-    """Return the configured user-facing AI service, preserving legacy configs."""
-    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
-    service = str(ai_cfg.get("service") or "").strip()
-    if service in AI_SERVICE_PRESETS:
-        return service
-    return "custom" if ai_cfg.get("provider") == "openai_compatible" else "anthropic"
-
-
-def get_ai_api_key(config: dict) -> str | None:
-    """Resolve a standard API key without exposing or copying its value."""
-    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
-    service = get_ai_service(config)
-    if service == "deepseek":
-        return (
-            os.environ.get("DEEPSEEK_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or ai_cfg.get("api_key")
-        )
-    if service == "doubao":
-        return (
-            os.environ.get("ARK_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or ai_cfg.get("api_key")
-        )
-    if service == "custom":
-        return (
-            os.environ.get("OPENAI_API_KEY")
-            or os.environ.get("ANTHROPIC_API_KEY")
-            or ai_cfg.get("api_key")
-            or ai_cfg.get("auth_token")
-        )
-    return get_anthropic_api_key(config)
-
-
-def get_ai_key_source(config: dict) -> str | None:
-    """Return only the credential source name, never the credential value."""
-    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
-    service = get_ai_service(config)
-    candidates = {
-        "deepseek": ("DEEPSEEK_API_KEY", "OPENAI_API_KEY"),
-        "doubao": ("ARK_API_KEY", "OPENAI_API_KEY"),
-        "custom": ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"),
-        "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
-    }[service]
-    for env_name in candidates:
-        if os.environ.get(env_name):
-            return env_name
-    if ai_cfg.get("api_key"):
-        return "本地配置"
-    if ai_cfg.get("auth_token"):
-        return "本地配置（Auth Token）"
-    return None
-
-
-def get_ai_base_url(config: dict) -> str | None:
-    """Resolve the service-specific API base URL."""
-    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
-    service = get_ai_service(config)
-    if service == "deepseek":
-        return (
-            os.environ.get("DEEPSEEK_BASE_URL")
-            or os.environ.get("OPENAI_BASE_URL")
-            or ai_cfg.get("base_url")
-            or AI_SERVICE_PRESETS[service]["base_url"]
-        )
-    if service == "doubao":
-        return (
-            os.environ.get("ARK_BASE_URL")
-            or os.environ.get("OPENAI_BASE_URL")
-            or ai_cfg.get("base_url")
-            or AI_SERVICE_PRESETS[service]["base_url"]
-        )
-    if service == "custom":
-        return (
-            os.environ.get("OPENAI_BASE_URL")
-            or os.environ.get("ANTHROPIC_BASE_URL")
-            or ai_cfg.get("base_url")
-        )
-    return os.environ.get("ANTHROPIC_BASE_URL") or ai_cfg.get("base_url")
 
 
 def build_anthropic_client_kwargs(config: dict) -> dict:
@@ -267,55 +88,154 @@ def call_anthropic_text(prompt: str, config: dict, max_tokens: int) -> str | Non
 
     model = resolve_anthropic_model(ai_cfg.get("model", "claude-sonnet-4-6"), config)
     client = anthropic.Anthropic(**build_anthropic_client_kwargs(config))
+    return _extract_first_text(client, model, prompt, max_tokens, config)
+
+
+def _thinking_mode(config: dict) -> str:
+    """Resolve extended-thinking mode from config. One of auto/disabled/enabled/off."""
+    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
+    mode = str(ai_cfg.get("thinking", "auto")).strip().lower()
+    if mode not in {"auto", "disabled", "enabled", "off"}:
+        mode = "auto"
+    return mode
+
+
+def _thinking_budget(config: dict) -> int:
+    """Thinking budget tokens when mode=enabled. Clamped to >=1024."""
+    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except Exception as exc:
-        raise normalize_ai_error(exc) from exc
-    if getattr(response, "stop_reason", None) == "max_tokens":
-        raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
-    for block in response.content:
-        text = getattr(block, "text", None)
-        if text is not None:
-            return text.strip()
+        return max(int(ai_cfg.get("thinking_budget", 2048)), 1024)
+    except (TypeError, ValueError):
+        return 2048
+
+
+def _thinking_strategies(mode: str, budget: int, max_tokens: int) -> list[dict]:
+    """Build ordered messages.create kwarg strategies for the given thinking mode.
+
+    Each strategy is merged into {model, messages} on call. Earlier strategies are
+    preferred; later ones act as fallbacks (e.g. when a compatible service rejects
+    the thinking parameter, or a thinking response still yields no TextBlock).
+    """
+    big = max(max_tokens, 2048)
+    if mode == "disabled":
+        # 强制禁用 thinking；失败时用更大 max_tokens 重试一次（仍保持禁用）
+        return [
+            {"thinking": {"type": "disabled"}},
+            {"thinking": {"type": "disabled"}, "max_tokens": big},
+        ]
+    if mode == "enabled":
+        # Anthropic requires max_tokens > thinking budget
+        return [{"thinking": {"type": "enabled", "budget_tokens": budget}, "max_tokens": max(max_tokens, budget + 1024)}]
+    if mode == "off":
+        # 不传 thinking 参数；失败时放大 max_tokens 重试一次（仍不传该参数）
+        return [
+            {},
+            {"max_tokens": big},
+        ]
+    # auto: prefer disabled (clean TextBlock), then disabled + larger budget,
+    # finally default behaviour with a larger budget for models that always think.
+    return [
+        {"thinking": {"type": "disabled"}},
+        {"thinking": {"type": "disabled"}, "max_tokens": big},
+        {"max_tokens": big},
+    ]
+
+
+def _extract_first_text(client, model: str, prompt: str, max_tokens: int, config: dict) -> str | None:
+    """Call messages.create and return the first TextBlock text.
+
+    兼容默认开启 extended thinking 的模型（如小米 MiMo mimo-v2.5）：thinking 可能
+    吃满 max_tokens，导致 response.content 只剩 ThinkingBlock（属性是 .thinking 而非
+    .text），原实现遍历 .text 落空后静默返回 None，评分/招呼语被整体跳过。
+
+    行为由 config.ai.thinking 控制：
+      auto      优先禁用 thinking 拿 TextBlock，失败则放大 max_tokens 重试（默认，推荐）
+      disabled  强制禁用 thinking（适合 MiMo 等默认开 thinking 的模型）
+      enabled   启用 thinking（需配合 thinking_budget，max_tokens 会自动放大到 > budget）
+      off       不传 thinking 参数（兼容不支持该参数的兼容服务）
+    """
+    mode = _thinking_mode(config)
+    budget = _thinking_budget(config)
+    for strategy in _thinking_strategies(mode, budget, max_tokens):
+        try:
+            response = client.messages.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                **strategy,
+            )
+        except Exception:
+            # 例如兼容服务不接受 thinking 参数 -> 跳到下一个策略
+            continue
+        for block in response.content:
+            text = getattr(block, "text", None)
+            if text is not None:
+                return text.strip()
     return None
+
+
+def _openai_thinking_strategies(mode: str, max_tokens: int) -> list[dict]:
+    """Build ordered chat/completions payload overrides for the given thinking mode.
+
+    OpenAI 兼容的推理模型（小米 MiMo mimo、DeepSeek v4 等）默认开启 thinking，思考
+    内容放在 reasoning_content 字段，会吃满 max_tokens 导致 content 为空或被截断，
+    评分/招呼语因此静默失败。实测 `thinking={'type':'disabled'}` 在小米与 DeepSeek
+    上都能完全禁用 thinking（rt=None、无 reasoning_content），故 auto/disabled 优先用它；
+    enabled 模式不传 disabled、改用更大 max_tokens 让 thinking 与 content 都有产出空间。
+    """
+    big = max(max_tokens, 2048)
+    if mode == "disabled":
+        return [
+            {"thinking": {"type": "disabled"}},
+            {"thinking": {"type": "disabled"}, "max_tokens": big},
+        ]
+    if mode == "enabled":
+        return [{"max_tokens": big}]
+    if mode == "off":
+        return [{}, {"max_tokens": big}]
+    # auto
+    return [
+        {"thinking": {"type": "disabled"}},
+        {"thinking": {"type": "disabled"}, "max_tokens": big},
+        {"max_tokens": big},
+    ]
 
 
 def call_openai_compatible_text(prompt: str, config: dict, max_tokens: int) -> str | None:
     """Call an OpenAI-compatible chat completions endpoint."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
-    api_key = get_ai_api_key(config)
-    base_url = get_ai_base_url(config)
-    model = ai_cfg.get("model") or ""
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or ai_cfg.get("api_key")
+    base_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL") or ai_cfg.get("base_url")
+    model = ai_cfg.get("model", "deepseek-chat")
     if not api_key or not base_url:
         return None
 
-    try:
-        response = httpx.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-                "temperature": 0.2,
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-    except Exception as exc:
-        raise normalize_ai_error(exc, locals().get("response")) from exc
-
-    choices = response.json().get("choices", [])
-    if not choices:
-        return None
-    if choices[0].get("finish_reason") in {"length", "max_tokens"}:
-        raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
-    content = choices[0].get("message", {}).get("content")
-    return content.strip() if isinstance(content, str) else None
+    mode = _thinking_mode(config)
+    for strategy in _openai_thinking_strategies(mode, max_tokens):
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.2,
+        }
+        payload.update(strategy)
+        try:
+            response = httpx.post(
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=60,
+            )
+            response.raise_for_status()
+            choices = response.json().get("choices", [])
+            if not choices:
+                continue
+            content = choices[0].get("message", {}).get("content")
+            # 空字符串（thinking 吃满 max_tokens）视为失败，进入下一策略重试
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+        except Exception:
+            continue
+    return None
 
 
 def _match_model_name(requested: str, available: list[str]) -> str | None:
