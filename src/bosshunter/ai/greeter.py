@@ -6,7 +6,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from bosshunter.ai.credentials import call_anthropic_text
+from bosshunter.ai.credentials import AIRequestError, call_anthropic_text
 from bosshunter.db import get_db, get_jobs_by_status, update_job_greeting, update_job_status
 
 console = Console()
@@ -68,23 +68,41 @@ def _get_resume_summary(config: dict) -> str:
     return content[:1500]
 
 
-def _call_claude(prompt: str, config: dict) -> str | None:
+def _call_claude(prompt: str, config: dict, max_tokens: int = 300) -> str | None:
     """Call Claude API and return response text."""
-    try:
-        return call_anthropic_text(prompt, config, 300)
-    except Exception as e:
-        console.print(f"[red]API 调用失败: {e}[/red]")
-        return None
+    return call_anthropic_text(prompt, config, max_tokens)
 
 
-def _review_greeting(greeting: str, job: dict, config: dict) -> dict | None:
+def _truncate_prompt_text(text: str, limit: int) -> str:
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    marker = "\n...[为适配模型上下文已裁剪]...\n"
+    available = max(limit - len(marker), 2)
+    head = max(int(available * 0.7), 1)
+    return f"{text[:head]}{marker}{text[-(available - head):]}"
+
+
+def _notify(config: dict, message: str, *, error: bool = False) -> None:
+    console.print(f"[{'red' if error else 'yellow'}]{message}[/{'red' if error else 'yellow'}]")
+    callback = config.get("_workbench_log")
+    if callable(callback):
+        callback(message)
+
+
+def _review_greeting(
+    greeting: str,
+    job: dict,
+    config: dict,
+    max_tokens: int = 300,
+) -> dict | None:
     """Self-evaluate a greeting. Returns scores dict or None on failure."""
     prompt = REVIEW_PROMPT.format(
         title=job["title"],
         company=job["company"],
         greeting=greeting,
     )
-    response = _call_claude(prompt, config)
+    response = _call_claude(prompt, config, max_tokens)
     if not response:
         return None
     try:
@@ -97,9 +115,19 @@ def _review_greeting(greeting: str, job: dict, config: dict) -> dict | None:
     return None
 
 
-def _generate_greeting_once(job: dict, resume_summary: str, config: dict, critique: str = "") -> str | None:
+def _generate_greeting_once(
+    job: dict,
+    resume_summary: str,
+    config: dict,
+    critique: str = "",
+    *,
+    compact: bool = False,
+    max_tokens: int = 300,
+) -> str | None:
     """Generate a single greeting attempt."""
-    jd_summary = job["jd"][:500] if job["jd"] else "无详细描述"
+    jd_limit = 250 if compact else 500
+    resume_limit = 800 if compact else 1500
+    jd_summary = _truncate_prompt_text(job.get("jd", ""), jd_limit) or "无详细描述"
     critique_section = f"\n7. 上次生成的问题: {critique}，请避免此问题\n" if critique else ""
 
     # Build extra highlights from config (portfolio URL, personal strengths, etc.)
@@ -112,17 +140,17 @@ def _generate_greeting_once(job: dict, resume_summary: str, config: dict, critiq
     extra_highlights = "\n".join(highlight_lines) if highlight_lines else "（无额外亮点配置）"
 
     prompt = GREETING_PROMPT.format(
-        resume_summary=resume_summary,
+        resume_summary=_truncate_prompt_text(resume_summary, resume_limit),
         title=job["title"],
         company=job["company"],
         salary=job["salary"] or "面议",
         jd_summary=jd_summary,
-        match_reason=job.get("score_reason", ""),
+        match_reason=_truncate_prompt_text(job.get("score_reason", ""), 240),
         critique_section=critique_section,
-        extra_highlights=extra_highlights,
+        extra_highlights=_truncate_prompt_text(extra_highlights, 500),
     )
 
-    greeting = _call_claude(prompt, config)
+    greeting = _call_claude(prompt, config, max_tokens)
     if not greeting:
         return None
 
@@ -140,6 +168,74 @@ def _generate_greeting_once(job: dict, resume_summary: str, config: dict, critiq
             greeting = cut
 
     return greeting
+
+
+def _generate_with_token_retry(
+    job: dict,
+    resume_summary: str,
+    config: dict,
+    critique: str = "",
+) -> str | None:
+    """Retry only request-size/output-limit failures without changing batch size."""
+    try:
+        return _generate_greeting_once(job, resume_summary, config, critique)
+    except AIRequestError as exc:
+        if exc.kind == "output_truncated":
+            _notify(config, f"{job['company']}｜{job['title']} 的招呼语回答被截断，正在增大输出 Token 上限后重试。")
+            compact = False
+            retry_max_tokens = 600
+        elif exc.kind == "output_limit":
+            _notify(config, f"{job['company']}｜{job['title']} 正在降低单次输出 Token 上限后重试招呼语。")
+            compact = False
+            retry_max_tokens = 160
+        elif exc.kind == "context_limit":
+            _notify(config, f"{job['company']}｜{job['title']} 内容较长，正在压缩后重试招呼语。")
+            compact = True
+            retry_max_tokens = 160
+        else:
+            raise
+
+    try:
+        return _generate_greeting_once(
+            job,
+            resume_summary,
+            config,
+            critique,
+            compact=compact,
+            max_tokens=retry_max_tokens,
+        )
+    except AIRequestError as retry_exc:
+        if retry_exc.kind in {"output_truncated", "output_limit", "context_limit"}:
+            _notify(
+                config,
+                f"已跳过 {job['company']}｜{job['title']}：调整单次 Token 请求后仍失败。",
+            )
+            return None
+        raise
+
+
+def _review_with_token_retry(greeting: str, job: dict, config: dict) -> dict | None:
+    """Keep greeting review from interrupting the usable generated draft."""
+    try:
+        return _review_greeting(greeting, job, config)
+    except AIRequestError as exc:
+        if exc.kind == "output_truncated":
+            _notify(config, f"{job['company']}｜{job['title']} 的质量检查回答被截断，正在增大输出 Token 上限后重试。")
+            retry_max_tokens = 600
+        elif exc.kind == "output_limit":
+            _notify(config, f"{job['company']}｜{job['title']} 正在降低单次输出 Token 上限后重试质量检查。")
+            retry_max_tokens = 128
+        elif exc.kind == "context_limit":
+            return None
+        else:
+            raise
+
+    try:
+        return _review_greeting(greeting, job, config, retry_max_tokens)
+    except AIRequestError as retry_exc:
+        if retry_exc.kind in {"output_truncated", "output_limit", "context_limit"}:
+            return None
+        raise
 
 
 def generate_greetings(config: dict) -> int:
@@ -163,9 +259,14 @@ def generate_greetings(config: dict) -> int:
 
     ai_cfg = config.get("ai", {})
     review_threshold = ai_cfg.get("greeting_review_threshold", 7.0)
-    max_iterations = ai_cfg.get("greeting_max_iterations", 2)
+    try:
+        max_iterations = max(0, int(ai_cfg.get("greeting_max_iterations", 2) or 0))
+    except (TypeError, ValueError):
+        max_iterations = 2
 
     count = 0
+    failed = 0
+    pause_reason = ""
 
     with Progress(
         SpinnerColumn(),
@@ -174,39 +275,63 @@ def generate_greetings(config: dict) -> int:
     ) as progress:
         task = progress.add_task(f"生成招呼语 (0/{len(jobs)})", total=len(jobs))
 
-        for job in jobs:
-            # Generate with self-review loop
+        for index, job in enumerate(jobs, start=1):
             best_greeting = None
+            pause_after_current = ""
 
             for iteration in range(max_iterations + 1):
                 critique = ""
                 if iteration > 0 and best_greeting:
-                    # We have a previous attempt — review it
-                    review = _review_greeting(best_greeting, job, config)
+                    try:
+                        review = _review_with_token_retry(best_greeting, job, config)
+                    except AIRequestError as exc:
+                        pause_after_current = exc.user_message
+                        break
                     if review and review.get("avg", 10) >= review_threshold:
-                        break  # Good enough
+                        break
                     critique = review.get("critique", "") if review else ""
 
-                greeting = _generate_greeting_once(job, resume_summary, config, critique)
-                if not greeting:
+                try:
+                    greeting = _generate_with_token_retry(job, resume_summary, config, critique)
+                except AIRequestError as exc:
+                    if best_greeting:
+                        pause_after_current = exc.user_message
+                    else:
+                        pause_reason = exc.user_message
                     break
 
-                if iteration == 0:
-                    best_greeting = greeting
-                    # If no review iterations configured, skip review
-                    if max_iterations == 0:
-                        break
-                else:
-                    # Compare: keep the new one (it incorporates feedback)
-                    best_greeting = greeting
+                if not greeting:
+                    if not best_greeting:
+                        failed += 1
+                    break
+
+                best_greeting = greeting
+                if max_iterations == 0:
+                    break
 
             if not best_greeting:
+                progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
+                if pause_reason:
+                    break
                 continue
 
             update_job_greeting(db, job["id"], best_greeting)
             update_job_status(db, job["id"], "ready")
             count += 1
-            progress.update(task, advance=1, description=f"生成招呼语 ({count}/{len(jobs)})")
+            progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
+
+            if pause_after_current:
+                pause_reason = pause_after_current
+                break
 
     db.close()
+    if pause_reason:
+        remaining = max(len(jobs) - count, 0)
+        _notify(
+            config,
+            f"招呼语生成已安全暂停：{pause_reason}。已生成内容已保存，剩余 {remaining} 个岗位下次运行会继续处理。",
+            error=True,
+        )
+    if failed:
+        _notify(config, f"本轮有 {failed} 个岗位未生成招呼语并保留为待处理，可稍后重试。")
     return count

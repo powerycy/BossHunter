@@ -212,7 +212,9 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 	if task.stop_requested.is_set():
 		return
 	_log(task, "开始 AI 评分")
-	score_jobs(config)
+	score_config = dict(config)
+	score_config["_workbench_log"] = lambda message: _log(task, message)
+	score_jobs(score_config)
 
 
 def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
@@ -280,6 +282,7 @@ def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
 
 	config = dict(config)
 	config["_workbench_stop_event"] = task.stop_requested
+	config["_workbench_log"] = lambda message: _log(task, message)
 	if not config.get("_workbench_skip_greeting"):
 		_log(task, "生成招呼语")
 		generate_greetings(config)

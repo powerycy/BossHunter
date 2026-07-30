@@ -12,6 +12,101 @@ from bosshunter.config import AI_SERVICE_PRESETS
 _MODEL_RESOLVE_CACHE: dict[tuple[str, str, str], str] = {}
 
 
+class AIRequestError(RuntimeError):
+    """Normalized AI request failure without exposing credentials or raw payloads."""
+
+    def __init__(self, kind: str, user_message: str, status_code: int | None = None):
+        super().__init__(user_message)
+        self.kind = kind
+        self.user_message = user_message
+        self.status_code = status_code
+
+
+def _response_error_detail(response: object | None) -> str:
+    if response is None:
+        return ""
+    try:
+        payload = response.json()
+    except Exception:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error", payload)
+    if isinstance(error, dict):
+        return " ".join(
+            str(error.get(key) or "")
+            for key in ("code", "type", "message")
+        ).strip()
+    return str(error or "")
+
+
+def normalize_ai_error(exc: Exception, response: object | None = None) -> AIRequestError:
+    """Classify provider errors into actionable, credential-safe categories."""
+    if isinstance(exc, AIRequestError):
+        return exc
+
+    resolved_response = response if response is not None else getattr(exc, "response", None)
+    status_code = getattr(exc, "status_code", None) or getattr(resolved_response, "status_code", None)
+    raw = f"{type(exc).__name__} {exc} {_response_error_detail(resolved_response)}".lower()
+
+    output_limit_markers = (
+        "max_tokens",
+        "max completion tokens",
+        "maximum output tokens",
+        "tokens to sample",
+    )
+    context_markers = (
+        "context_length",
+        "context length",
+        "maximum context",
+        "max context",
+        "input tokens",
+        "prompt tokens",
+        "too many tokens",
+        "prompt is too long",
+        "request too large",
+        "上下文",
+        "输入过长",
+    )
+    quota_markers = (
+        "insufficient_quota",
+        "quota exceeded",
+        "token quota",
+        "billing",
+        "balance",
+        "credit",
+        "budget",
+        "overdue",
+        "payment required",
+        "余额不足",
+        "额度不足",
+    )
+    rate_markers = (
+        "rate limit",
+        "too many requests",
+        "requests per minute",
+        "tokens per minute",
+        " tpm",
+        " rpm",
+        "限流",
+        "频率限制",
+    )
+
+    if any(marker in raw for marker in context_markers):
+        return AIRequestError("context_limit", "请求内容超过当前模型的上下文限制", status_code)
+    if any(marker in raw for marker in output_limit_markers):
+        return AIRequestError("output_limit", "当前模型不接受设置的输出 Token 上限", status_code)
+    if status_code == 402 or any(marker in raw for marker in quota_markers):
+        return AIRequestError("token_quota", "AI Token 额度或账户余额不足", status_code)
+    if status_code == 429 or any(marker in raw for marker in rate_markers):
+        return AIRequestError("rate_limit", "AI 服务触发请求或 Token 频率限制", status_code)
+    if status_code in {401, 403}:
+        return AIRequestError("auth", "AI API Key 无效或当前模型没有访问权限", status_code)
+    if isinstance(exc, httpx.RequestError):
+        return AIRequestError("network", "AI 服务连接失败或超时", status_code)
+    return AIRequestError("request_failed", "AI 服务请求失败", status_code)
+
+
 def get_anthropic_api_key(config: dict) -> str | None:
     """Resolve the Anthropic API key from env or config."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
@@ -172,11 +267,16 @@ def call_anthropic_text(prompt: str, config: dict, max_tokens: int) -> str | Non
 
     model = resolve_anthropic_model(ai_cfg.get("model", "claude-sonnet-4-6"), config)
     client = anthropic.Anthropic(**build_anthropic_client_kwargs(config))
-    response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as exc:
+        raise normalize_ai_error(exc) from exc
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
     for block in response.content:
         text = getattr(block, "text", None)
         if text is not None:
@@ -206,13 +306,16 @@ def call_openai_compatible_text(prompt: str, config: dict, max_tokens: int) -> s
             timeout=60,
         )
         response.raise_for_status()
-        choices = response.json().get("choices", [])
-        if not choices:
-            return None
-        content = choices[0].get("message", {}).get("content")
-        return content.strip() if isinstance(content, str) else None
-    except Exception:
+    except Exception as exc:
+        raise normalize_ai_error(exc, locals().get("response")) from exc
+
+    choices = response.json().get("choices", [])
+    if not choices:
         return None
+    if choices[0].get("finish_reason") in {"length", "max_tokens"}:
+        raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
+    content = choices[0].get("message", {}).get("content")
+    return content.strip() if isinstance(content, str) else None
 
 
 def _match_model_name(requested: str, available: list[str]) -> str | None:

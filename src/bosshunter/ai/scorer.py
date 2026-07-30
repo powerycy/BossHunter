@@ -6,7 +6,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from bosshunter.ai.credentials import call_anthropic_text, get_ai_api_key
+from bosshunter.ai.credentials import AIRequestError, call_anthropic_text, get_ai_api_key
 from bosshunter.db import get_db, get_jobs_by_status, update_job_score, update_job_status, update_job_quick_score
 from bosshunter.ai.prefilter import quick_score
 
@@ -48,23 +48,43 @@ def _load_resume(config: dict) -> str:
     return resume_path.read_text(encoding="utf-8")
 
 
-def _call_claude(prompt: str, config: dict) -> str | None:
+def _call_claude(prompt: str, config: dict, max_tokens: int = 256) -> str | None:
     """Call Claude API and return response text."""
-    try:
-        import anthropic  # noqa: F401
-    except ImportError:
-        console.print("[red]需要安装 anthropic 包: pip install anthropic[/red]")
-        return None
-
     if not get_ai_api_key(config):
         console.print("[red]未设置当前 AI 服务所需的 API Key 环境变量或 config.yaml ai.api_key[/red]")
         return None
+    return call_anthropic_text(prompt, config, max_tokens)
 
-    try:
-        return call_anthropic_text(prompt, config, 256)
-    except Exception as e:
-        console.print(f"[red]API 调用失败: {e}[/red]")
-        return None
+
+def _truncate_prompt_text(text: str, limit: int) -> str:
+    """Keep both ends of long source text so compact retries retain key context."""
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    marker = "\n...[为适配模型上下文已裁剪]...\n"
+    available = max(limit - len(marker), 2)
+    head = max(int(available * 0.7), 1)
+    return f"{text[:head]}{marker}{text[-(available - head):]}"
+
+
+def _build_scoring_prompt(job: dict, resume: str, *, compact: bool = False) -> str:
+    resume_limit = 1400 if compact else 3000
+    jd_limit = 900 if compact else 2000
+    return SCORING_PROMPT.format(
+        resume=_truncate_prompt_text(resume, resume_limit),
+        title=job["title"],
+        company=job["company"],
+        salary=job["salary"],
+        experience=job["experience"],
+        jd=_truncate_prompt_text(job.get("jd", ""), jd_limit),
+    )
+
+
+def _notify(config: dict, message: str, *, error: bool = False) -> None:
+    console.print(f"[{'red' if error else 'yellow'}]{message}[/{'red' if error else 'yellow'}]")
+    callback = config.get("_workbench_log")
+    if callable(callback):
+        callback(message)
 
 
 def _parse_score_response(text: str) -> dict | None:
@@ -98,62 +118,120 @@ def score_jobs(config: dict) -> tuple[int, int]:
     scored = 0
     filtered = 0
     prefiltered = 0
+    processed = 0
+    failed = 0
+    pause_reason = ""
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        task = progress.add_task(f"评分中 (0/{len(pending_jobs)})", total=len(pending_jobs))
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task(f"评分中 (0/{len(pending_jobs)})", total=len(pending_jobs))
 
-        for job in pending_jobs:
-            # Stage 1: Keyword pre-filter (free, no API calls)
-            qs, qs_reason = quick_score(job, config)
-            update_job_quick_score(db, job["id"], qs)
+            for job in pending_jobs:
+                try:
+                    # Stage 1: Keyword pre-filter (free, no API calls)
+                    qs, qs_reason = quick_score(job, config)
+                    update_job_quick_score(db, job["id"], qs)
 
-            if qs == 0:
-                update_job_score(db, job["id"], qs, f"预筛不通过: {qs_reason}")
-                update_job_status(db, job["id"], "filtered")
-                filtered += 1
-                prefiltered += 1
-                progress.update(task, advance=1, description=f"评分中 ({scored+filtered}/{len(pending_jobs)}) [预筛淘汰{prefiltered}]")
-                continue
+                    if qs == 0:
+                        update_job_score(db, job["id"], qs, f"预筛不通过: {qs_reason}")
+                        update_job_status(db, job["id"], "filtered")
+                        filtered += 1
+                        prefiltered += 1
+                        continue
 
-            # Stage 2: LLM deep evaluation
-            prompt = SCORING_PROMPT.format(
-                resume=resume[:3000],
-                title=job["title"],
-                company=job["company"],
-                salary=job["salary"],
-                experience=job["experience"],
-                jd=job["jd"][:2000],
-            )
+                    # Stage 2: LLM deep evaluation
+                    try:
+                        response = _call_claude(_build_scoring_prompt(job, resume), config)
+                    except AIRequestError as exc:
+                        if exc.kind == "output_truncated":
+                            _notify(config, f"{job['company']}｜{job['title']} 的评分回答被截断，正在增大输出 Token 上限后重试。")
+                            try:
+                                response = _call_claude(_build_scoring_prompt(job, resume), config, 512)
+                            except AIRequestError as retry_exc:
+                                if retry_exc.kind in {"output_truncated", "output_limit", "context_limit"}:
+                                    failed += 1
+                                    _notify(
+                                        config,
+                                        f"已跳过 {job['company']}｜{job['title']}：调整单次 Token 请求后仍无法获得完整评分。",
+                                    )
+                                    continue
+                                pause_reason = retry_exc.user_message
+                                break
+                        elif exc.kind == "output_limit":
+                            _notify(config, f"{job['company']}｜{job['title']} 正在降低输出 Token 上限后重试评分。")
+                            try:
+                                response = _call_claude(_build_scoring_prompt(job, resume), config, 128)
+                            except AIRequestError as retry_exc:
+                                if retry_exc.kind == "output_limit":
+                                    failed += 1
+                                    _notify(
+                                        config,
+                                        f"已跳过 {job['company']}｜{job['title']}：当前模型仍不接受输出 Token 设置。",
+                                    )
+                                    continue
+                                pause_reason = retry_exc.user_message
+                                break
+                        elif exc.kind != "context_limit":
+                            pause_reason = exc.user_message
+                            break
+                        else:
+                            _notify(config, f"{job['company']}｜{job['title']} 内容较长，正在压缩后重试评分。")
+                            try:
+                                response = _call_claude(_build_scoring_prompt(job, resume, compact=True), config, 128)
+                            except AIRequestError as retry_exc:
+                                if retry_exc.kind != "context_limit":
+                                    pause_reason = retry_exc.user_message
+                                    break
+                                failed += 1
+                                _notify(config, f"已跳过 {job['company']}｜{job['title']}：压缩后仍超过模型上下文限制。")
+                                continue
 
-            response = _call_claude(prompt, config)
-            if not response:
-                continue
+                    if not response:
+                        pause_reason = "AI 服务未返回评分结果，请检查模型和 API 配置"
+                        break
 
-            result = _parse_score_response(response)
-            if not result:
-                continue
+                    result = _parse_score_response(response)
+                    if not result:
+                        failed += 1
+                        _notify(config, f"已跳过 {job['company']}｜{job['title']}：AI 返回的评分格式无法解析。")
+                        continue
 
-            score = result.get("score", 0)
-            reason = result.get("reason", "")
-            missing = result.get("missing", "")
-            full_reason = f"{reason} | 缺失: {missing}" if missing else reason
+                    score = result.get("score", 0)
+                    reason = result.get("reason", "")
+                    missing = result.get("missing", "")
+                    full_reason = f"{reason} | 缺失: {missing}" if missing else reason
 
-            update_job_score(db, job["id"], score, full_reason)
+                    update_job_score(db, job["id"], score, full_reason)
 
-            if score >= threshold:
-                update_job_status(db, job["id"], "ready")
-                scored += 1
-            else:
-                update_job_status(db, job["id"], "filtered")
-                filtered += 1
-
-            progress.update(task, advance=1, description=f"评分中 ({scored+filtered}/{len(pending_jobs)}) [预筛淘汰{prefiltered}]")
+                    if score >= threshold:
+                        update_job_status(db, job["id"], "ready")
+                        scored += 1
+                    else:
+                        update_job_status(db, job["id"], "filtered")
+                        filtered += 1
+                finally:
+                    processed += 1
+                    progress.update(
+                        task,
+                        advance=1,
+                        description=f"评分中 ({processed}/{len(pending_jobs)}) [预筛淘汰{prefiltered}]",
+                    )
+    finally:
+        db.close()
 
     if prefiltered > 0:
         console.print(f"[dim]  预筛阶段淘汰 {prefiltered} 个岗位（节省 {prefiltered} 次 API 调用）[/dim]")
-    db.close()
+    if pause_reason:
+        remaining = max(len(pending_jobs) - scored - filtered, 0)
+        _notify(
+            config,
+            f"AI 评分已安全暂停：{pause_reason}。已完成结果已保存，剩余 {remaining} 个岗位下次运行会继续处理。",
+            error=True,
+        )
+    if failed:
+        _notify(config, f"本轮有 {failed} 个岗位评分失败并保留为待处理，可稍后重试。")
     return scored, filtered
