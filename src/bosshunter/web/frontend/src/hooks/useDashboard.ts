@@ -141,7 +141,8 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
     })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
-      throw new Error(data.error || '启动失败')
+      const details = Array.isArray(data.messages) ? data.messages.map(String).filter(Boolean).join('；') : ''
+      throw new Error([data.error || '启动失败', details].filter(Boolean).join('：'))
     }
     await fetchAll()
   }

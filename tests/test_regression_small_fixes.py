@@ -57,10 +57,10 @@ class VersionMetadataTests(unittest.TestCase):
             / "Sidebar.tsx"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('version = "2.0.0"', pyproject)
-        self.assertEqual(bosshunter.__version__, "2.0.0")
-        self.assertEqual(json.loads(health())["version"], "2.0.0")
-        self.assertIn("v2.0 · 本地控制台", sidebar_source)
+        self.assertIn('version = "2.1.0"', pyproject)
+        self.assertEqual(bosshunter.__version__, "2.1.0")
+        self.assertEqual(json.loads(health())["version"], "2.1.0")
+        self.assertIn("v2.1 · 本地控制台", sidebar_source)
         self.assertNotIn("v1.1.0", sidebar_source)
 
 
@@ -411,7 +411,7 @@ class HeaderTests(unittest.TestCase):
 
     def test_header_version_metadata_right_side_omits_duplicate_console_label(self):
         # Act / Assert
-        self.assertNotIn("v2.0 · 本地控制台", self.source)
+        self.assertNotIn("v2.1 · 本地控制台", self.source)
         self.assertIn("本地服务运行中", self.source)
 
 

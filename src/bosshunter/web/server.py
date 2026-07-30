@@ -6,7 +6,6 @@ Serves:
 """
 
 import json
-import os
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -15,7 +14,8 @@ from threading import Event
 from bottle import Bottle, request, response, static_file, abort
 
 from bosshunter import __version__
-from bosshunter.config import load_config, CITY_CODES
+from bosshunter.ai.credentials import get_ai_api_key
+from bosshunter.config import AI_SERVICE_PRESETS, CITY_CODES, load_config
 from bosshunter.db import (
 	add_history,
 	count_unresolved_monitor_items,
@@ -32,6 +32,8 @@ from bosshunter.db import (
 	get_top_companies,
 	update_job_status,
 )
+from bosshunter.web.preflight import check_ai_connection, collect_preflight_checks, error_messages
+from bosshunter.web.resume_upload import ResumeUploadError, prepare_resume_content
 from bosshunter.web.tasks import TaskAlreadyRunningError, WorkbenchTask, WorkbenchTaskRunner
 
 app = Bottle()
@@ -136,12 +138,21 @@ def _sanitize_config_for_write(data):
 	ai_cfg.pop("has_auth_token", None)
 
 	existing_ai = load_config(CONFIG_PATH).get("ai", {})
-	provider = ai_cfg.get("provider") or existing_ai.get("provider") or "anthropic"
-	if provider not in {"anthropic", "openai_compatible"}:
-		provider = "anthropic"
-	ai_cfg["provider"] = provider
+	service = ai_cfg.get("service") or existing_ai.get("service")
+	if service not in AI_SERVICE_PRESETS:
+		provider = ai_cfg.get("provider") or existing_ai.get("provider") or "anthropic"
+		service = "custom" if provider == "openai_compatible" else "anthropic"
+	ai_cfg["service"] = service
+	ai_cfg["provider"] = AI_SERVICE_PRESETS[service]["provider"]
+
+	clear_credentials = bool(ai_cfg.pop("clear_credentials", False))
 
 	for field in ("api_key", "auth_token"):
+		if clear_credentials:
+			posted_value = ai_cfg.get(field)
+			if posted_value is None or str(posted_value).strip() == "":
+				ai_cfg.pop(field, None)
+			continue
 		posted_value = ai_cfg.get(field)
 		existing_value = existing_ai.get(field)
 		existing_mask = _mask_api_key(str(existing_value)) if existing_value else ""
@@ -169,21 +180,13 @@ def _preflight_messages(mode: str, config: dict) -> list[str]:
 	profile = config.get("profile", {})
 	resume_path = profile.get("resume_path", "")
 	if not resume_path or not Path(str(resume_path)).exists():
-		messages.append("请先在配置页上传 Markdown 简历。")
+		messages.append("请先在配置页上传 .md 或 .docx 简历。")
 
 	if mode in {"full", "collect"} and not config.get("search", {}).get("keywords"):
 		messages.append("请先在配置页填写搜索关键词。")
 
-	if mode in {"full", "collect"}:
-		ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
-		has_ai_key = bool(
-			os.environ.get("ANTHROPIC_API_KEY")
-			or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-			or ai_cfg.get("api_key")
-			or ai_cfg.get("auth_token")
-		)
-		if not has_ai_key:
-			messages.append("请先在配置页填写 AI API Key，或设置 ANTHROPIC_API_KEY 环境变量。")
+	if mode in {"full", "collect"} and not get_ai_api_key(config):
+		messages.append("请先在配置页填写当前 AI 服务的 API Key，或设置对应的标准环境变量。")
 
 	return messages
 
@@ -427,8 +430,19 @@ def api_workbench_preflight():
 	mode = request.params.get("mode", "")
 	try:
 		config = load_config(CONFIG_PATH)
-		messages = _preflight_messages(mode, config)
-		return _json_response({"ok": not messages, "messages": messages})
+		checks = collect_preflight_checks(mode, config)
+		messages = error_messages(checks)
+		return _json_response({"ok": not messages, "messages": messages, "checks": checks})
+	except Exception as e:
+		return _json_response({"ok": False, "messages": [str(e)]}, 500)
+
+
+@app.route("/api/diagnostics/ai")
+def api_ai_diagnostics():
+	try:
+		checks = check_ai_connection(load_config(CONFIG_PATH), required=True)
+		messages = error_messages(checks)
+		return _json_response({"ok": not messages, "messages": messages, "checks": checks})
 	except Exception as e:
 		return _json_response({"ok": False, "messages": [str(e)]}, 500)
 
@@ -723,21 +737,18 @@ def api_resume_upload():
 		if not upload:
 			return _json_response({"error": "No file uploaded"}, 400)
 
-		# Validate extension
-		name = upload.filename
-		if not name.endswith(".md"):
-			return _json_response({"error": "仅支持 .md 格式"}, 400)
-
 		# Validate size (10MB max)
 		content = upload.file.read()
 		if len(content) > 10 * 1024 * 1024:
 			return _json_response({"error": "文件大小超过 10MB 限制"}, 400)
 
-		# Sanitize filename
-		safe_name = Path(name).name.replace("..", "").replace("/", "").replace("\\", "")
+		# Bottle's normalized `filename` strips non-ASCII characters. Use the
+		# raw browser filename and apply our own Unicode-safe sanitization.
+		raw_name = upload.raw_filename or upload.filename
+		safe_name, stored_content = prepare_resume_content(raw_name, content)
 		RESUME_DIR.mkdir(parents=True, exist_ok=True)
 		dest = RESUME_DIR / safe_name
-		dest.write_bytes(content)
+		dest.write_bytes(stored_content)
 
 		# Update config
 		config = load_config(CONFIG_PATH)
@@ -748,9 +759,11 @@ def api_resume_upload():
 		return _json_response({
 			"success": True,
 			"filename": safe_name,
-			"size": len(content),
+			"size": len(stored_content),
 			"path": str(dest)
 		})
+	except ResumeUploadError as e:
+		return _json_response({"error": str(e)}, 400)
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
 

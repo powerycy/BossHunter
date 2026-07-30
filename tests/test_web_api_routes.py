@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
+from zipfile import ZipFile
 
 import yaml
 
@@ -77,6 +78,46 @@ class WebApiRouteTests(unittest.TestCase):
         ).decode("utf-8")
         return status_headers["status"], status_headers["headers"], body
 
+    def _upload_resume(self, filename: str, content: bytes, content_type: str):
+        boundary = "----BossHunterResumeUpload"
+        body = (
+            (
+                f'--{boundary}\r\n'
+                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            ).encode("utf-8")
+            + content
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        status_headers = {}
+
+        def start_response(status, headers, exc_info=None):
+            status_headers["status"] = status
+            status_headers["headers"] = dict(headers)
+
+        environ = {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": "/api/resume/upload",
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(body)),
+            "CONTENT_TYPE": f"multipart/form-data; boundary={boundary}",
+            "SERVER_NAME": "127.0.0.1",
+            "SERVER_PORT": "8686",
+            "wsgi.version": (1, 0),
+            "wsgi.url_scheme": "http",
+            "wsgi.input": io.BytesIO(body),
+            "wsgi.errors": io.StringIO(),
+            "wsgi.multithread": False,
+            "wsgi.multiprocess": False,
+            "wsgi.run_once": False,
+        }
+
+        response_body = b"".join(
+            chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+            for chunk in server.app(environ, start_response)
+        ).decode("utf-8")
+        return status_headers["status"], status_headers["headers"], response_body
+
     def test_web_api_missing_api_route_returns_json_404_not_spa_html(self):
         # Arrange
         with tempfile.TemporaryDirectory() as tmp:
@@ -112,12 +153,23 @@ class WebApiRouteTests(unittest.TestCase):
             server.set_base_dir(base_dir)
 
             # Act
-            status, headers, body = self._request("/api/workbench/preflight?mode=full")
+            ready_checks = [
+                {
+                    "id": "environment",
+                    "title": "运行环境",
+                    "status": "pass",
+                    "message": "启动检查已通过",
+                    "detail": "测试环境已就绪",
+                    "action": "",
+                }
+            ]
+            with patch.object(server, "collect_preflight_checks", return_value=ready_checks):
+                status, headers, body = self._request("/api/workbench/preflight?mode=full")
 
         # Assert
         self.assertTrue(status.startswith("200"))
         self.assertIn("application/json", headers["Content-Type"])
-        self.assertEqual(json.loads(body), {"ok": True, "messages": []})
+        self.assertEqual(json.loads(body), {"ok": True, "messages": [], "checks": ready_checks})
 
     def test_web_api_workbench_preflight_full_requires_ai_key(self):
         # Arrange
@@ -139,7 +191,21 @@ class WebApiRouteTests(unittest.TestCase):
             server.set_base_dir(base_dir)
 
             # Act
-            with patch.dict("os.environ", {}, clear=True):
+            browser_ready = {
+                "node": {"available": True, "version": "v22"},
+                "runtime": True,
+                "chrome": True,
+                "targets": [],
+                "boss_tab": None,
+                "errors": [],
+                "runtime_url": "http://127.0.0.1:3456",
+                "health": {"runtime": "bosshunter"},
+                "browser_product": "Chrome/138.0",
+            }
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                patch("bosshunter.web.preflight.run_browser_diagnostics", return_value=browser_ready),
+            ):
                 status, headers, body = self._request("/api/workbench/preflight?mode=full")
 
         # Assert
@@ -147,7 +213,37 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertIn("application/json", headers["Content-Type"])
         payload = json.loads(body)
         self.assertFalse(payload["ok"])
-        self.assertIn("请先在配置页填写 AI API Key，或设置 ANTHROPIC_API_KEY 环境变量。", payload["messages"])
+        self.assertTrue(any("尚未填写 AI API Key" in message for message in payload["messages"]))
+        self.assertTrue(any(check["id"] == "ai_credentials" for check in payload["checks"]))
+
+    def test_web_api_ai_diagnostics_returns_structured_feedback(self):
+        # Arrange
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+            checks = [
+                {
+                    "id": "ai_credentials",
+                    "title": "AI API Key",
+                    "status": "error",
+                    "message": "尚未填写 AI API Key",
+                    "detail": "请填写 API Key。",
+                    "action": "config",
+                }
+            ]
+
+            # Act
+            with patch.object(server, "check_ai_connection", return_value=checks):
+                status, headers, body = self._request("/api/diagnostics/ai")
+
+        # Assert
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), body)
+        self.assertIn("application/json", headers["Content-Type"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["checks"], checks)
+        self.assertIn("尚未填写 AI API Key", payload["messages"][0])
 
     def test_web_api_activity_returns_json_without_runtime_name_error(self):
         # Arrange
@@ -648,6 +744,81 @@ class WebApiRouteTests(unittest.TestCase):
             self.assertEqual(json.loads(body), {"success": True})
             self.assertTrue(resume_path.exists())
             self.assertEqual(config["profile"]["resume_path"], "")
+
+    def test_web_api_resume_upload_preserves_chinese_markdown_filename(self):
+        # Arrange
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+            content = "# 张三\n\n产品经理\n".encode("utf-8")
+
+            # Act
+            status, _, body = self._upload_resume("张三的中文简历.md", content, "text/markdown")
+            payload = json.loads(body)
+            stored_path = Path(payload["path"])
+            config = yaml.safe_load((base_dir / "config.yaml").read_text(encoding="utf-8"))
+
+            # Assert
+            self.assertTrue(status.startswith("200"), body)
+            self.assertEqual(payload["filename"], "张三的中文简历.md")
+            self.assertEqual(stored_path.read_bytes(), content)
+            self.assertEqual(config["profile"]["resume_path"], str(stored_path))
+
+    def test_web_api_resume_upload_converts_docx_to_markdown(self):
+        # Arrange
+        document_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:pPr><w:pStyle w:val="Title"/></w:pPr>
+              <w:r><w:t>李雷</w:t></w:r>
+            </w:p>
+            <w:p>
+              <w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr>
+              <w:r><w:t>5 年产品经验</w:t></w:r>
+            </w:p>
+          </w:body>
+        </w:document>"""
+        docx_buffer = io.BytesIO()
+        with ZipFile(docx_buffer, "w") as archive:
+            archive.writestr("word/document.xml", document_xml)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+
+            # Act
+            status, _, body = self._upload_resume(
+                "李雷简历.docx",
+                docx_buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            payload = json.loads(body)
+            stored_path = Path(payload["path"])
+            stored_content = stored_path.read_text(encoding="utf-8")
+
+            # Assert
+            self.assertTrue(status.startswith("200"), body)
+            self.assertEqual(payload["filename"], "李雷简历.md")
+            self.assertEqual(stored_path.suffix, ".md")
+            self.assertIn("# 李雷", stored_content)
+            self.assertIn("- 5 年产品经验", stored_content)
+
+    def test_web_api_resume_upload_rejects_legacy_doc_format(self):
+        # Arrange
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+
+            # Act
+            status, _, body = self._upload_resume("旧版简历.doc", b"not-a-word-file", "application/msword")
+
+            # Assert
+            self.assertTrue(status.startswith("400"), body)
+            self.assertEqual(json.loads(body), {"error": "仅支持 .md 或 .docx 格式"})
 
     def test_web_api_history_dismiss_reply_adds_dismissed_history_without_rejecting_job(self):
         # Arrange

@@ -32,6 +32,33 @@ CITY_CODES: dict[str, str] = {
 
 
 SUPPORTED_AI_PROVIDERS = {"anthropic", "openai_compatible"}
+SUPPORTED_AI_SERVICES = {"anthropic", "deepseek", "doubao", "custom"}
+AI_SERVICE_PRESETS: dict[str, dict[str, str]] = {
+    "anthropic": {
+        "provider": "anthropic",
+        "label": "Claude / Anthropic",
+        "base_url": "",
+        "key_env": "ANTHROPIC_API_KEY",
+    },
+    "deepseek": {
+        "provider": "openai_compatible",
+        "label": "DeepSeek",
+        "base_url": "https://api.deepseek.com",
+        "key_env": "DEEPSEEK_API_KEY",
+    },
+    "doubao": {
+        "provider": "openai_compatible",
+        "label": "豆包 / 火山方舟",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "key_env": "ARK_API_KEY",
+    },
+    "custom": {
+        "provider": "openai_compatible",
+        "label": "其他 OpenAI 兼容接口",
+        "base_url": "",
+        "key_env": "OPENAI_API_KEY",
+    },
+}
 
 
 DEFAULTS: dict[str, Any] = {
@@ -66,6 +93,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "ai": {
         "provider": "anthropic",
+        "service": "anthropic",
         "model": "claude-sonnet-4-6",
         "greeting_review_threshold": 7.0,
         "greeting_max_iterations": 2,
@@ -111,9 +139,20 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
 
 def _validate_ai_provider(config: dict[str, Any]) -> None:
     """Fail fast when the configured AI provider is not supported."""
-    provider = config.get("ai", {}).get("provider", "anthropic")
+    ai_cfg = config.get("ai", {})
+    provider = ai_cfg.get("provider", "anthropic")
     if provider not in SUPPORTED_AI_PROVIDERS:
         raise ValueError("当前版本支持 Anthropic 或 OpenAI 兼容接口。")
+    service = ai_cfg.get("service", "anthropic")
+    if provider == "openai_compatible" and service == "anthropic":
+        # Legacy configs only had `provider`; preserve them as custom OpenAI-compatible.
+        ai_cfg["service"] = "custom"
+        service = "custom"
+    if service not in SUPPORTED_AI_SERVICES:
+        raise ValueError("当前版本支持 Claude、DeepSeek、豆包或自定义 OpenAI 兼容接口。")
+    expected_provider = AI_SERVICE_PRESETS[service]["provider"]
+    if provider != expected_provider:
+        ai_cfg["provider"] = expected_provider
 
 
 def _deep_copy_dict(d: dict) -> dict:

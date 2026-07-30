@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from rich.console import Console
 
 from bosshunter.browser import find_boss_tab
@@ -17,7 +18,12 @@ def run_browser_diagnostics(config: dict[str, Any] | None = None) -> dict[str, A
     runtime_url = get_runtime_url(config)
     health = runtime_health(config)
     targets = runtime_targets(config) if runtime_ready else None
+    if runtime_ready:
+        # `/targets` establishes the CDP connection. Refresh health afterwards
+        # so browser product/version information is available to diagnostics.
+        health = runtime_health(config) or health
     boss_tab = find_boss_tab() if runtime_ready else None
+    browser_product, browser_name = _browser_identity(health)
 
     errors: list[str] = []
     if not node.get("available"):
@@ -39,7 +45,34 @@ def run_browser_diagnostics(config: dict[str, Any] | None = None) -> dict[str, A
         "errors": errors,
         "runtime_url": runtime_url,
         "health": health,
+        "browser_product": browser_product,
+        "browser_name": browser_name,
     }
+
+
+def _browser_identity(health: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    """Return browser identity, including fallback support for older runtimes."""
+    health = health or {}
+    product = health.get("browserProduct")
+    name = health.get("browserName")
+    if product or name:
+        return product, name
+
+    port = health.get("chromePort")
+    if not port:
+        return None, None
+    try:
+        result = httpx.get(f"http://127.0.0.1:{int(port)}/json/version", timeout=2, trust_env=False)
+        result.raise_for_status()
+        product = result.json().get("Browser")
+    except (httpx.HTTPError, TypeError, ValueError):
+        return None, None
+
+    if isinstance(product, str) and product.startswith("Edg/"):
+        return product, "Microsoft Edge"
+    if isinstance(product, str) and product.startswith("Chrome/"):
+        return product, "Google Chrome"
+    return product if isinstance(product, str) else None, None
 
 
 def print_browser_diagnostics(config: dict[str, Any] | None = None, console: Console | None = None) -> bool:

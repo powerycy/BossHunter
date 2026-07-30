@@ -57,16 +57,18 @@ bosshunter web
 
 | 优先级 | 配置项 | 说明 |
 |--------|--------|------|
-| ★★★ | 上传简历 | 面板左侧「简历」区域，上传 .md 格式简历 |
+| ★★★ | 上传简历 | 面板左侧「简历」区域，上传 .md 或 .docx 格式简历 |
 | ★★★ | 搜索关键词 | 你想找什么岗位（如 Python开发、后端工程师） |
 | ★★★ | 目标城市 | 选择投递城市 |
 | ★★☆ | 期望薪资 | 设置最低/最高薪资范围 |
 | ★★☆ | 一票否决词 | 看到就跳过的关键词（如 外包、996） |
+| ★★★ | AI 服务连接 | 选择 Claude、DeepSeek、豆包或兼容 API，在本地面板填写 Key |
 | ★☆☆ | AI 阈值 / 频率 | 可保持默认，后续按需调整 |
 
 **4. 配置完成确认**
 
 用户表示配置完成后：
+- 运行 `bosshunter ai-status` 确认 AI API 已连接（不得显示或索要完整 Key）
 - 运行 `bosshunter connect` 确认 Chrome 连接正常
 - 如果连接正常，提示用户可以开始使用（`bosshunter run` 或分步操作）
 - 如果连接失败，引导开启 Chrome 远程调试并登录 某直聘
@@ -122,6 +124,7 @@ bosshunter run
 | "发送" | `bosshunter send` |
 | "看看状态/数据" | `bosshunter status --full` |
 | "打开看板" | `bosshunter web` |
+| "连接/检测 AI API" | 打开本地面板配置，完成后运行 `bosshunter ai-status` |
 | "监听回复" | `bosshunter monitor` |
 | "生成简历给xx岗位" | `bosshunter resume --job-id xxx` |
 

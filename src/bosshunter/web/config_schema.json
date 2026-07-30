@@ -52,7 +52,8 @@
       "label": "AI 设置",
       "icon": "Brain",
       "fields": [
-        {"key": "provider", "label": "提供商", "type": "select", "options": ["anthropic"], "default": "anthropic", "description": "当前后端仅支持 Anthropic"},
+        {"key": "service", "label": "AI 服务商", "type": "select", "options": ["anthropic", "deepseek", "doubao", "custom"], "default": "anthropic", "description": "支持 Claude、DeepSeek、豆包和其他 OpenAI 兼容接口"},
+        {"key": "provider", "label": "接口协议", "type": "select", "options": ["anthropic", "openai_compatible"], "default": "anthropic", "description": "由服务商预设自动选择"},
         {"key": "model", "label": "模型名称", "type": "text", "default": "claude-sonnet-4-6"},
         {"key": "api_key", "label": "API Key", "type": "password", "description": "也可通过环境变量设置"},
         {"key": "base_url", "label": "Base URL", "type": "text", "placeholder": "留空使用默认", "default": ""}

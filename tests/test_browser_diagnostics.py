@@ -1,11 +1,24 @@
 import io
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from rich.console import Console
 
 
 class BrowserDiagnosticsTests(unittest.TestCase):
+    @patch("bosshunter.browser.diagnostics.httpx.get")
+    def test_browser_identity_detects_edge_from_older_runtime_health(self, http_get):
+        from bosshunter.browser.diagnostics import _browser_identity
+
+        response = Mock()
+        response.json.return_value = {"Browser": "Edg/138.0"}
+        http_get.return_value = response
+
+        product, name = _browser_identity({"chromePort": 9222})
+
+        self.assertEqual(product, "Edg/138.0")
+        self.assertEqual(name, "Microsoft Edge")
+
     @patch("bosshunter.browser.diagnostics.find_boss_tab")
     @patch("bosshunter.browser.diagnostics.runtime_targets")
     @patch("bosshunter.browser.diagnostics.ensure_runtime")

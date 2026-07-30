@@ -6,6 +6,8 @@ import re
 
 import httpx
 
+from bosshunter.config import AI_SERVICE_PRESETS
+
 
 _MODEL_RESOLVE_CACHE: dict[tuple[str, str, str], str] = {}
 
@@ -19,6 +21,88 @@ def get_anthropic_api_key(config: dict) -> str | None:
         or ai_cfg.get("api_key")
         or ai_cfg.get("auth_token")
     )
+
+
+def get_ai_service(config: dict) -> str:
+    """Return the configured user-facing AI service, preserving legacy configs."""
+    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
+    service = str(ai_cfg.get("service") or "").strip()
+    if service in AI_SERVICE_PRESETS:
+        return service
+    return "custom" if ai_cfg.get("provider") == "openai_compatible" else "anthropic"
+
+
+def get_ai_api_key(config: dict) -> str | None:
+    """Resolve a standard API key without exposing or copying its value."""
+    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
+    service = get_ai_service(config)
+    if service == "deepseek":
+        return (
+            os.environ.get("DEEPSEEK_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or ai_cfg.get("api_key")
+        )
+    if service == "doubao":
+        return (
+            os.environ.get("ARK_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or ai_cfg.get("api_key")
+        )
+    if service == "custom":
+        return (
+            os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or ai_cfg.get("api_key")
+            or ai_cfg.get("auth_token")
+        )
+    return get_anthropic_api_key(config)
+
+
+def get_ai_key_source(config: dict) -> str | None:
+    """Return only the credential source name, never the credential value."""
+    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
+    service = get_ai_service(config)
+    candidates = {
+        "deepseek": ("DEEPSEEK_API_KEY", "OPENAI_API_KEY"),
+        "doubao": ("ARK_API_KEY", "OPENAI_API_KEY"),
+        "custom": ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"),
+        "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+    }[service]
+    for env_name in candidates:
+        if os.environ.get(env_name):
+            return env_name
+    if ai_cfg.get("api_key"):
+        return "本地配置"
+    if ai_cfg.get("auth_token"):
+        return "本地配置（Auth Token）"
+    return None
+
+
+def get_ai_base_url(config: dict) -> str | None:
+    """Resolve the service-specific API base URL."""
+    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
+    service = get_ai_service(config)
+    if service == "deepseek":
+        return (
+            os.environ.get("DEEPSEEK_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or ai_cfg.get("base_url")
+            or AI_SERVICE_PRESETS[service]["base_url"]
+        )
+    if service == "doubao":
+        return (
+            os.environ.get("ARK_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or ai_cfg.get("base_url")
+            or AI_SERVICE_PRESETS[service]["base_url"]
+        )
+    if service == "custom":
+        return (
+            os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("ANTHROPIC_BASE_URL")
+            or ai_cfg.get("base_url")
+        )
+    return os.environ.get("ANTHROPIC_BASE_URL") or ai_cfg.get("base_url")
 
 
 def build_anthropic_client_kwargs(config: dict) -> dict:
@@ -103,9 +187,9 @@ def call_anthropic_text(prompt: str, config: dict, max_tokens: int) -> str | Non
 def call_openai_compatible_text(prompt: str, config: dict, max_tokens: int) -> str | None:
     """Call an OpenAI-compatible chat completions endpoint."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or ai_cfg.get("api_key")
-    base_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL") or ai_cfg.get("base_url")
-    model = ai_cfg.get("model", "deepseek-chat")
+    api_key = get_ai_api_key(config)
+    base_url = get_ai_base_url(config)
+    model = ai_cfg.get("model") or ""
     if not api_key or not base_url:
         return None
 

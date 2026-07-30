@@ -64,6 +64,7 @@ export function useConfig() {
       })
       const data = await res.json()
       if (data.success) {
+        await fetchConfig()
         setMessage({ type: 'success', text: '配置已保存' })
         setDirty(false)
       } else {

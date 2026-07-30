@@ -194,6 +194,60 @@ class AnthropicCredentialTests(unittest.TestCase):
         self.assertEqual(calls["message"]["model"], "Claude Sonnet 4.6")
         self.assertEqual(calls["message"]["max_tokens"], 123)
 
+    def test_deepseek_uses_dedicated_environment_key_and_preset_base_url(self):
+        config = {"ai": {"service": "deepseek", "provider": "openai_compatible"}}
+
+        with patch.dict(
+            "os.environ",
+            {"DEEPSEEK_API_KEY": "deepseek-secret", "OPENAI_API_KEY": "generic-secret"},
+            clear=True,
+        ):
+            api_key = credentials.get_ai_api_key(config)
+            base_url = credentials.get_ai_base_url(config)
+            source = credentials.get_ai_key_source(config)
+
+        self.assertEqual(api_key, "deepseek-secret")
+        self.assertEqual(base_url, "https://api.deepseek.com")
+        self.assertEqual(source, "DEEPSEEK_API_KEY")
+
+    def test_doubao_uses_ark_environment_key_and_preset_base_url(self):
+        config = {"ai": {"service": "doubao", "provider": "openai_compatible"}}
+
+        with patch.dict("os.environ", {"ARK_API_KEY": "ark-secret"}, clear=True):
+            api_key = credentials.get_ai_api_key(config)
+            base_url = credentials.get_ai_base_url(config)
+            source = credentials.get_ai_key_source(config)
+
+        self.assertEqual(api_key, "ark-secret")
+        self.assertEqual(base_url, "https://ark.cn-beijing.volces.com/api/v3")
+        self.assertEqual(source, "ARK_API_KEY")
+
+    def test_openai_compatible_call_uses_service_preset_without_exposing_key(self):
+        class CompletionResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": [{"message": {"content": " ok "}}]}
+
+        config = {
+            "ai": {
+                "service": "deepseek",
+                "provider": "openai_compatible",
+                "model": "provider-current-model",
+            }
+        }
+        with (
+            patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
+            patch("bosshunter.ai.credentials.httpx.post", return_value=CompletionResponse()) as post,
+        ):
+            result = credentials.call_openai_compatible_text("prompt", config, 123)
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(post.call_args.args[0], "https://api.deepseek.com/chat/completions")
+        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer deepseek-secret")
+        self.assertEqual(post.call_args.kwargs["json"]["model"], "provider-current-model")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,11 +25,12 @@
 > 👉 **http://127.0.0.1:8686**
 >
 > 请在面板中完成：
-> 1. ⭐ 上传简历（.md 格式）
+> 1. ⭐ 上传简历（.md 或 .docx 格式）
 > 2. ⭐ 填写搜索关键词
 > 3. ⭐ 选择目标城市
 > 4. 设置期望薪资
 > 5. 添加一票否决词（如 外包、996）
+> 6. 选择 AI 服务商并安全连接 API
 >
 > 完成后告诉我，我来检测 Chrome 连接！
 
@@ -53,13 +54,26 @@
 >
 > 请先完成简历上传：
 > - 打开配置面板：`bosshunter web` → http://127.0.0.1:8686
-> - 在「简历」区域上传你的 .md 格式简历
+> - 在「简历」区域上传你的 .md 或 .docx 格式简历
 >
 > 或者手动将你的简历保存为 `resume.md` 放在项目根目录。
 >
 > 上传完成后再告诉我启动！
 
 **只有确认简历是用户本人的真实简历后，才可以执行 `bosshunter run`。**
+
+## AI API 连接引导（必须执行）
+
+当 AI Key 缺失或用户要求连接 DeepSeek、豆包、Claude 等服务时：
+
+1. 询问用户使用哪个 AI 服务商
+2. 执行 `bosshunter web` 打开本地配置面板
+3. 引导用户在「AI 设置」中选择服务商；Base URL 和协议由面板自动填写
+4. **不要让用户在聊天中发送 API Key**，必须让用户在 `127.0.0.1` 本地面板输入
+5. 用户填写并保存后，执行 `bosshunter ai-status` 验证连接
+6. 只有检测成功后才能告诉用户“AI 已连接”
+
+可以在用户确认后复用 `ANTHROPIC_API_KEY`、`DEEPSEEK_API_KEY`、`ARK_API_KEY`、`OPENAI_API_KEY` 等标准环境变量，但不得输出变量值。不要读取 Codex、Claude Code、ChatGPT 等安装工具自身的 OAuth、Cookie、会话 Token 或 Keychain 登录凭证。
 
 ## 禁止行为
 
@@ -73,6 +87,7 @@
 ```bash
 bosshunter web              # 打开 Web 配置面板
 bosshunter connect          # 检测 Chrome CDP 连接
+bosshunter ai-status        # 安全检测 AI API 连接（不显示 Key）
 bosshunter run              # 一键执行完整流程
 bosshunter scrape -k "关键词"  # 采集岗位
 bosshunter score            # AI 评分

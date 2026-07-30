@@ -48,7 +48,7 @@ export function Sidebar({ pendingReplies: pendingRepliesProp }: SidebarProps) {
           </div>
           <div>
             <div className="font-black text-sm tracking-tight text-foreground">BossHunter</div>
-            <div className="text-[11px] text-muted">v2.0 · 本地控制台</div>
+            <div className="text-[11px] text-muted">v2.1 · 本地控制台</div>
           </div>
         </div>
       </div>
@@ -87,10 +87,10 @@ export function Sidebar({ pendingReplies: pendingRepliesProp }: SidebarProps) {
           <Github className="absolute left-3 h-4 w-4" />
           <span className="mx-auto flex items-center justify-center gap-2">
             <span className="text-xl leading-none text-yellow-400">★</span>
-            BossHunter
+            去 GitHub 点 Star
           </span>
         </a>
-        <p className="text-center text-[11px] leading-5 text-muted">❤️  欢迎点 Star 支持维护  ❤️</p>
+        <p className="text-center text-[11px] leading-5 text-muted">关注版本更新，也支持项目继续维护</p>
       </div>
     </aside>
   )

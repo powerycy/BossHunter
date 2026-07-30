@@ -116,6 +116,29 @@ def connect(ctx: click.Context) -> None:
     console.print("\n[bold green]连接检测完成[/bold green]")
 
 
+@cli.command(name="ai-status")
+@click.pass_context
+def ai_status(ctx: click.Context) -> None:
+    """安全检测 AI 服务配置与连接状态（不显示 API Key）"""
+    from bosshunter.web.preflight import check_ai_connection
+
+    checks = check_ai_connection(ctx.obj["config"], required=True)
+    has_error = False
+    for check in checks:
+        status = check.get("status")
+        if status == "pass":
+            marker = "[green]✓[/green]"
+        elif status == "warning":
+            marker = "[yellow]![/yellow]"
+        else:
+            marker = "[red]✗[/red]"
+            has_error = True
+        console.print(f"{marker} {check.get('message', 'AI 检测结果')}")
+        console.print(f"  [dim]{check.get('detail', '')}[/dim]")
+    if has_error:
+        raise SystemExit(1)
+
+
 @cli.command()
 @click.option("--keyword", "-k", default=None, help="搜索关键词（覆盖配置文件）")
 @click.option("--limit", "-l", default=None, type=int, help="最多抓取岗位数（默认不限制）")

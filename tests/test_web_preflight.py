@@ -1,0 +1,121 @@
+import unittest
+from unittest.mock import Mock, patch
+
+import httpx
+
+from bosshunter.web.preflight import check_ai_connection, check_browser_connection
+
+
+class AiPreflightTests(unittest.TestCase):
+	def test_missing_api_key_returns_actionable_error(self):
+		checks = check_ai_connection({"ai": {"model": "claude-sonnet-4-6"}}, required=True)
+
+		self.assertEqual(checks[0]["id"], "ai_credentials")
+		self.assertEqual(checks[0]["status"], "error")
+		self.assertIn("填写 API Key", checks[0]["detail"])
+
+	@patch("bosshunter.web.preflight.httpx.get")
+	def test_rejected_api_key_is_reported_without_exposing_key(self, http_get):
+		http_get.return_value = Mock(status_code=401)
+		config = {"ai": {"api_key": "secret-key", "model": "claude-sonnet-4-6"}}
+
+		checks = check_ai_connection(config, required=True)
+
+		self.assertEqual(checks[0]["status"], "error")
+		self.assertIn("API Key 验证失败", checks[0]["message"])
+		self.assertNotIn("secret-key", str(checks))
+
+	@patch("bosshunter.web.preflight.httpx.get")
+	def test_valid_api_connection_returns_pass(self, http_get):
+		http_get.return_value = Mock(status_code=200)
+		config = {"ai": {"api_key": "secret-key", "model": "claude-sonnet-4-6"}}
+
+		checks = check_ai_connection(config, required=True)
+
+		self.assertEqual(checks[0]["status"], "pass")
+		self.assertIn("连接正常", checks[0]["message"])
+		http_get.assert_called_once()
+
+	def test_openai_compatible_provider_requires_base_url(self):
+		config = {
+			"ai": {
+				"provider": "openai_compatible",
+				"api_key": "secret-key",
+				"model": "deepseek-chat",
+			}
+		}
+
+		with patch.dict("os.environ", {}, clear=True):
+			checks = check_ai_connection(config, required=True)
+
+		self.assertEqual(checks[0]["id"], "ai_base_url")
+		self.assertEqual(checks[0]["status"], "error")
+
+	@patch("bosshunter.web.preflight.httpx.get")
+	def test_ai_timeout_has_specific_feedback(self, http_get):
+		http_get.side_effect = httpx.ReadTimeout("timed out")
+		config = {"ai": {"api_key": "secret-key", "model": "claude-sonnet-4-6"}}
+
+		checks = check_ai_connection(config, required=True)
+
+		self.assertEqual(checks[0]["status"], "error")
+		self.assertIn("连接超时", checks[0]["message"])
+
+
+class BrowserPreflightTests(unittest.TestCase):
+	@patch("bosshunter.web.preflight.run_browser_diagnostics")
+	def test_missing_remote_debugging_is_reported(self, diagnostics):
+		diagnostics.return_value = {
+			"node": {"available": True, "version": "v22"},
+			"runtime": True,
+			"chrome": False,
+			"errors": ["Chrome is not connected to Browser Runtime."],
+			"runtime_url": "http://127.0.0.1:3456",
+		}
+
+		checks = check_browser_connection({})
+
+		chrome_check = next(check for check in checks if check["id"] == "chrome_connection")
+		self.assertEqual(chrome_check["status"], "error")
+		self.assertIn("chrome://inspect/#remote-debugging", chrome_check["detail"])
+
+	@patch("bosshunter.web.preflight.run_browser_diagnostics")
+	def test_non_google_browser_is_reported(self, diagnostics):
+		diagnostics.return_value = {
+			"node": {"available": True, "version": "v22"},
+			"runtime": True,
+			"chrome": True,
+			"browser_product": "Edg/138.0",
+			"boss_tab": None,
+			"errors": [],
+			"runtime_url": "http://127.0.0.1:3456",
+		}
+
+		checks = check_browser_connection({})
+
+		product_check = next(check for check in checks if check["id"] == "chrome_product")
+		self.assertEqual(product_check["status"], "error")
+		self.assertIn("不是 Google Chrome", product_check["message"])
+
+	@patch("bosshunter.web.preflight.run_browser_diagnostics")
+	def test_chromium_name_is_rejected_even_when_product_looks_like_chrome(self, diagnostics):
+		diagnostics.return_value = {
+			"node": {"available": True, "version": "v22"},
+			"runtime": True,
+			"chrome": True,
+			"browser_name": "Chromium",
+			"browser_product": "Chrome/138.0",
+			"boss_tab": None,
+			"errors": [],
+			"runtime_url": "http://127.0.0.1:3456",
+		}
+
+		checks = check_browser_connection({})
+
+		product_check = next(check for check in checks if check["id"] == "chrome_product")
+		self.assertEqual(product_check["status"], "error")
+		self.assertIn("Chromium", product_check["message"])
+
+
+if __name__ == "__main__":
+	unittest.main()

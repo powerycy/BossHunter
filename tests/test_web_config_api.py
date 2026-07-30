@@ -92,6 +92,68 @@ class WebConfigApiTests(unittest.TestCase):
 		self.assertEqual(cleaned["ai"]["provider"], "anthropic")
 		self.assertEqual(cleaned["ai"]["model"], "claude-sonnet-4-6")
 
+	def test_sanitize_config_maps_deepseek_service_and_clears_old_credentials(self):
+		with tempfile.TemporaryDirectory() as tmp:
+			config_path = Path(tmp) / "config.yaml"
+			config_path.write_text(
+				yaml.dump(
+					{
+						"ai": {
+							"service": "anthropic",
+							"provider": "anthropic",
+							"api_key": "old-secret",
+						}
+					},
+					sort_keys=False,
+				),
+				encoding="utf-8",
+			)
+
+			with patch.object(server, "CONFIG_PATH", config_path):
+				cleaned = server._sanitize_config_for_write({
+					"ai": {
+						"service": "deepseek",
+						"provider": "anthropic",
+						"clear_credentials": True,
+						"model": "provider-current-model",
+					}
+				})
+
+		self.assertEqual(cleaned["ai"]["service"], "deepseek")
+		self.assertEqual(cleaned["ai"]["provider"], "openai_compatible")
+		self.assertNotIn("api_key", cleaned["ai"])
+		self.assertNotIn("clear_credentials", cleaned["ai"])
+
+	def test_sanitize_config_keeps_new_key_while_clearing_old_auth_token(self):
+		with tempfile.TemporaryDirectory() as tmp:
+			config_path = Path(tmp) / "config.yaml"
+			config_path.write_text(
+				yaml.dump(
+					{
+						"ai": {
+							"service": "anthropic",
+							"provider": "anthropic",
+							"api_key": "old-secret",
+							"auth_token": "old-auth-token",
+						}
+					},
+					sort_keys=False,
+				),
+				encoding="utf-8",
+			)
+
+			with patch.object(server, "CONFIG_PATH", config_path):
+				cleaned = server._sanitize_config_for_write({
+					"ai": {
+						"service": "deepseek",
+						"clear_credentials": True,
+						"api_key": "new-deepseek-secret",
+					}
+				})
+
+		self.assertEqual(cleaned["ai"]["api_key"], "new-deepseek-secret")
+		self.assertNotIn("auth_token", cleaned["ai"])
+
 	def test_redacted_config_does_not_return_raw_auth_token(self):
 		config = {"ai": {"auth_token": "auth-token-12345678", "model": "claude"}}
 

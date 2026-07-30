@@ -1,6 +1,7 @@
 import { useConfig } from '@/hooks/useConfig'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
 import { TagsInput } from '@/components/ui/tags-input'
@@ -15,10 +16,45 @@ const CITIES = [
   '合肥', '厦门', '青岛', '大连'
 ]
 
+const AI_SERVICES = {
+  anthropic: {
+    label: 'Claude / Anthropic',
+    provider: 'anthropic',
+    baseUrl: '',
+    defaultModel: 'claude-sonnet-4-6',
+    keyEnv: 'ANTHROPIC_API_KEY',
+  },
+  deepseek: {
+    label: 'DeepSeek',
+    provider: 'openai_compatible',
+    baseUrl: 'https://api.deepseek.com',
+    defaultModel: '',
+    keyEnv: 'DEEPSEEK_API_KEY',
+  },
+  doubao: {
+    label: '豆包 / 火山方舟',
+    provider: 'openai_compatible',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    defaultModel: '',
+    keyEnv: 'ARK_API_KEY',
+  },
+  custom: {
+    label: '其他 OpenAI 兼容接口',
+    provider: 'openai_compatible',
+    baseUrl: '',
+    defaultModel: '',
+    keyEnv: 'OPENAI_API_KEY',
+  },
+} as const
+
+type AiService = keyof typeof AI_SERVICES
+
 export default function ConfigPage() {
   const { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig } = useConfig()
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({ profile: true, search: true })
   const [resumeInfo, setResumeInfo] = useState<any>(null)
+  const [resumeUploadError, setResumeUploadError] = useState('')
+  const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
 
   useEffect(() => {
     fetch('/api/resume').then(r => r.json()).then(setResumeInfo).catch(() => {})
@@ -31,13 +67,22 @@ export default function ConfigPage() {
   const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    setResumeUploadError('')
     const form = new FormData()
     form.append('file', file)
-    const res = await fetch('/api/resume/upload', { method: 'POST', body: form })
-    const data = await res.json()
-    if (data.success) {
+    try {
+      const res = await fetch('/api/resume/upload', { method: 'POST', body: form })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        setResumeUploadError(data.error || '简历上传失败')
+        return
+      }
       setResumeInfo({ filename: data.filename, size: data.size, path: data.path })
       updateConfig('profile.resume_path', data.path)
+    } catch {
+      setResumeUploadError('网络错误，简历上传失败')
+    } finally {
+      e.target.value = ''
     }
   }
 
@@ -45,6 +90,47 @@ export default function ConfigPage() {
     await fetch('/api/resume', { method: 'DELETE' })
     setResumeInfo(null)
     updateConfig('profile.resume_path', '')
+  }
+
+  const handleAiTest = async () => {
+    if (dirty) {
+      setAiTest({ testing: false, ok: false, message: '请先保存当前配置，再测试 AI 连接。' })
+      return
+    }
+    setAiTest({ testing: true })
+    try {
+      const res = await fetch('/api/diagnostics/ai', { cache: 'no-store' })
+      const data = await res.json()
+      const check = Array.isArray(data.checks) ? data.checks[0] : null
+      setAiTest({
+        testing: false,
+        ok: Boolean(res.ok && data.ok),
+        message: check ? `${check.message}：${check.detail}` : (data.messages?.[0] || 'AI 接口未返回检测结果'),
+      })
+    } catch {
+      setAiTest({ testing: false, ok: false, message: '无法连接本地检测接口，请确认 BossHunter 后端正在运行。' })
+    }
+  }
+
+  const handleAiServiceChange = (service: AiService) => {
+    const currentService = (config?.ai?.service || (config?.ai?.provider === 'openai_compatible' ? 'custom' : 'anthropic')) as AiService
+    if (service === currentService) return
+    if (
+      (config?.ai?.api_key || config?.ai?.api_key_masked || config?.ai?.auth_token_masked)
+      && !window.confirm('切换 AI 服务商会清除当前保存的 AI 凭证，是否继续？')
+    ) {
+      return
+    }
+    const preset = AI_SERVICES[service]
+    updateConfig('ai.service', service)
+    updateConfig('ai.provider', preset.provider)
+    updateConfig('ai.base_url', preset.baseUrl)
+    updateConfig('ai.model', preset.defaultModel)
+    updateConfig('ai.api_key', '')
+    updateConfig('ai.api_key_masked', '')
+    updateConfig('ai.auth_token_masked', '')
+    updateConfig('ai.clear_credentials', true)
+    setAiTest({ testing: false })
   }
 
   if (loading) {
@@ -101,9 +187,12 @@ export default function ConfigPage() {
               ) : (
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-card-border p-6 transition-colors hover:border-primary/50 hover:bg-[#FFFCFA]">
                   <Upload className="mb-2 h-6 w-6 text-muted" />
-                  <span className="text-sm text-muted">拖拽或点击上传 (.md)</span>
-                  <input type="file" accept=".md" onChange={handleResumeUpload} className="hidden" />
+                  <span className="text-sm text-muted">拖拽或点击上传 (.md、.docx)</span>
+                  <input type="file" accept=".md,.docx" onChange={handleResumeUpload} className="hidden" />
                 </label>
+              )}
+              {resumeUploadError && (
+                <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-500">{resumeUploadError}</p>
               )}
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -210,20 +299,56 @@ export default function ConfigPage() {
         <SectionCard title="AI 设置" sectionKey="ai" expanded={expandedSections} toggle={toggleSection}>
           <div className="space-y-4">
             <Field label="提供商">
-              <div className="rounded-md border border-card-border bg-[#FFFCFA] px-3 py-2 text-sm font-bold text-foreground">
-                Anthropic / Claude Messages 兼容接口
-              </div>
-              <p className="mt-1 text-xs text-muted">当前版本固定使用 Anthropic 兼容链路；如使用兼容 API，请填写 Base URL，并在模型名称中填写目标模型，后端会按 /v1/models 做模糊匹配。</p>
+              <Select
+                value={config.ai?.service || (config.ai?.provider === 'openai_compatible' ? 'custom' : 'anthropic')}
+                onChange={e => handleAiServiceChange(e.target.value as AiService)}
+              >
+                {Object.entries(AI_SERVICES).map(([value, preset]) => (
+                  <option key={value} value={value}>{preset.label}</option>
+                ))}
+              </Select>
+              <p className="mt-1 text-xs text-muted">
+                BossHunter 会自动配置协议和服务地址；也可安全复用环境变量 {
+                  AI_SERVICES[(config.ai?.service || (config.ai?.provider === 'openai_compatible' ? 'custom' : 'anthropic')) as AiService].keyEnv
+                }，不会在前端显示其内容。
+              </p>
             </Field>
             <Field label="模型名称">
-              <Input value={config.ai?.model || ''} onChange={e => updateConfig('ai.model', e.target.value)} />
+              <Input value={config.ai?.model || ''} onChange={e => {
+                updateConfig('ai.model', e.target.value)
+                setAiTest({ testing: false })
+              }} placeholder="填写服务商当前支持的模型 ID" />
             </Field>
             <Field label="API Key">
-              <Input type="password" value={config.ai?.api_key || ''} onChange={e => updateConfig('ai.api_key', e.target.value)} placeholder={config.ai?.api_key_masked || '也可通过环境变量设置'} />
+              <Input type="password" value={config.ai?.api_key || ''} onChange={e => {
+                updateConfig('ai.api_key', e.target.value)
+                setAiTest({ testing: false })
+              }} placeholder={config.ai?.api_key_masked || '也可通过环境变量设置'} />
             </Field>
             <Field label="Base URL">
-              <Input value={config.ai?.base_url || ''} onChange={e => updateConfig('ai.base_url', e.target.value)} placeholder="留空使用默认" />
+              <Input value={config.ai?.base_url || ''} onChange={e => {
+                updateConfig('ai.base_url', e.target.value)
+                setAiTest({ testing: false })
+              }} placeholder="留空使用默认" />
             </Field>
+            <div className="rounded-2xl border border-card-border bg-[#FFFCFA] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-black text-foreground">AI 连接检测</div>
+                  <p className="mt-1 text-xs text-muted">不会消耗对话 Token；检测已保存的 Key、Base URL 和服务可用性。</p>
+                </div>
+                <Button variant="secondary" size="sm" onClick={handleAiTest} disabled={aiTest.testing}>
+                  {aiTest.testing ? '检测中...' : '测试连接'}
+                </Button>
+              </div>
+              {aiTest.message && (
+                <p className={`mt-2 rounded-lg px-3 py-2 text-xs ${
+                  aiTest.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-500'
+                }`}>
+                  {aiTest.message}
+                </p>
+              )}
+            </div>
           </div>
         </SectionCard>
 

@@ -25,6 +25,8 @@ const portGuardedSessions = new Set();
 let chromePort = null;
 let chromeWsPath = null;
 let chromeWsUrl = null;
+let chromeProduct = null;
+let chromeName = null;
 let connectingPromise = null;
 
 let WS;
@@ -92,8 +94,14 @@ async function discoverChromePort() {
       const port = parseInt(lines[0], 10);
       if (port > 0 && port < 65536 && await checkPort(port)) {
         const wsPath = lines[1] || null;
+        const version = await getChromeVersion(port);
+        const browserName = filePath.includes('Chromium')
+          ? 'Chromium'
+          : filePath.includes('Chrome Canary')
+            ? 'Google Chrome Canary'
+            : 'Google Chrome';
         console.log(`[BossHunter Browser Runtime] DevToolsActivePort: ${port}${wsPath ? ' with wsPath' : ''}`);
-        return { port, wsPath };
+        return { port, wsPath, product: version?.Browser || null, browserName };
       }
     } catch {}
   }
@@ -102,8 +110,14 @@ async function discoverChromePort() {
     if (await checkPort(port)) {
       const version = await getChromeVersion(port);
       if (version?.webSocketDebuggerUrl) {
+        const product = version.Browser || null;
+        const browserName = product?.startsWith('Edg/')
+          ? 'Microsoft Edge'
+          : product?.startsWith('Chrome/')
+            ? 'Google Chrome'
+            : product || '未知浏览器';
         console.log(`[BossHunter Browser Runtime] Found Chrome debug port: ${port}`);
-        return { port, wsUrl: version.webSocketDebuggerUrl };
+        return { port, wsUrl: version.webSocketDebuggerUrl, product, browserName };
       }
     }
   }
@@ -128,6 +142,8 @@ async function connect() {
     chromePort = discovered.port;
     chromeWsPath = discovered.wsPath || null;
     chromeWsUrl = discovered.wsUrl || null;
+    chromeProduct = discovered.product || null;
+    chromeName = discovered.browserName || null;
   }
 
   const wsUrl = getWebSocketUrl(chromePort, chromeWsPath, chromeWsUrl);
@@ -148,6 +164,8 @@ async function connect() {
       chromePort = null;
       chromeWsPath = null;
       chromeWsUrl = null;
+      chromeProduct = null;
+      chromeName = null;
       const msg = event.message || event.error?.message || 'connection failed';
       console.error('[BossHunter Browser Runtime] Connection error:', msg);
       reject(new Error(msg));
@@ -158,6 +176,8 @@ async function connect() {
       chromePort = null;
       chromeWsPath = null;
       chromeWsUrl = null;
+      chromeProduct = null;
+      chromeName = null;
       sessions.clear();
       portGuardedSessions.clear();
     };
@@ -288,7 +308,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (pathname === '/health') {
       const connected = Boolean(ws && (ws.readyState === WS.OPEN || ws.readyState === 1));
-      sendJson(res, { status: 'ok', runtime: RUNTIME_NAME, connected, sessions: sessions.size, chromePort, portGuard: ENABLE_PORT_GUARD });
+      sendJson(res, { status: 'ok', runtime: RUNTIME_NAME, connected, sessions: sessions.size, chromePort, browserProduct: chromeProduct, browserName: chromeName, portGuard: ENABLE_PORT_GUARD });
       return;
     }
 

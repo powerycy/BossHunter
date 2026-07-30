@@ -4,7 +4,23 @@ import { Button } from '@/components/ui/button'
 import { JobsTable } from '@/components/dashboard/JobsTable'
 import { parseHistoryDetail } from '@/lib/historyDetail'
 import { getActionLabel, getStatusLabel } from '@/lib/status'
-import { BriefcaseBusiness, Download, ExternalLink, Eye, MessageCircle, Play, RefreshCw, Square } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowRight,
+  BriefcaseBusiness,
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  Eye,
+  Github,
+  MessageCircle,
+  Play,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+  Square,
+  XCircle,
+} from 'lucide-react'
 
 type WorkbenchMode = 'full' | 'collect' | 'monitor'
 type DashboardView = 'workbench' | 'jobs' | 'monitor'
@@ -45,8 +61,55 @@ function taskStatusTitle(status: string) {
   return '当前阶段'
 }
 
+function taskErrorFeedback(error: string) {
+  const normalized = error.toLowerCase()
+  if (
+    normalized.includes('api key')
+    || normalized.includes('authentication')
+    || normalized.includes('unauthorized')
+    || normalized.includes('401')
+    || normalized.includes('403')
+  ) {
+    return {
+      title: 'AI 接口认证失败',
+      detail: '请到“配置 → AI 设置”检查 API Key、Base URL 和模型名称，保存后点击“测试连接”。',
+    }
+  }
+  if (
+    normalized.includes('chrome')
+    || normalized.includes('cdp')
+    || normalized.includes('websocket')
+    || normalized.includes('browser runtime')
+    || normalized.includes('not connected')
+  ) {
+    return {
+      title: 'Google Chrome 连接中断',
+      detail: '请确认 Google Chrome 正在运行且已开启远程调试，再点击上方“重新检查”。',
+    }
+  }
+  if (normalized.includes('zhipin') || normalized.includes('登录') || normalized.includes('login')) {
+    return {
+      title: '招聘平台页面或登录状态异常',
+      detail: '请在已连接的 Google Chrome 中打开 BOSS 直聘并确认账号仍处于登录状态。',
+    }
+  }
+  return {
+    title: '任务运行失败',
+    detail: '请查看原始错误；修复配置或连接问题后，重新运行启动检查。',
+  }
+}
+
 interface DashboardPageProps {
   view?: DashboardView
+}
+
+interface PreflightCheck {
+  id: string
+  title: string
+  status: 'pass' | 'warning' | 'error'
+  message: string
+  detail: string
+  action?: 'config' | 'browser' | ''
 }
 
 const modes: Array<{ mode: WorkbenchMode; title: string; description: string }> = [
@@ -75,30 +138,152 @@ const statItems = [
   { label: '简历生成', key: '简历生成', highlight: true },
 ]
 
+const GITHUB_URL = 'https://github.com/powerycy/BossHunter'
+
+const releaseNotes = [
+  {
+    date: '2026-07-30',
+    version: 'v2.1.0',
+    category: '体验优化',
+    content: '支持中文名 Markdown 与 Word（.docx）简历；新增 DeepSeek、豆包和自定义兼容 API；启动前可明确诊断 Chrome、远程调试与 AI 配置问题。',
+    latest: true,
+  },
+  {
+    date: '2026-07-27',
+    version: 'v2.0.0',
+    category: '功能改进',
+    content: '优化定制简历投递和监测恢复流程，并整理公开文档中的隐私内容。',
+  },
+  {
+    date: '2026-06-29',
+    version: 'v2.0.0',
+    category: '稳定性',
+    content: '修复工作台任务可能卡住的问题；自动跟进默认关闭，把发送决定留给用户。',
+  },
+]
+
 function jobSubtitle(job: Job) {
   return [job.score ? `匹配 ${job.score}` : '', job.salary, getStatusLabel(job.status)].filter(Boolean).join(' · ')
 }
 
 async function parsePreflightResponse(res: Response) {
   const rawText = await res.text()
-  let data: { ok?: boolean; messages?: unknown; error?: string } = {}
+  let data: { ok?: boolean; messages?: unknown; checks?: unknown; error?: string } = {}
   try {
     data = rawText ? JSON.parse(rawText) : {}
   } catch {
-    return { ok: false, messages: [`无法解析预检响应：预检接口返回 ${res.status}`] }
+    const message = `无法解析预检响应：预检接口返回 ${res.status}`
+    return {
+      ok: false,
+      messages: [message],
+      checks: [{ id: 'preflight_api', title: '启动检查', status: 'error', message, detail: '请重启 BossHunter 后重试。' }] as PreflightCheck[],
+    }
   }
   const messages = Array.isArray(data.messages) ? data.messages.map(String).filter(Boolean) : []
+  const checks = Array.isArray(data.checks)
+    ? data.checks.filter((item): item is PreflightCheck => Boolean(
+      item
+      && typeof item === 'object'
+      && 'id' in item
+      && 'status' in item
+      && 'message' in item
+    ))
+    : []
   if (data.error) messages.push(String(data.error))
   if (!res.ok) messages.push(`预检接口返回 ${res.status}`)
   if (!data.ok && messages.length === 0) messages.push('后端未返回具体原因')
-  return { ok: Boolean(res.ok && data.ok), messages }
+  if (checks.length === 0 && messages.length > 0) {
+    checks.push(...messages.map((message, index) => ({
+      id: `legacy-${index}`,
+      title: '启动检查',
+      status: 'error' as const,
+      message,
+      detail: '请按提示修复后重新检测。',
+    })))
+  }
+  return { ok: Boolean(res.ok && data.ok), messages, checks }
+}
+
+function PreflightPanel({
+  checks,
+  checking,
+  onRetry,
+}: {
+  checks: PreflightCheck[]
+  checking: boolean
+  onRetry: () => void
+}) {
+  const errors = checks.filter(check => check.status === 'error').length
+  const warnings = checks.filter(check => check.status === 'warning').length
+  const needsConfig = checks.some(check => check.status !== 'pass' && check.action === 'config')
+  const heading = errors
+    ? `启动检查发现 ${errors} 个问题`
+    : warnings
+      ? `启动检查通过，另有 ${warnings} 项提醒`
+      : '启动检查全部通过'
+
+  return (
+    <div className={`mt-3 rounded-3xl border p-4 ${
+      errors ? 'border-red-200 bg-red-50' : warnings ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50'
+    }`}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          {errors
+            ? <XCircle className="h-5 w-5 text-danger" />
+            : warnings
+              ? <AlertTriangle className="h-5 w-5 text-amber-600" />
+              : <CheckCircle2 className="h-5 w-5 text-green-600" />}
+          <div className="text-sm font-black text-foreground">{heading}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          {needsConfig && (
+            <Button variant="secondary" size="sm" onClick={() => window.location.assign('/config')}>
+              打开配置
+            </Button>
+          )}
+          <Button variant="secondary" size="sm" onClick={onRetry} disabled={checking}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${checking ? 'animate-spin' : ''}`} />
+            {checking ? '检查中' : '重新检查'}
+          </Button>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 lg:grid-cols-2">
+        {checks.map(check => {
+          const isError = check.status === 'error'
+          const isWarning = check.status === 'warning'
+          return (
+            <div
+              key={`${check.id}-${check.title}`}
+              className={`rounded-2xl border bg-white px-3 py-3 ${
+                isError ? 'border-red-200' : isWarning ? 'border-amber-200' : 'border-green-200'
+              }`}
+            >
+              <div className="flex items-start gap-2">
+                {isError
+                  ? <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+                  : isWarning
+                    ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />}
+                <div>
+                  <div className="text-xs font-black text-muted">{check.title}</div>
+                  <div className="mt-0.5 text-sm font-black text-foreground">{check.message}</div>
+                  <p className="mt-1 text-xs leading-5 text-muted">{check.detail}</p>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export default function DashboardPage({ view = 'workbench' }: DashboardPageProps) {
   const { workbench, jobs, history, loading, error, refresh, startTask, stopTask } = useDashboard(view)
   const [selected, setSelected] = useState<string[]>([])
   const [notice, setNotice] = useState('')
-  const [preflightMessages, setPreflightMessages] = useState<string[]>([])
+  const [preflightChecks, setPreflightChecks] = useState<PreflightCheck[]>([])
+  const [preflightMode, setPreflightMode] = useState<WorkbenchMode>('full')
   const [selectedJob, setSelectedJob] = useState<Job | null>(null)
   const [modePending, setModePending] = useState<WorkbenchMode | null>(null)
   const [confirmedDeliveryIds, setConfirmedDeliveryIds] = useState<Set<string>>(new Set())
@@ -113,6 +298,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   )
   const activeTask = workbench.task
   const visibleTask = activeTask || workbench.last_task
+  const visibleTaskError = visibleTask?.error ? taskErrorFeedback(visibleTask.error) : null
   const pendingReplies = history.filter(item => item.action === 'reply_pending')
 
   const toggleJob = (id: string) => {
@@ -120,9 +306,10 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   }
 
   const runPreflight = async (mode: WorkbenchMode) => {
+    setPreflightMode(mode)
     const res = await fetch(`/api/workbench/preflight?mode=${mode}`)
     const data = await parsePreflightResponse(res)
-    setPreflightMessages(data.messages)
+    setPreflightChecks(data.checks)
     if (!data.ok) {
       setNotice('请按提示处理后再启动')
       return false
@@ -156,10 +343,23 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       if (!(await runPreflight(mode))) return
       setNotice(`${target?.title || '任务'}启动中，请稍候...`)
       await startTask(mode)
-      setPreflightMessages([])
       setNotice(`${target?.title || '任务'}已启动，日志会在下方更新。`)
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '操作失败')
+    } finally {
+      setModePending(null)
+    }
+  }
+
+  const retryPreflight = async () => {
+    if (modePending) return
+    try {
+      setModePending(preflightMode)
+      setNotice('正在重新检查运行环境...')
+      const ok = await runPreflight(preflightMode)
+      setNotice(ok ? '启动检查已通过，可以开始任务。' : '仍有问题需要处理，请查看检查结果。')
+    } catch {
+      setNotice('重新检查失败，请确认 BossHunter 后端仍在运行。')
     } finally {
       setModePending(null)
     }
@@ -276,7 +476,62 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
 
   return (
     <div className="space-y-5">
-      <section className="rounded-3xl border border-card-border bg-white p-5 shadow-sm">
+      <section className="relative overflow-hidden rounded-3xl border border-card-border bg-white shadow-sm">
+        <div className="absolute -right-20 -top-24 h-64 w-64 rounded-full bg-[#FFF0E5]" />
+        <div className="relative grid gap-5 p-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(280px,0.7fr)] lg:p-7">
+          <div className="flex flex-col justify-center">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#FFF0E5] px-3 py-1 text-xs font-black text-primary">
+                <Sparkles className="h-3.5 w-3.5" />
+                本地 AI 求职助手
+              </span>
+              <span className="rounded-full border border-card-border bg-white px-3 py-1 text-xs font-bold text-muted">v2.1.0</span>
+            </div>
+            <h2 className="mt-4 max-w-3xl text-3xl font-black leading-tight tracking-tight text-foreground lg:text-4xl">
+              让 AI 帮你筛选机会，
+              <span className="text-primary">把投递决定留给你</span>
+            </h2>
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-muted">
+              BossHunter 在本地连接 Chrome，协助完成岗位采集、匹配评分、招呼语准备和 HR 回复整理。所有投递仍需你确认，减少重复操作，也保留求职判断。
+            </p>
+            <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs font-bold text-foreground">
+              <span className="flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-success" />本地运行</span>
+              <span className="flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4 text-success" />人工确认后发送</span>
+              <span className="flex items-center gap-1.5"><Sparkles className="h-4 w-4 text-primary" />支持多种 AI 接口</span>
+            </div>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Button onClick={() => document.getElementById('today-workbench')?.scrollIntoView({ behavior: 'smooth' })}>
+                开始今日任务
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+              <Button variant="secondary" onClick={() => window.location.assign('/config')}>检查我的配置</Button>
+            </div>
+          </div>
+
+          <div className="relative rounded-3xl border border-primary/20 bg-[#FFF7F0] p-5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-foreground text-white">
+              <Github className="h-5 w-5" />
+            </div>
+            <h3 className="mt-4 text-lg font-black text-foreground">关注项目更新</h3>
+            <p className="mt-2 text-xs leading-6 text-muted">
+              如果 BossHunter 帮你节省了求职时间，欢迎在 GitHub 点一个 Star。你可以更方便地找到新版本、修复说明和使用帮助，也能支持项目继续维护。
+            </p>
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-4 inline-flex h-9 w-full items-center justify-center rounded-md bg-foreground px-4 text-sm font-bold text-white transition-colors hover:bg-foreground/90"
+            >
+              <Github className="mr-2 h-4 w-4" />
+              去 GitHub 点 Star
+              <ExternalLink className="ml-2 h-3.5 w-3.5" />
+            </a>
+            <p className="mt-3 text-center text-[11px] leading-5 text-muted">完全自愿，不影响任何功能使用</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="today-workbench" className="scroll-mt-6 rounded-3xl border border-card-border bg-white p-5 shadow-sm">
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
             <div className="text-xs font-black tracking-[0.18em] text-primary">TODAY WORKBENCH</div>
@@ -321,13 +576,8 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           })}
         </div>
         {notice && <div className="mt-3 rounded-2xl bg-[#FFF0E5] px-4 py-3 text-sm text-primary">{notice}</div>}
-        {preflightMessages.length > 0 && (
-          <div className="mt-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-danger">
-            <div className="font-black">启动前需要处理：</div>
-            <ul className="mt-2 list-disc space-y-1 pl-5">
-              {preflightMessages.map((message, index) => <li key={`${message}-${index}`}>{message}</li>)}
-            </ul>
-          </div>
+        {preflightChecks.length > 0 && (
+          <PreflightPanel checks={preflightChecks} checking={Boolean(modePending)} onRetry={retryPreflight} />
         )}
         {error && <div className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-danger">{error}</div>}
         {visibleTask && (
@@ -351,7 +601,16 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 </div>
               )}
             </div>
-            {visibleTask.error && <div className="mt-3 rounded-2xl bg-red-50 px-3 py-2 text-sm text-danger">{visibleTask.error}</div>}
+            {visibleTask.error && visibleTaskError && (
+              <div className="mt-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-danger">
+                <div className="font-black">{visibleTaskError.title}</div>
+                <p className="mt-1 text-xs leading-5">{visibleTaskError.detail}</p>
+                <details className="mt-2 text-xs text-muted">
+                  <summary className="cursor-pointer font-bold">查看原始错误</summary>
+                  <pre className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-white p-2">{visibleTask.error}</pre>
+                </details>
+              </div>
+            )}
             {visibleTask.stop_reason && <div className="mt-3 rounded-2xl bg-[#FFF0E5] px-3 py-2 text-sm text-primary">{visibleTask.stop_reason}</div>}
           </div>
         )}
@@ -496,6 +755,53 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           <div className="rounded-2xl border border-dashed border-card-border bg-[#FFFCFA] p-5 text-sm text-muted">今天暂时没有待确认岗位。</div>
         )}
       </section>
+
+      <section className="overflow-hidden rounded-3xl border border-card-border bg-white">
+        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-card-border px-5 py-4">
+          <div>
+            <div className="text-xs font-black tracking-[0.18em] text-primary">WHAT'S NEW</div>
+            <h3 className="mt-1 text-lg font-black">更新记录</h3>
+            <p className="mt-1 text-xs leading-5 text-muted">按发布日期记录用户可感知的功能、体验和稳定性变化。</p>
+          </div>
+          <a
+            href={`${GITHUB_URL}/commits`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center text-xs font-black text-primary hover:underline"
+          >
+            查看完整提交记录
+            <ExternalLink className="ml-1 h-3.5 w-3.5" />
+          </a>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] border-collapse text-left">
+            <thead className="bg-[#FFFCFA] text-xs text-muted">
+              <tr>
+                <th className="px-5 py-3 font-bold">日期</th>
+                <th className="px-5 py-3 font-bold">版本号</th>
+                <th className="px-5 py-3 font-bold">类型</th>
+                <th className="px-5 py-3 font-bold">更新内容</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-card-border">
+              {releaseNotes.map(item => (
+                <tr key={`${item.date}-${item.category}`} className="align-top">
+                  <td className="whitespace-nowrap px-5 py-4 text-xs font-bold text-foreground">{item.date}</td>
+                  <td className="whitespace-nowrap px-5 py-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-black text-foreground">{item.version}</span>
+                      {item.latest && <span className="rounded-full bg-[#FFF0E5] px-2 py-0.5 text-[10px] font-black text-primary">最新</span>}
+                    </div>
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-4 text-xs font-bold text-primary">{item.category}</td>
+                  <td className="px-5 py-4 text-xs leading-6 text-muted">{item.content}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       {selectedJob && <JobDetailModal job={selectedJob} onClose={() => setSelectedJob(null)} />}
     </div>
   )
