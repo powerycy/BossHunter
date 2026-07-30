@@ -55,15 +55,53 @@ class BrowserRuntimeManagerTests(unittest.TestCase):
         self.assertTrue(path.exists())
 
     @patch("bosshunter.browser.runtime.subprocess.run")
-    def test_check_node_available_returns_version(self, run):
+    @patch("bosshunter.browser.runtime._candidate_node_executables")
+    def test_check_node_available_returns_version(self, candidates, run):
         from bosshunter.browser.runtime import check_node_available
 
+        candidates.return_value = ["node"]
         run.return_value = Mock(returncode=0, stdout="v22.1.0\n")
 
         result = check_node_available()
 
         self.assertTrue(result["available"])
         self.assertEqual(result["version"], "v22.1.0")
+        self.assertEqual(result["executable"], "node")
+
+    @patch("bosshunter.browser.runtime.subprocess.run")
+    @patch("bosshunter.browser.runtime.Path.is_file", return_value=True)
+    @patch("bosshunter.browser.runtime._candidate_node_executables")
+    def test_check_node_available_reuses_ai_bundled_node(self, candidates, is_file, run):
+        from bosshunter.browser.runtime import check_node_available
+
+        candidates.return_value = ["node", "/ai/runtime/node/bin/node"]
+        run.side_effect = [
+            OSError("node missing from PATH"),
+            Mock(returncode=0, stdout="v24.14.0\n", stderr=""),
+        ]
+
+        result = check_node_available()
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["version"], "v24.14.0")
+        self.assertEqual(result["executable"], "/ai/runtime/node/bin/node")
+
+    @patch("bosshunter.browser.runtime.subprocess.run")
+    @patch("bosshunter.browser.runtime.Path.is_file", return_value=True)
+    @patch("bosshunter.browser.runtime._candidate_node_executables")
+    def test_check_node_available_skips_unsupported_version(self, candidates, is_file, run):
+        from bosshunter.browser.runtime import check_node_available
+
+        candidates.return_value = ["/old/node", "/new/node"]
+        run.side_effect = [
+            Mock(returncode=0, stdout="v20.18.0\n", stderr=""),
+            Mock(returncode=0, stdout="v22.11.0\n", stderr=""),
+        ]
+
+        result = check_node_available()
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["executable"], "/new/node")
 
     @patch("bosshunter.browser.runtime.httpx.get")
     def test_runtime_targets_returns_array_from_bosshunter_runtime(self, http_get):
@@ -113,6 +151,7 @@ class BrowserRuntimeManagerTests(unittest.TestCase):
 
         self.assertTrue(result)
         start_runtime.assert_called_once()
+        self.assertEqual(start_runtime.call_args.args[1], "node")
 
     @patch("bosshunter.browser.runtime.time.sleep")
     @patch("bosshunter.browser.runtime._is_port_available")
@@ -144,6 +183,7 @@ class BrowserRuntimeManagerTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(config["browser"]["proxy_port"], 3457)
         self.assertEqual(start_runtime.call_args.args[0]["proxy_port"], 3457)
+        self.assertEqual(start_runtime.call_args.args[1], "node")
         self.assertEqual(get_runtime_url(), "http://127.0.0.1:3457")
 
     @patch("bosshunter.browser.runtime.subprocess.Popen")

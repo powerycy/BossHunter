@@ -203,7 +203,17 @@ def check_browser_connection(config: dict) -> list[dict[str, str]]:
 	node = result.get("node") or {}
 	errors = [str(error) for error in result.get("errors") or []]
 
-	if not node.get("available"):
+	if result.get("runtime"):
+		checks.append(
+			_check(
+				"browser_runtime",
+				"浏览器运行组件",
+				"pass",
+				"BossHunter 浏览器运行组件正常",
+				f"本地连接地址：{result.get('runtime_url') or '已就绪'}。",
+			)
+		)
+	elif not node.get("available"):
 		checks.append(
 			_check(
 				"browser_runtime",
@@ -214,7 +224,7 @@ def check_browser_connection(config: dict) -> list[dict[str, str]]:
 				"browser",
 			)
 		)
-	elif not result.get("runtime"):
+	else:
 		if any("non-BossHunter" in error for error in errors):
 			message = "浏览器连接端口被其他程序占用"
 			detail = "请停止占用本地 Runtime 端口的程序，或修改 browser.proxy_port 后重启。"
@@ -222,16 +232,6 @@ def check_browser_connection(config: dict) -> list[dict[str, str]]:
 			message = "BossHunter 浏览器运行组件未启动"
 			detail = "请重新启动 BossHunter；若仍失败，运行 bosshunter connect 查看终端诊断。"
 		checks.append(_check("browser_runtime", "浏览器运行组件", "error", message, detail, "browser"))
-	else:
-		checks.append(
-			_check(
-				"browser_runtime",
-				"浏览器运行组件",
-				"pass",
-				"BossHunter 浏览器运行组件正常",
-				f"本地连接地址：{result.get('runtime_url') or '已就绪'}。",
-			)
-		)
 
 	if result.get("runtime") and not result.get("chrome"):
 		checks.append(

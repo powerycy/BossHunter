@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -17,6 +19,7 @@ from bosshunter.config import DEFAULTS
 
 _browser_config: dict[str, Any] | None = None
 _runtime_process: subprocess.Popen | None = None
+_MIN_NODE_MAJOR = 22
 
 
 def _default_browser_config() -> dict[str, Any]:
@@ -63,23 +66,97 @@ def get_runtime_script_path() -> Path:
     return Path(__file__).with_name("cdp-proxy.mjs")
 
 
-def check_node_available() -> dict[str, Any]:
-    """Check whether Node.js can run the bundled browser runtime."""
-    try:
-        result = subprocess.run(
-            ["node", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return {"available": False, "version": None, "error": str(exc)}
+def _candidate_node_executables() -> list[str]:
+    """Return Node.js candidates without depending only on the caller's PATH."""
+    candidates: list[str] = []
 
-    version = (result.stdout or result.stderr or "").strip()
+    def add(candidate: str | Path | None) -> None:
+        if not candidate:
+            return
+        value = os.fspath(candidate)
+        if value not in candidates:
+            candidates.append(value)
+
+    # Explicit override stays first for managed and packaged installations.
+    add(os.environ.get("BOSSHUNTER_NODE_PATH"))
+    add(shutil.which("node"))
+    # Keep the command name as a fallback so shell-managed installations and
+    # existing tests continue to work even when `which` is unavailable.
+    add("node")
+
+    # Some AI desktop runtimes ship a private Node.js but do not export it to
+    # child-process PATH. Reuse that executable instead of asking the user to
+    # install a duplicate copy.
+    executable = Path(sys.executable).resolve()
+    for parent in executable.parents:
+        add(parent / "node" / "bin" / ("node.exe" if os.name == "nt" else "node"))
+
+    home = Path.home()
+    patterns = [
+        ".cache/codex-runtimes/*/dependencies/node/bin/node",
+        ".nvm/versions/node/*/bin/node",
+        ".volta/bin/node",
+        ".local/share/fnm/node-versions/*/installation/bin/node",
+        ".local/share/mise/installs/node/*/bin/node",
+        ".asdf/installs/nodejs/*/bin/node",
+    ]
+    for pattern in patterns:
+        for candidate in sorted(home.glob(pattern), reverse=True):
+            add(candidate)
+
+    if os.name == "nt":
+        for root_name in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"):
+            root = os.environ.get(root_name)
+            if root:
+                add(Path(root) / "nodejs" / "node.exe")
+                add(Path(root) / "Programs" / "nodejs" / "node.exe")
+    else:
+        add("/opt/homebrew/bin/node")
+        add("/usr/local/bin/node")
+        add("/opt/local/bin/node")
+
+    return candidates
+
+
+def _node_major(version: str) -> int | None:
+    match = re.match(r"^v?(\d+)", version.strip())
+    return int(match.group(1)) if match else None
+
+
+def check_node_available() -> dict[str, Any]:
+    """Find a Node.js runtime new enough for the bundled browser component."""
+    errors: list[str] = []
+    for executable in _candidate_node_executables():
+        if executable != "node" and not Path(executable).is_file():
+            continue
+        try:
+            result = subprocess.run(
+                [executable, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            errors.append(str(exc))
+            continue
+
+        version = (result.stdout or result.stderr or "").strip()
+        major = _node_major(version)
+        if result.returncode == 0 and major is not None and major >= _MIN_NODE_MAJOR:
+            return {
+                "available": True,
+                "version": version or None,
+                "executable": executable,
+                "error": None,
+            }
+        if version:
+            errors.append(f"{executable}: {version}（需要 Node.js {_MIN_NODE_MAJOR}+）")
+
     return {
-        "available": result.returncode == 0,
-        "version": version or None,
-        "error": None if result.returncode == 0 else version,
+        "available": False,
+        "version": None,
+        "executable": None,
+        "error": errors[-1] if errors else f"未找到 Node.js {_MIN_NODE_MAJOR}+",
     }
 
 
@@ -154,7 +231,7 @@ def _runtime_env(config: dict[str, Any] | None = None) -> dict[str, str]:
     return env
 
 
-def start_runtime(config: dict[str, Any] | None = None) -> subprocess.Popen:
+def start_runtime(config: dict[str, Any] | None = None, node_executable: str = "node") -> subprocess.Popen:
     """Start the bundled Node.js browser runtime."""
     global _runtime_process
     script_path = get_runtime_script_path()
@@ -168,7 +245,7 @@ def start_runtime(config: dict[str, Any] | None = None) -> subprocess.Popen:
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
     else:
         kwargs["start_new_session"] = True
-    _runtime_process = subprocess.Popen(["node", str(script_path)], **kwargs)
+    _runtime_process = subprocess.Popen([node_executable, str(script_path)], **kwargs)
     return _runtime_process
 
 
@@ -182,7 +259,8 @@ def ensure_runtime(config: dict[str, Any] | None = None, wait_seconds: float = 1
         return False
     if not browser.get("auto_start_proxy", True):
         return False
-    if not check_node_available().get("available"):
+    node = check_node_available()
+    if not node.get("available"):
         return False
 
     health = runtime_health(browser)
@@ -192,7 +270,7 @@ def ensure_runtime(config: dict[str, Any] | None = None, wait_seconds: float = 1
             return False
         _switch_runtime_port(config, browser, fallback_port)
 
-    start_runtime(browser)
+    start_runtime(browser, str(node.get("executable") or "node"))
     deadline = time.time() + wait_seconds
     while time.time() < deadline:
         if runtime_targets(browser) is not None:

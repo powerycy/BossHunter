@@ -26,7 +26,7 @@ def run_browser_diagnostics(config: dict[str, Any] | None = None) -> dict[str, A
     browser_product, browser_name = _browser_identity(health)
 
     errors: list[str] = []
-    if not node.get("available"):
+    if not node.get("available") and not runtime_ready:
         errors.append("Node.js is required for BossHunter Browser Runtime.")
     if not runtime_ready:
         if health and health.get("runtime") != "bosshunter":

@@ -64,6 +64,25 @@ class AiPreflightTests(unittest.TestCase):
 
 class BrowserPreflightTests(unittest.TestCase):
 	@patch("bosshunter.web.preflight.run_browser_diagnostics")
+	def test_running_runtime_is_reused_when_node_is_not_on_path(self, diagnostics):
+		diagnostics.return_value = {
+			"node": {"available": False, "version": None},
+			"runtime": True,
+			"chrome": True,
+			"browser_name": "Google Chrome",
+			"browser_product": "Chrome/138.0",
+			"boss_tab": {"targetId": "1"},
+			"errors": [],
+			"runtime_url": "http://127.0.0.1:3456",
+		}
+
+		checks = check_browser_connection({})
+
+		runtime_check = next(check for check in checks if check["id"] == "browser_runtime")
+		self.assertEqual(runtime_check["status"], "pass")
+		self.assertNotIn("Node.js", str(checks))
+
+	@patch("bosshunter.web.preflight.run_browser_diagnostics")
 	def test_missing_remote_debugging_is_reported(self, diagnostics):
 		diagnostics.return_value = {
 			"node": {"available": True, "version": "v22"},

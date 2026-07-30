@@ -7,7 +7,6 @@ import { getActionLabel, getStatusLabel } from '@/lib/status'
 import {
   AlertTriangle,
   BriefcaseBusiness,
-  CheckCircle2,
   Download,
   ExternalLink,
   Eye,
@@ -185,26 +184,23 @@ function PreflightPanel({
   checking: boolean
   onRetry: () => void
 }) {
-  const errors = checks.filter(check => check.status === 'error').length
-  const warnings = checks.filter(check => check.status === 'warning').length
-  const needsConfig = checks.some(check => check.status !== 'pass' && check.action === 'config')
-  const heading = errors
-    ? `启动检查发现 ${errors} 个问题`
-    : warnings
-      ? `启动检查通过，另有 ${warnings} 项提醒`
-      : '启动检查全部通过'
+  const actionableChecks = checks.filter(check => check.status !== 'pass')
+  if (actionableChecks.length === 0) return null
+
+  const errors = actionableChecks.filter(check => check.status === 'error').length
+  const warnings = actionableChecks.filter(check => check.status === 'warning').length
+  const needsConfig = actionableChecks.some(check => check.action === 'config')
+  const heading = errors ? `启动检查发现 ${errors} 个问题` : `启动检查有 ${warnings} 项提醒`
 
   return (
     <div className={`mt-3 rounded-3xl border p-4 ${
-      errors ? 'border-red-200 bg-red-50' : warnings ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50'
+      errors ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'
     }`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           {errors
             ? <XCircle className="h-5 w-5 text-danger" />
-            : warnings
-              ? <AlertTriangle className="h-5 w-5 text-amber-600" />
-              : <CheckCircle2 className="h-5 w-5 text-green-600" />}
+            : <AlertTriangle className="h-5 w-5 text-amber-600" />}
           <div className="text-sm font-black text-foreground">{heading}</div>
         </div>
         <div className="flex items-center gap-2">
@@ -220,22 +216,17 @@ function PreflightPanel({
         </div>
       </div>
       <div className="mt-3 grid gap-2 lg:grid-cols-2">
-        {checks.map(check => {
+        {actionableChecks.map(check => {
           const isError = check.status === 'error'
-          const isWarning = check.status === 'warning'
           return (
             <div
               key={`${check.id}-${check.title}`}
-              className={`rounded-2xl border bg-white px-3 py-3 ${
-                isError ? 'border-red-200' : isWarning ? 'border-amber-200' : 'border-green-200'
-              }`}
+              className={`rounded-2xl border bg-white px-3 py-3 ${isError ? 'border-red-200' : 'border-amber-200'}`}
             >
               <div className="flex items-start gap-2">
                 {isError
                   ? <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
-                  : isWarning
-                    ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-                    : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />}
+                  : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />}
                 <div>
                   <div className="text-xs font-black text-muted">{check.title}</div>
                   <div className="mt-0.5 text-sm font-black text-foreground">{check.message}</div>
@@ -329,7 +320,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       setModePending(preflightMode)
       setNotice('正在重新检查运行环境...')
       const ok = await runPreflight(preflightMode)
-      setNotice(ok ? '启动检查已通过，可以开始任务。' : '仍有问题需要处理，请查看检查结果。')
+      setNotice(ok ? '' : '仍有问题需要处理，请查看检查结果。')
     } catch {
       setNotice('重新检查失败，请确认 BossHunter 后端仍在运行。')
     } finally {
@@ -493,7 +484,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           })}
         </div>
         {notice && <div className="mt-3 rounded-2xl bg-[#FFF0E5] px-4 py-3 text-sm text-primary">{notice}</div>}
-        {preflightChecks.length > 0 && (
+        {preflightChecks.some(check => check.status !== 'pass') && (
           <PreflightPanel checks={preflightChecks} checking={Boolean(modePending)} onRetry={retryPreflight} />
         )}
         {error && <div className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-danger">{error}</div>}

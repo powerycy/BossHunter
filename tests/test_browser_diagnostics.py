@@ -81,6 +81,29 @@ class BrowserDiagnosticsTests(unittest.TestCase):
         self.assertFalse(result["runtime"])
         self.assertIn("Node.js", result["errors"][0])
 
+    @patch("bosshunter.browser.diagnostics.find_boss_tab")
+    @patch("bosshunter.browser.diagnostics.runtime_targets")
+    @patch("bosshunter.browser.diagnostics.ensure_runtime")
+    @patch("bosshunter.browser.diagnostics.check_node_available")
+    def test_running_runtime_does_not_require_node_on_path(
+        self,
+        check_node,
+        ensure_runtime,
+        runtime_targets,
+        find_boss_tab,
+    ):
+        from bosshunter.browser.diagnostics import run_browser_diagnostics
+
+        check_node.return_value = {"available": False, "version": None, "error": "node missing"}
+        ensure_runtime.return_value = True
+        runtime_targets.return_value = [{"targetId": "1", "url": "https://www.zhipin.com"}]
+        find_boss_tab.return_value = {"targetId": "1", "title": "BOSS直聘"}
+
+        result = run_browser_diagnostics({})
+
+        self.assertTrue(result["runtime"])
+        self.assertFalse(any("Node.js" in error for error in result["errors"]))
+
     @patch("bosshunter.browser.diagnostics.runtime_health")
     @patch("bosshunter.browser.diagnostics.ensure_runtime")
     @patch("bosshunter.browser.diagnostics.check_node_available")
