@@ -175,6 +175,13 @@ class BrowserRuntimeSourceTests(unittest.TestCase):
         self.assertIn("health.runtime === RUNTIME_NAME", source)
         self.assertNotIn("data.includes", source)
 
+    def test_cdp_proxy_foregrounds_targets_before_user_interactions(self):
+        script = Path(__file__).parents[1] / "src" / "bosshunter" / "browser" / "runtime" / "cdp-proxy.mjs"
+        source = script.read_text(encoding="utf-8")
+
+        self.assertIn("background: false", source)
+        self.assertGreaterEqual(source.count("Page.bringToFront"), 3)
+
     def test_check_runtime_requires_bosshunter_runtime_identity(self):
         script = Path(__file__).parents[1] / "src" / "bosshunter" / "browser" / "runtime" / "check-runtime.mjs"
         source = script.read_text(encoding="utf-8")

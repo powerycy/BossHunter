@@ -16,6 +16,10 @@ from bosshunter.db import (
 )
 from bosshunter.executor.sender import CHAT_BUTTON_SCRIPT_FOR_TESTS
 from bosshunter.executor.sender import _fill_chat_input
+from bosshunter.executor.sender import _is_preset_greeting_popup
+from bosshunter.executor.sender import _navigate_to_chat_redirect
+from bosshunter.executor.sender import _message_delivery_state
+from bosshunter.executor.sender import _wait_for_chat_page
 from bosshunter.executor.sender import send_greetings
 from bosshunter.executor.sender import _send_greeting_once
 
@@ -39,6 +43,11 @@ def _job(job_id: str, title: str = "Engineer") -> dict:
 
 
 class JobSelectionTests(unittest.TestCase):
+
+    def test_startchat_dialog_is_not_misclassified_as_preset_greeting(self):
+        self.assertFalse(_is_preset_greeting_popup({"popup": True, "kind": "startchat_dialog"}))
+        self.assertTrue(_is_preset_greeting_popup({"popup": True, "kind": "preset_greeting"}))
+        self.assertTrue(_is_preset_greeting_popup({"popup": True}))
     def test_chat_button_script_prefers_real_anchor_over_visible_wrapper(self):
         script = CHAT_BUTTON_SCRIPT_FOR_TESTS
 
@@ -46,10 +55,56 @@ class JobSelectionTests(unittest.TestCase):
         self.assertIn("data-url", script)
         self.assertNotIn("btn.click()", script)
         self.assertIn("getBoundingClientRect", script)
+        self.assertIn("inViewport", script)
+        self.assertIn("elementFromPoint", script)
 
         redirect_pos = script.index("redirect-url")
         wrapper_pos = script.index("btn-startchat-wrap")
         self.assertLess(redirect_pos, wrapper_pos)
+
+    def test_chat_redirect_fallback_only_uses_boss_chat_path(self):
+        with patch("bosshunter.executor.sender.navigate", return_value=True) as navigate:
+            success = _navigate_to_chat_redirect(
+                "target-1",
+                {"redirectUrl": "/web/geek/chat?id=friend-1&jobId=job-1"},
+            )
+
+        self.assertTrue(success)
+        navigate.assert_called_once_with(
+            "target-1",
+            "https://www.zhipin.com/web/geek/chat?id=friend-1&jobId=job-1",
+        )
+
+        with patch("bosshunter.executor.sender.navigate") as navigate:
+            self.assertFalse(
+                _navigate_to_chat_redirect(
+                    "target-1",
+                    {"redirectUrl": "https://example.com/web/geek/chat"},
+                )
+            )
+        navigate.assert_not_called()
+
+    def test_wait_for_chat_page_switches_to_matching_new_chat_tab(self):
+        targets = [
+            {
+                "targetId": "chat-target",
+                "url": "https://www.zhipin.com/web/geek/chat",
+            }
+        ]
+        with patch("bosshunter.executor.sender._sleep_or_stop", return_value=False), \
+             patch("bosshunter.executor.sender.get_page_targets", return_value=targets), \
+             patch("bosshunter.executor.sender._chat_target_matches_job", return_value=True), \
+             patch("bosshunter.executor.sender.evaluate", return_value="/job_detail/job-1.html"):
+            result = _wait_for_chat_page(
+                "job-target",
+                None,
+                attempts=1,
+                job_id="job-1",
+            )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["opened_new_tab"])
+        self.assertEqual(result["target_id"], "chat-target")
 
     def test_send_greeting_reports_unavailable_job_page_before_clicking_chat(self):
         job = {
@@ -88,7 +143,8 @@ class JobSelectionTests(unittest.TestCase):
              patch("bosshunter.executor.sender.evaluate", side_effect=evaluate_results), \
              patch("bosshunter.executor.sender._detect_greet_popup", return_value={"success": True, "popup": False}), \
              patch("bosshunter.executor.sender._fill_chat_input", return_value={"success": True}), \
-             patch("bosshunter.executor.sender._message_visible", side_effect=[False, True, True, True]), \
+             patch("bosshunter.executor.sender._message_delivery_state", side_effect=["missing", "delivered", "delivered", "delivered"]), \
+             patch("bosshunter.executor.sender.get_page_targets", return_value=[]), \
              patch("bosshunter.executor.sender.click_at", return_value=True) as click_at, \
              patch("bosshunter.executor.sender.close_tab") as close_tab, \
              patch("bosshunter.executor.sender._sleep_or_stop", return_value=False):
@@ -123,7 +179,7 @@ class JobSelectionTests(unittest.TestCase):
              patch("bosshunter.executor.sender.evaluate", side_effect=evaluate_results) as evaluate_mock, \
              patch("bosshunter.executor.sender._detect_greet_popup", return_value={"success": True, "popup": False}), \
              patch("bosshunter.executor.sender._fill_chat_input", return_value={"success": True}), \
-             patch("bosshunter.executor.sender._message_visible", side_effect=[False, True, True, True]), \
+             patch("bosshunter.executor.sender._message_delivery_state", side_effect=["missing", "delivered", "delivered", "delivered"]), \
              patch("bosshunter.executor.sender.click_at", return_value=True), \
              patch("bosshunter.executor.sender.close_tab") as close_tab, \
              patch("bosshunter.executor.sender._sleep_or_stop", return_value=False):
@@ -140,6 +196,40 @@ class JobSelectionTests(unittest.TestCase):
         self.assertIsNone(target_id)
         self.assertTrue(result["success"])
         self.assertEqual(evaluate_mock.call_count, len(evaluate_results))
+        close_tab.assert_called_once_with("target-1")
+
+    def test_send_greeting_retries_transient_evaluate_error_while_job_page_renders(self):
+        job = {
+            "id": "rendering-chat-button",
+            "url": "https://www.zhipin.com/job_detail/rendering-chat-button.html",
+        }
+        evaluate_results = [
+            '{"success": true}',  # page check
+            {"error": "Uncaught"},
+            '{"success": true, "x": 100, "y": 200, "button_text": "立即沟通"}',
+            "/web/geek/chat",
+        ]
+
+        with patch("bosshunter.executor.sender.new_tab", return_value="target-1"), \
+             patch("bosshunter.executor.sender.evaluate", side_effect=evaluate_results), \
+             patch("bosshunter.executor.sender._detect_greet_popup", return_value={"success": True, "popup": False}), \
+             patch("bosshunter.executor.sender._fill_chat_input", return_value={"success": True}), \
+             patch("bosshunter.executor.sender._message_delivery_state", side_effect=["missing", "delivered", "delivered", "delivered"]), \
+             patch("bosshunter.executor.sender.click_at", return_value=True), \
+             patch("bosshunter.executor.sender.close_tab") as close_tab, \
+             patch("bosshunter.executor.sender._sleep_or_stop", return_value=False):
+            result, target_id = _send_greeting_once(
+                job,
+                "custom greeting",
+                {
+                    "browse_before_greet": False,
+                    "_chat_button_attempts": 2,
+                    "_chat_navigation_attempts": 1,
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertIsNone(target_id)
         close_tab.assert_called_once_with("target-1")
 
     def test_send_greeting_stops_when_boss_preset_popup_is_visible(self):
@@ -160,14 +250,60 @@ class JobSelectionTests(unittest.TestCase):
     def test_fill_chat_input_uses_real_editing_events(self):
         evaluate_results = ['{"success": true}', '{"success": true, "disabled": false}']
         with patch("bosshunter.executor.sender.evaluate", side_effect=evaluate_results) as evaluate_mock, \
+             patch("bosshunter.executor.sender.click_at", return_value=True) as click_at, \
+             patch("bosshunter.executor.sender.press_key", return_value=True) as press_key, \
              patch("bosshunter.executor.sender.type_text", return_value=True) as type_text:
             result = _fill_chat_input("target-1", "custom greeting")
 
         self.assertTrue(result["success"])
-        type_text.assert_called_once_with("target-1", "custom greeting")
-        prepare_script = evaluate_mock.call_args_list[0].args[1]
-        self.assertIn("input.focus()", prepare_script)
-        self.assertIn("deleteContentBackward", prepare_script)
+        click_at.assert_called_once_with("target-1", "#chat-input")
+        self.assertEqual(
+            [call.args for call in press_key.call_args_list],
+            [("target-1", "Control+A"), ("target-1", "Backspace")],
+        )
+        type_text.assert_called_once_with("target-1", "custom greeting", human=True)
+        self.assertNotIn("execCommand", evaluate_mock.call_args_list[0].args[1])
+
+    def test_fill_chat_input_wakes_disabled_editor_with_keyboard_edit(self):
+        evaluate_results = [
+            '{"success": true}',
+            '{"success": true, "disabled": true}',
+            '{"success": true, "disabled": false}',
+        ]
+        with patch("bosshunter.executor.sender.evaluate", side_effect=evaluate_results), \
+             patch("bosshunter.executor.sender.click_at", return_value=True), \
+             patch("bosshunter.executor.sender.type_text", return_value=True) as type_text, \
+             patch("bosshunter.executor.sender.press_key", return_value=True) as press_key:
+            result = _fill_chat_input("target-1", "custom greeting")
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result["disabled"])
+        self.assertEqual(type_text.call_count, 2)
+        self.assertEqual(type_text.call_args_list[0].args, ("target-1", "custom greeting"))
+        self.assertEqual(type_text.call_args_list[0].kwargs, {"human": True})
+        self.assertEqual(type_text.call_args_list[1].args, ("target-1", " "))
+        self.assertEqual(press_key.call_args_list[-1].args, ("target-1", "Backspace"))
+
+    def test_message_delivery_state_rejects_loading_and_error_bubbles(self):
+        with patch("bosshunter.executor.sender.evaluate", return_value='{"success": true, "state": "pending"}'):
+            self.assertEqual(_message_delivery_state("target-1", "hello"), "pending")
+
+        with patch("bosshunter.executor.sender.evaluate", return_value='{"success": true, "state": "failed"}'):
+            self.assertEqual(_message_delivery_state("target-1", "hello"), "failed")
+
+        with patch("bosshunter.executor.sender.evaluate", return_value='{"success": true, "state": "delivered"}'):
+            self.assertEqual(_message_delivery_state("target-1", "hello"), "delivered")
+
+    def test_message_delivery_state_script_prefers_delivered_duplicate(self):
+        with patch(
+            "bosshunter.executor.sender.evaluate",
+            return_value='{"success": true, "state": "delivered"}',
+        ) as evaluate_mock:
+            self.assertEqual(_message_delivery_state("target-1", "same greeting"), "delivered")
+
+        script = evaluate_mock.call_args.args[1]
+        self.assertIn("states.includes('delivered')", script)
+        self.assertIn("delivered ? 'delivered'", script)
 
     def test_send_greeting_requires_message_verification(self):
         job = {"id": "unverified", "url": "https://www.zhipin.com/job_detail/unverified.html"}
@@ -177,7 +313,7 @@ class JobSelectionTests(unittest.TestCase):
              patch("bosshunter.executor.sender.evaluate", side_effect=evaluate_results), \
              patch("bosshunter.executor.sender._detect_greet_popup", return_value={"success": True, "popup": False}), \
              patch("bosshunter.executor.sender._fill_chat_input", return_value={"success": True}), \
-             patch("bosshunter.executor.sender._message_visible", return_value=False), \
+             patch("bosshunter.executor.sender._message_delivery_state", return_value="missing"), \
              patch("bosshunter.executor.sender.click_at", return_value=True) as click_at, \
              patch("bosshunter.executor.sender._sleep_or_stop", return_value=False):
             result, target_id = _send_greeting_once(
@@ -199,7 +335,7 @@ class JobSelectionTests(unittest.TestCase):
         with patch("bosshunter.executor.sender.new_tab", return_value="target-1"), \
              patch("bosshunter.executor.sender.evaluate", side_effect=evaluate_results), \
              patch("bosshunter.executor.sender._detect_greet_popup", return_value={"success": True, "popup": False}), \
-             patch("bosshunter.executor.sender._message_visible", return_value=True), \
+             patch("bosshunter.executor.sender._message_delivery_state", return_value="delivered"), \
              patch("bosshunter.executor.sender._fill_chat_input") as fill_input, \
              patch("bosshunter.executor.sender.click_at") as click_at, \
              patch("bosshunter.executor.sender.close_tab") as close_tab, \
@@ -225,7 +361,7 @@ class JobSelectionTests(unittest.TestCase):
              patch("bosshunter.executor.sender.evaluate", side_effect=evaluate_results), \
              patch("bosshunter.executor.sender._detect_greet_popup", return_value={"success": True, "popup": False}), \
              patch("bosshunter.executor.sender._fill_chat_input", return_value={"success": True}), \
-             patch("bosshunter.executor.sender._message_visible", side_effect=[False, True, False]), \
+             patch("bosshunter.executor.sender._message_delivery_state", side_effect=["missing", "delivered", "missing"]), \
              patch("bosshunter.executor.sender.click_at", return_value=True), \
              patch("bosshunter.executor.sender._sleep_or_stop", return_value=False):
             result, target_id = _send_greeting_once(
@@ -245,7 +381,7 @@ class JobSelectionTests(unittest.TestCase):
              patch("bosshunter.executor.sender.evaluate", side_effect=evaluate_results), \
              patch("bosshunter.executor.sender._detect_greet_popup", return_value={"success": True, "popup": False}), \
              patch("bosshunter.executor.sender._fill_chat_input", return_value={"success": True}), \
-             patch("bosshunter.executor.sender._message_visible", side_effect=[False, True, True, True]), \
+             patch("bosshunter.executor.sender._message_delivery_state", side_effect=["missing", "delivered", "delivered", "delivered"]), \
              patch("bosshunter.executor.sender.click_at", return_value=True), \
              patch("bosshunter.executor.sender.close_tab") as close_tab, \
              patch("bosshunter.executor.sender._sleep_or_stop", return_value=False):

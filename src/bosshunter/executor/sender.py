@@ -3,10 +3,20 @@
 import time
 import json
 from threading import Event
+from urllib.parse import urljoin
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
-from bosshunter.browser import new_tab, close_tab, evaluate, click_at, type_text
+from bosshunter.browser import (
+    new_tab,
+    close_tab,
+    evaluate,
+    click_at,
+    type_text,
+    press_key,
+    navigate,
+    get_page_targets,
+)
 from bosshunter.db import get_db, get_jobs_ready_to_send, update_job_status, add_history, add_risk_event
 from bosshunter.throttle import RequestThrottle, SendWindowChecker, ProgressiveBackoff, should_take_day_off
 
@@ -38,7 +48,24 @@ CHAT_BUTTON_SCRIPT_FOR_TESTS = """
     const candidates = selectors.flatMap((selector, priority) =>
         Array.from(document.querySelectorAll(selector)).map((el) => ({el, selector, priority}))
     );
-    const isVisible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+    const elementState = (el) => {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        const visible = !!(
+            rect.width && rect.height &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            style.pointerEvents !== 'none'
+        );
+        const inViewport = visible && rect.bottom > 0 && rect.right > 0 &&
+            rect.top < innerHeight && rect.left < innerWidth;
+        const x = Math.min(Math.max(rect.x + rect.width / 2, 0), innerWidth - 1);
+        const y = Math.min(Math.max(rect.y + rect.height / 2, 0), innerHeight - 1);
+        const top = inViewport ? document.elementFromPoint(x, y) : null;
+        const topmost = !!(top && (top === el || el.contains(top)));
+        return {rect, visible, inViewport, topmost};
+    };
+    const isVisible = (el) => elementState(el).visible;
     const score = (item) => {
         const el = item.el;
         const text = (el.innerText || el.textContent || '').trim();
@@ -48,6 +75,9 @@ CHAT_BUTTON_SCRIPT_FOR_TESTS = """
         const tagName = String(el.tagName || '').toLowerCase();
         let value = 0;
         if (isVisible(el)) value += 1000;
+        const state = elementState(el);
+        if (state.inViewport) value += 500;
+        if (state.topmost) value += 300;
         if (tagName === 'a') value += 200;
         if (redirectUrl.includes('/web/geek/chat')) value += 300;
         if (dataUrl.includes('/friend/add')) value += 250;
@@ -88,7 +118,9 @@ CHAT_BUTTON_SCRIPT_FOR_TESTS = """
                 tagName: el.tagName,
                 redirectUrl: el.getAttribute('redirect-url'),
                 dataUrl: el.getAttribute('data-url'),
-                visible: isVisible(el)
+                visible: isVisible(el),
+                inViewport: elementState(el).inViewport,
+                topmost: elementState(el).topmost
             };
         })
     });
@@ -104,7 +136,9 @@ CHAT_BUTTON_SCRIPT_FOR_TESTS = """
         tagName: btn.tagName,
         redirectUrl: btn.getAttribute('redirect-url'),
         dataUrl: btn.getAttribute('data-url'),
-        visible: isVisible(btn)
+        visible: isVisible(btn),
+        inViewport: elementState(btn).inViewport,
+        topmost: elementState(btn).topmost
     });
 })()
 """
@@ -135,12 +169,36 @@ def _sleep_or_stop(seconds: float, stop_event) -> bool:
 def _detect_greet_popup(target_id: str) -> dict:
     detect_popup_js = """
     (() => {
-        const popup = document.querySelector('.greet-boss-pop, .greet-pop, .dialog-wrap');
-        const visible = popup && !!(popup.offsetWidth || popup.offsetHeight || popup.getClientRects().length);
-        return JSON.stringify({success: true, popup: !!visible});
+        const visible = (element) => element && !!(
+            element.offsetWidth || element.offsetHeight || element.getClientRects().length
+        );
+        const startChat = Array.from(document.querySelectorAll('.dialog-wrap.startchat-dialog'))
+            .find((element) => visible(element) && element.querySelector('textarea.input-area'));
+        if (startChat) {
+            return JSON.stringify({success: true, popup: true, kind: 'startchat_dialog'});
+        }
+
+        const preset = Array.from(document.querySelectorAll('.greet-boss-pop, .greet-pop, .dialog-wrap'))
+            .find((element) => {
+                if (!visible(element)) return false;
+                const text = (element.innerText || element.textContent || '').trim();
+                return /预设招呼语|默认招呼语|自动招呼语|打招呼语/.test(text);
+            });
+        if (preset) {
+            return JSON.stringify({success: true, popup: true, kind: 'preset_greeting'});
+        }
+        return JSON.stringify({success: true, popup: false, kind: null});
     })()
     """
     return _parse_js_result(evaluate(target_id, detect_popup_js))
+
+
+def _is_preset_greeting_popup(state: dict) -> bool:
+    """Keep legacy mocked responses safe while distinguishing BOSS's composer."""
+    if not state.get("popup"):
+        return False
+    kind = state.get("kind")
+    return kind in {None, "preset_greeting"}
 
 
 def _preset_greeting_error() -> dict:
@@ -152,7 +210,7 @@ def _preset_greeting_error() -> dict:
     }
 
 
-def _message_visible(target_id: str, greeting: str) -> bool:
+def _message_delivery_state(target_id: str, greeting: str) -> str:
     greeting_escaped = json.dumps(greeting, ensure_ascii=False)
     result = _parse_js_result(evaluate(target_id, f"""
     (() => {{
@@ -162,45 +220,74 @@ def _message_visible(target_id: str, greeting: str) -> bool:
             '.chat-record .message-item.item-myself, .chat-record .item-myself, '
             + '.chat-record .message-item.item-self, .chat-record [class*="item-my"]'
         ));
-        const ownMatch = ownMessages.some((node) => normalize(node.innerText || node.textContent).includes(expected));
+        const ownNodes = ownMessages.filter((node) => normalize(node.innerText || node.textContent).includes(expected));
         const messageList = document.querySelector('.chat-record');
         const vue = messageList && messageList.__vue__;
         const records = vue && Array.isArray(vue.list$) ? vue.list$ : [];
-        const vueMatch = records.some((message) => {{
+        const matchingRecords = records.filter((message) => {{
             if (!message || !message.isSelf) return false;
             const text = message.text || message.lastText || message.content || '';
             return normalize(text).includes(expected);
         }});
-        return JSON.stringify({{success: true, visible: ownMatch || vueMatch}});
+        if (!ownNodes.length && !matchingRecords.length) return JSON.stringify({{success: true, state: 'missing'}});
+        const domStates = ownNodes.map((node) => {{
+            const statusNode = node.querySelector('.message-status');
+            const statusClass = statusNode ? String(statusNode.className || '') : '';
+            if (statusClass.includes('status-error')) return 'failed';
+            if (statusClass.includes('status-loading')) return 'pending';
+            return 'delivered';
+        }});
+        const recordStates = matchingRecords.map((record) => {{
+            const status = Number(record.status);
+            if (status === 4) return 'failed';
+            if (status === 0) return 'pending';
+            return 'delivered';
+        }});
+        const states = [...domStates, ...recordStates];
+        const delivered = states.includes('delivered');
+        const pending = states.includes('pending');
+        return JSON.stringify({{
+            success: true,
+            state: delivered ? 'delivered' : pending ? 'pending' : 'failed'
+        }});
     }})()
     """))
-    return bool(result.get("success") and result.get("visible"))
+    if not result.get("success"):
+        return "missing"
+    return str(result.get("state") or "missing")
+
+
+def _message_visible(target_id: str, greeting: str) -> bool:
+    return _message_delivery_state(target_id, greeting) == "delivered"
 
 
 def _fill_chat_input(target_id: str, greeting: str) -> dict:
     greeting_escaped = json.dumps(greeting, ensure_ascii=False)
-    prepared = _parse_js_result(evaluate(target_id, """
+    input_state = _parse_js_result(evaluate(target_id, """
     (() => {
         const input = document.querySelector('#chat-input');
         if (!input) return JSON.stringify({success: false, error: 'no_chat_input'});
-
-        input.focus();
-        document.execCommand('selectAll', false, null);
-        document.execCommand('delete', false, null);
-        input.textContent = '';
-        input.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'deleteContentBackward'}));
         return JSON.stringify({success: true});
     })()
     """))
-    if not prepared.get("success"):
-        return prepared
+    if not input_state.get("success"):
+        return input_state
 
-    # CDP Input.insertText produces browser-level input events and keeps the
-    # BOSS Vue editor's internal state in sync with what is visibly rendered.
-    if not type_text(target_id, greeting):
+    # Keep the complete input path at the browser level. Direct DOM mutation
+    # renders the text but does not reproduce the editor state created by a
+    # real user typing into BOSS.
+    if not click_at(target_id, "#chat-input"):
+        return {"success": False, "error": "chat_input_focus_failed"}
+    if not press_key(target_id, "Control+A") or not press_key(target_id, "Backspace"):
+        return {"success": False, "error": "chat_input_clear_failed"}
+
+    # Type incrementally so BOSS observes the same sequence of editor updates
+    # as it does during manual input instead of one instantaneous insertion.
+    if not type_text(target_id, greeting, human=True):
         return {"success": False, "error": "trusted_input_failed"}
 
-    return _parse_js_result(evaluate(target_id, f"""
+    def inspect_input() -> dict:
+        return _parse_js_result(evaluate(target_id, f"""
     (() => {{
         const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
         const greeting = {greeting_escaped};
@@ -218,19 +305,67 @@ def _fill_chat_input(target_id: str, greeting: str) -> dict:
     }})()
     """))
 
+    result = inspect_input()
+    if result.get("success") and result.get("disabled"):
+        # Some BOSS editor builds render Input.insertText but do not enable the
+        # send button until they observe a keyboard edit. Add and remove one
+        # trailing space so the visible greeting remains unchanged.
+        if type_text(target_id, " ") and press_key(target_id, "Backspace"):
+            result = inspect_input()
+    return result
 
-def _wait_for_chat_page(target_id: str, stop_event, attempts: int = 20) -> dict:
+
+def _chat_target_matches_job(target_id: str, job_id: str) -> bool:
+    job_id_escaped = json.dumps(str(job_id), ensure_ascii=False)
+    result = _parse_js_result(evaluate(target_id, f"""
+    (() => {{
+        const jobId = {job_id_escaped};
+        const html = document.documentElement ? document.documentElement.outerHTML : '';
+        const resources = performance.getEntriesByType('resource').map((entry) => entry.name || '');
+        const matches = location.href.includes(jobId) || html.includes(jobId) ||
+            resources.some((url) => url.includes(jobId));
+        return JSON.stringify({{success: true, matches}});
+    }})()
+    """))
+    return bool(result.get("success") and result.get("matches"))
+
+
+def _wait_for_chat_page(
+    target_id: str,
+    stop_event,
+    attempts: int = 20,
+    job_id: str | None = None,
+) -> dict:
     for _ in range(attempts):
         if _sleep_or_stop(0.5, stop_event):
             close_tab(target_id)
             return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}
         url_now = evaluate(target_id, "location.pathname")
         if url_now and "/web/geek/chat" in url_now:
-            return {"success": True}
+            return {"success": True, "target_id": target_id}
+        if job_id:
+            for candidate in get_page_targets():
+                candidate_id = str(candidate.get("targetId") or "")
+                candidate_url = str(candidate.get("url") or "")
+                if (
+                    candidate_id
+                    and candidate_id != target_id
+                    and "/web/geek/chat" in candidate_url
+                    and _chat_target_matches_job(candidate_id, job_id)
+                ):
+                    return {"success": True, "target_id": candidate_id, "opened_new_tab": True}
     return {"success": False, "error": "chat_navigation_timeout"}
 
 
-def _click_chat_button(target_id: str, stop_event, attempts: int = 6) -> dict:
+def _navigate_to_chat_redirect(target_id: str, click_result: dict) -> bool:
+    """Use the chat URL exposed by the clicked BOSS button as a fallback."""
+    redirect_url = str(click_result.get("redirectUrl") or "").strip()
+    if not redirect_url.startswith("/web/geek/chat"):
+        return False
+    return navigate(target_id, urljoin("https://www.zhipin.com", redirect_url))
+
+
+def _click_chat_button(target_id: str, stop_event, attempts: int = 30) -> dict:
     click_chat_js = CHAT_BUTTON_SCRIPT_FOR_TESTS
 
     last_result: dict = {"success": False, "error": "no_chat_button"}
@@ -245,8 +380,11 @@ def _click_chat_button(target_id: str, stop_event, attempts: int = 6) -> dict:
                 return last_result
             last_result = {"success": False, "error": "chat_button_click_failed"}
             return last_result
-        if last_result.get("error") != "no_chat_button":
-            return last_result
+        # BOSS job detail is a client-rendered page. During its second-stage
+        # navigation Runtime.evaluate can briefly return Uncaught/no_response
+        # even though the communication button appears a few seconds later.
+        # Treat all read failures here as transient and use the full bounded
+        # retry window instead of misclassifying them as a missing button.
         if attempt < attempts - 1 and _sleep_or_stop(1, stop_event):
             return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}
 
@@ -334,7 +472,7 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
         close_tab(target_id)
         return page_check, None
 
-    chat_button_attempts = int(throttle_config.get("_chat_button_attempts", 6))
+    chat_button_attempts = int(throttle_config.get("_chat_button_attempts", 30))
     result1a = _click_chat_button(target_id, stop_event, chat_button_attempts)
     if not result1a.get("success"):
         close_tab(target_id)
@@ -345,13 +483,26 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
         return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
 
     popup_state = _detect_greet_popup(target_id)
-    if popup_state.get("popup"):
+    if _is_preset_greeting_popup(popup_state):
         return _preset_greeting_error(), target_id
 
     navigation_attempts = int(throttle_config.get("_chat_navigation_attempts", 20))
-    chat_ready = _wait_for_chat_page(target_id, stop_event, navigation_attempts)
+    if popup_state.get("kind") == "startchat_dialog":
+        _navigate_to_chat_redirect(target_id, result1a)
+    chat_ready = _wait_for_chat_page(target_id, stop_event, navigation_attempts, job["id"])
+    if chat_ready.get("success"):
+        next_target_id = str(chat_ready.get("target_id") or target_id)
+        if next_target_id != target_id:
+            close_tab(target_id)
+            target_id = next_target_id
     if chat_ready.get("error") == "stopped":
         return chat_ready, None
+    if not chat_ready.get("success") and _navigate_to_chat_redirect(target_id, result1a):
+        chat_ready = _wait_for_chat_page(target_id, stop_event, navigation_attempts, job["id"])
+        if chat_ready.get("success"):
+            target_id = str(chat_ready.get("target_id") or target_id)
+        if chat_ready.get("error") == "stopped":
+            return chat_ready, None
     if not chat_ready.get("success"):
         console.print("[yellow]    ! 沟通按钮未跳转聊天页，尝试真实点击兜底[/yellow]")
         if click_at(target_id, CHAT_BUTTON_SELECTOR):
@@ -359,9 +510,13 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
                 close_tab(target_id)
                 return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
             popup_state = _detect_greet_popup(target_id)
-            if popup_state.get("popup"):
+            if _is_preset_greeting_popup(popup_state):
                 return _preset_greeting_error(), target_id
-            chat_ready = _wait_for_chat_page(target_id, stop_event, navigation_attempts)
+            if popup_state.get("kind") == "startchat_dialog":
+                _navigate_to_chat_redirect(target_id, result1a)
+            chat_ready = _wait_for_chat_page(target_id, stop_event, navigation_attempts, job["id"])
+            if chat_ready.get("success"):
+                target_id = str(chat_ready.get("target_id") or target_id)
             if chat_ready.get("error") == "stopped":
                 return chat_ready, None
 
@@ -373,10 +528,18 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
             "skip_backoff": True,
         }, target_id
 
-    # Avoid duplicate messages if a previous click succeeded but the local task timed out.
-    if _message_visible(target_id, greeting):
+    # Avoid duplicates and never treat a failed/pending local bubble as sent.
+    existing_state = _message_delivery_state(target_id, greeting)
+    if existing_state == "delivered":
         close_tab(target_id)
         return {"success": True, "already_present": True}, None
+    if existing_state in {"pending", "failed"}:
+        return {
+            "success": False,
+            "error": f"existing_message_{existing_state}",
+            "history_detail": f"Existing BOSS message bubble is {existing_state}; manual review required",
+            "skip_backoff": True,
+        }, target_id
 
     input_result = _fill_chat_input(target_id, greeting)
     if not input_result.get("success"):
@@ -399,13 +562,21 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
         if _sleep_or_stop(0.5, stop_event):
             close_tab(target_id)
             return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
-        if _message_visible(target_id, greeting):
+        delivery_state = _message_delivery_state(target_id, greeting)
+        if delivery_state == "failed":
+            return {
+                "success": False,
+                "error": "send_rejected_after_click",
+                "history_detail": "BOSS marked the message with status-error; server delivery was not confirmed",
+                "skip_backoff": True,
+            }, target_id
+        if delivery_state == "delivered":
             # BOSS first renders an optimistic local bubble. Keep the tab open
             # long enough to ensure the server does not reject and remove it.
             if _sleep_or_stop(5, stop_event):
                 close_tab(target_id)
                 return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
-            if not _message_visible(target_id, greeting):
+            if _message_delivery_state(target_id, greeting) != "delivered":
                 return {
                     "success": False,
                     "error": "send_rejected_after_click",
@@ -415,7 +586,7 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
             if _sleep_or_stop(2, stop_event):
                 close_tab(target_id)
                 return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
-            if _message_visible(target_id, greeting):
+            if _message_delivery_state(target_id, greeting) == "delivered":
                 close_tab(target_id)
                 return {"success": True, "verified": True}, None
             return {
