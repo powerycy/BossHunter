@@ -72,11 +72,19 @@ def resolve_anthropic_model(model: str, config: dict) -> str:
     return resolved
 
 
-def call_anthropic_text(prompt: str, config: dict, max_tokens: int) -> str | None:
+def call_anthropic_text(
+    prompt: str,
+    config: dict,
+    max_tokens: int,
+    *,
+    timeout: float | None = None,
+    disable_thinking: bool = False,
+    enable_thinking: bool = False,
+) -> str | None:
     """Call Anthropic-compatible Messages API and return the first text block."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
     if ai_cfg.get("provider") == "openai_compatible":
-        return call_openai_compatible_text(prompt, config, max_tokens)
+        return call_openai_compatible_text(prompt, config, max_tokens, timeout=timeout)
 
     try:
         import anthropic
@@ -88,10 +96,19 @@ def call_anthropic_text(prompt: str, config: dict, max_tokens: int) -> str | Non
 
     model = resolve_anthropic_model(ai_cfg.get("model", "claude-sonnet-4-6"), config)
     client = anthropic.Anthropic(**build_anthropic_client_kwargs(config))
+    request_kwargs = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if timeout is not None:
+        request_kwargs["timeout"] = timeout
+    if enable_thinking:
+        request_kwargs["thinking"] = {"type": "enabled", "budget_tokens": 1024}
+    elif disable_thinking:
+        request_kwargs["thinking"] = {"type": "disabled"}
     response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
+        **request_kwargs,
     )
     for block in response.content:
         text = getattr(block, "text", None)
@@ -100,7 +117,13 @@ def call_anthropic_text(prompt: str, config: dict, max_tokens: int) -> str | Non
     return None
 
 
-def call_openai_compatible_text(prompt: str, config: dict, max_tokens: int) -> str | None:
+def call_openai_compatible_text(
+    prompt: str,
+    config: dict,
+    max_tokens: int,
+    *,
+    timeout: float | None = None,
+) -> str | None:
     """Call an OpenAI-compatible chat completions endpoint."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
     api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or ai_cfg.get("api_key")
@@ -119,7 +142,7 @@ def call_openai_compatible_text(prompt: str, config: dict, max_tokens: int) -> s
                 "max_tokens": max_tokens,
                 "temperature": 0.2,
             },
-            timeout=60,
+            timeout=timeout or 60,
         )
         response.raise_for_status()
         choices = response.json().get("choices", [])

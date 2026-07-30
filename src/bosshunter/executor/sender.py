@@ -6,7 +6,7 @@ from threading import Event
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
-from bosshunter.browser import new_tab, close_tab, evaluate, click_at
+from bosshunter.browser import new_tab, close_tab, evaluate, click_at, type_text
 from bosshunter.db import get_db, get_jobs_ready_to_send, update_job_status, add_history, add_risk_event
 from bosshunter.throttle import RequestThrottle, SendWindowChecker, ProgressiveBackoff, should_take_day_off
 
@@ -93,9 +93,11 @@ CHAT_BUTTON_SCRIPT_FOR_TESTS = """
         })
     });
     btn.scrollIntoView({block: 'center', inline: 'center'});
-    btn.click();
+    const rect = btn.getBoundingClientRect();
     return JSON.stringify({
         success: true,
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
         button_text: (btn.innerText || btn.textContent || '').trim(),
         ka: btn.getAttribute('ka'),
         className: String(btn.className || ''),
@@ -130,18 +132,91 @@ def _sleep_or_stop(seconds: float, stop_event) -> bool:
     return False
 
 
-def _confirm_greet_popup(target_id: str) -> dict:
-    click_confirm_js = """
+def _detect_greet_popup(target_id: str) -> dict:
+    detect_popup_js = """
     (() => {
         const popup = document.querySelector('.greet-boss-pop, .greet-pop, .dialog-wrap');
-        if (popup) {
-            const confirmBtn = popup.querySelector('[ka="dialog_confirm"], .btn-sure');
-            if (confirmBtn) { confirmBtn.click(); return JSON.stringify({success: true, action: 'confirmed'}); }
-        }
-        return JSON.stringify({success: true, action: 'no_popup'});
+        const visible = popup && !!(popup.offsetWidth || popup.offsetHeight || popup.getClientRects().length);
+        return JSON.stringify({success: true, popup: !!visible});
     })()
     """
-    return _parse_js_result(evaluate(target_id, click_confirm_js))
+    return _parse_js_result(evaluate(target_id, detect_popup_js))
+
+
+def _preset_greeting_error() -> dict:
+    return {
+        "success": False,
+        "error": "preset_greeting_enabled",
+        "history_detail": "检测到 BOSS 预设招呼语弹窗，请关闭平台自动招呼语后重试",
+        "skip_backoff": True,
+    }
+
+
+def _message_visible(target_id: str, greeting: str) -> bool:
+    greeting_escaped = json.dumps(greeting, ensure_ascii=False)
+    result = _parse_js_result(evaluate(target_id, f"""
+    (() => {{
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const expected = normalize({greeting_escaped});
+        const ownMessages = Array.from(document.querySelectorAll(
+            '.chat-record .message-item.item-myself, .chat-record .item-myself, '
+            + '.chat-record .message-item.item-self, .chat-record [class*="item-my"]'
+        ));
+        const ownMatch = ownMessages.some((node) => normalize(node.innerText || node.textContent).includes(expected));
+        const messageList = document.querySelector('.chat-record');
+        const vue = messageList && messageList.__vue__;
+        const records = vue && Array.isArray(vue.list$) ? vue.list$ : [];
+        const vueMatch = records.some((message) => {{
+            if (!message || !message.isSelf) return false;
+            const text = message.text || message.lastText || message.content || '';
+            return normalize(text).includes(expected);
+        }});
+        return JSON.stringify({{success: true, visible: ownMatch || vueMatch}});
+    }})()
+    """))
+    return bool(result.get("success") and result.get("visible"))
+
+
+def _fill_chat_input(target_id: str, greeting: str) -> dict:
+    greeting_escaped = json.dumps(greeting, ensure_ascii=False)
+    prepared = _parse_js_result(evaluate(target_id, """
+    (() => {
+        const input = document.querySelector('#chat-input');
+        if (!input) return JSON.stringify({success: false, error: 'no_chat_input'});
+
+        input.focus();
+        document.execCommand('selectAll', false, null);
+        document.execCommand('delete', false, null);
+        input.textContent = '';
+        input.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'deleteContentBackward'}));
+        return JSON.stringify({success: true});
+    })()
+    """))
+    if not prepared.get("success"):
+        return prepared
+
+    # CDP Input.insertText produces browser-level input events and keeps the
+    # BOSS Vue editor's internal state in sync with what is visibly rendered.
+    if not type_text(target_id, greeting):
+        return {"success": False, "error": "trusted_input_failed"}
+
+    return _parse_js_result(evaluate(target_id, f"""
+    (() => {{
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const greeting = {greeting_escaped};
+        const input = document.querySelector('#chat-input');
+        if (!input) return JSON.stringify({{success: false, error: 'no_chat_input'}});
+        const sendButton = document.querySelector('.btn-send');
+        const disabled = !sendButton || sendButton.disabled || sendButton.classList.contains('disabled');
+        const matches = normalize(input.innerText || input.textContent) === normalize(greeting);
+        return JSON.stringify({{
+            success: matches,
+            error: matches ? null : 'input_not_filled',
+            send_button: !!sendButton,
+            disabled
+        }});
+    }})()
+    """))
 
 
 def _wait_for_chat_page(target_id: str, stop_event, attempts: int = 20) -> dict:
@@ -164,6 +239,11 @@ def _click_chat_button(target_id: str, stop_event, attempts: int = 6) -> dict:
             return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}
         last_result = _parse_js_result(evaluate(target_id, click_chat_js))
         if last_result.get("success"):
+            x = last_result.get("x")
+            y = last_result.get("y")
+            if x is not None and y is not None and click_at(target_id, f"{x},{y}"):
+                return last_result
+            last_result = {"success": False, "error": "chat_button_click_failed"}
             return last_result
         if last_result.get("error") != "no_chat_button":
             return last_result
@@ -264,7 +344,9 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
         close_tab(target_id)
         return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
 
-    _confirm_greet_popup(target_id)
+    popup_state = _detect_greet_popup(target_id)
+    if popup_state.get("popup"):
+        return _preset_greeting_error(), target_id
 
     navigation_attempts = int(throttle_config.get("_chat_navigation_attempts", 20))
     chat_ready = _wait_for_chat_page(target_id, stop_event, navigation_attempts)
@@ -276,7 +358,9 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
             if _sleep_or_stop(1, stop_event):
                 close_tab(target_id)
                 return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
-            _confirm_greet_popup(target_id)
+            popup_state = _detect_greet_popup(target_id)
+            if popup_state.get("popup"):
+                return _preset_greeting_error(), target_id
             chat_ready = _wait_for_chat_page(target_id, stop_event, navigation_attempts)
             if chat_ready.get("error") == "stopped":
                 return chat_ready, None
@@ -289,31 +373,64 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
             "skip_backoff": True,
         }, target_id
 
-    greeting_escaped = json.dumps(greeting)
-    send_msg_js = f"""
-    (() => {{
-        const input = document.querySelector('#chat-input');
-        if (!input) return JSON.stringify({{success: false, error: 'no_chat_input'}});
-
-        let vue = null;
-        let el = input;
-        for (let i = 0; i < 15 && el; i++) {{
-            if (el.__vue__) {{ vue = el.__vue__; break; }}
-            el = el.parentElement;
-        }}
-        if (!vue) return JSON.stringify({{success: false, error: 'no_vue'}});
-
-        input.innerText = {greeting_escaped};
-        vue._data.enableSubmit = true;
-        vue.handleSubmit();
-        return JSON.stringify({{success: true}});
-    }})()
-    """
-    result_data = _parse_js_result(evaluate(target_id, send_msg_js))
-    if result_data.get("success"):
+    # Avoid duplicate messages if a previous click succeeded but the local task timed out.
+    if _message_visible(target_id, greeting):
         close_tab(target_id)
-        return result_data, None
-    return result_data, target_id
+        return {"success": True, "already_present": True}, None
+
+    input_result = _fill_chat_input(target_id, greeting)
+    if not input_result.get("success"):
+        return input_result, target_id
+
+    if _sleep_or_stop(0.5, stop_event):
+        close_tab(target_id)
+        return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
+
+    if not click_at(target_id, '.btn-send:not(.disabled)'):
+        return {
+            "success": False,
+            "error": "send_button_unavailable",
+            "history_detail": "招呼语已填入，但发送按钮不可用，未标记成功",
+            "skip_backoff": True,
+        }, target_id
+
+    verification_attempts = int(throttle_config.get("_send_verification_attempts", 20))
+    for _ in range(max(1, verification_attempts)):
+        if _sleep_or_stop(0.5, stop_event):
+            close_tab(target_id)
+            return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
+        if _message_visible(target_id, greeting):
+            # BOSS first renders an optimistic local bubble. Keep the tab open
+            # long enough to ensure the server does not reject and remove it.
+            if _sleep_or_stop(5, stop_event):
+                close_tab(target_id)
+                return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
+            if not _message_visible(target_id, greeting):
+                return {
+                    "success": False,
+                    "error": "send_rejected_after_click",
+                    "history_detail": "消息曾短暂出现但随后被 BOSS 移除，未标记成功",
+                    "skip_backoff": True,
+                }, target_id
+            if _sleep_or_stop(2, stop_event):
+                close_tab(target_id)
+                return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
+            if _message_visible(target_id, greeting):
+                close_tab(target_id)
+                return {"success": True, "verified": True}, None
+            return {
+                "success": False,
+                "error": "send_rejected_after_click",
+                "history_detail": "消息未能稳定保留在 BOSS 会话中，未标记成功",
+                "skip_backoff": True,
+            }, target_id
+
+    return {
+        "success": False,
+        "error": "send_not_confirmed",
+        "history_detail": "已点击发送，但会话中未出现对应招呼语，未标记成功",
+        "skip_backoff": True,
+    }, target_id
 
 
 def send_greetings(config: dict, force: bool = False) -> int:

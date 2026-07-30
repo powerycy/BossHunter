@@ -69,6 +69,11 @@ DEFAULTS: dict[str, Any] = {
         "model": "claude-sonnet-4-6",
         "greeting_review_threshold": 7.0,
         "greeting_max_iterations": 2,
+        "greeting_thinking_mode": "default",
+        "greeting_max_tokens": 8192,
+        "greeting_review_max_tokens": 4096,
+        "greeting_max_attempts": 2,
+        "greeting_timeout_seconds": 180,
     },
     "monitor": {
         "interval": 30,  # 分钟

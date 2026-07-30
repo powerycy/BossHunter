@@ -194,6 +194,62 @@ class AnthropicCredentialTests(unittest.TestCase):
         self.assertEqual(calls["message"]["model"], "Claude Sonnet 4.6")
         self.assertEqual(calls["message"]["max_tokens"], 123)
 
+    def test_call_anthropic_text_can_disable_thinking_and_set_timeout(self):
+        calls = {}
+
+        class Client:
+            def __init__(self, **kwargs):
+                self.messages = self
+
+            def create(self, **kwargs):
+                calls["message"] = kwargs
+                return SimpleNamespace(content=[SimpleNamespace(text="ok")])
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(credentials, "resolve_anthropic_model", lambda model, config: model),
+            patch.object(credentials, "build_anthropic_client_kwargs", lambda config: {"api_key": "key"}),
+            patch.dict("sys.modules", {"anthropic": SimpleNamespace(Anthropic=Client)}),
+        ):
+            result = credentials.call_anthropic_text(
+                "prompt",
+                {"ai": {"model": "deepseek-v4-pro", "api_key": "key"}},
+                1000,
+                timeout=90,
+                disable_thinking=True,
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(calls["message"]["timeout"], 90)
+        self.assertEqual(calls["message"]["thinking"], {"type": "disabled"})
+
+    def test_call_anthropic_text_can_enable_thinking(self):
+        calls = {}
+
+        class Client:
+            def __init__(self, **kwargs):
+                self.messages = self
+
+            def create(self, **kwargs):
+                calls["message"] = kwargs
+                return SimpleNamespace(content=[SimpleNamespace(text="ok")])
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(credentials, "resolve_anthropic_model", lambda model, config: model),
+            patch.object(credentials, "build_anthropic_client_kwargs", lambda config: {"api_key": "key"}),
+            patch.dict("sys.modules", {"anthropic": SimpleNamespace(Anthropic=Client)}),
+        ):
+            credentials.call_anthropic_text(
+                "prompt",
+                {"ai": {"model": "deepseek-v4-pro", "api_key": "key"}},
+                8192,
+                enable_thinking=True,
+            )
+
+        self.assertEqual(calls["message"]["max_tokens"], 8192)
+        self.assertEqual(calls["message"]["thinking"], {"type": "enabled", "budget_tokens": 1024})
+
 
 if __name__ == "__main__":
     unittest.main()

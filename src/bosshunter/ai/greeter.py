@@ -1,13 +1,14 @@
 """AI Greeter - Generate personalized greeting messages with self-review."""
 
 import json
+import os
 from pathlib import Path
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from bosshunter.ai.credentials import call_anthropic_text
-from bosshunter.db import get_db, get_jobs_by_status, update_job_greeting, update_job_status
+from bosshunter.db import add_history, get_db, get_jobs_by_status, update_job_greeting, update_job_status
 
 console = Console()
 
@@ -68,13 +69,34 @@ def _get_resume_summary(config: dict) -> str:
     return content[:1500]
 
 
-def _call_claude(prompt: str, config: dict) -> str | None:
-    """Call Claude API and return response text."""
-    try:
-        return call_anthropic_text(prompt, config, 300)
-    except Exception as e:
-        console.print(f"[red]API 调用失败: {e}[/red]")
-        return None
+def _call_claude(prompt: str, config: dict, *, max_tokens: int | None = None) -> str | None:
+    """Call the configured AI with greeting-specific thinking, timeout, and retry settings."""
+    ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
+    base_url = str(os.environ.get("ANTHROPIC_BASE_URL") or ai_cfg.get("base_url") or "")
+    model = str(ai_cfg.get("model") or "")
+    deepseek_compatible = "deepseek" in f"{base_url} {model}".lower()
+    thinking_mode = str(ai_cfg.get("greeting_thinking_mode", "enabled" if deepseek_compatible else "default")).lower()
+    token_limit = max_tokens if max_tokens is not None else ai_cfg.get("greeting_max_tokens", 8192)
+    token_limit = max(300, min(int(token_limit or 8192), 65536))
+    timeout = max(5, min(float(ai_cfg.get("greeting_timeout_seconds", 180) or 180), 600))
+    max_attempts = max(1, min(int(ai_cfg.get("greeting_max_attempts", 2) or 2), 3))
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = call_anthropic_text(
+                prompt,
+                config,
+                token_limit,
+                timeout=timeout,
+                disable_thinking=thinking_mode == "disabled",
+                enable_thinking=thinking_mode == "enabled",
+            )
+            if response:
+                return response
+            console.print(f"[yellow]AI 未返回招呼语（{attempt}/{max_attempts}）[/yellow]")
+        except Exception as e:
+            console.print(f"[yellow]API 调用失败（{attempt}/{max_attempts}）: {e}[/yellow]")
+    return None
 
 
 def _review_greeting(greeting: str, job: dict, config: dict) -> dict | None:
@@ -84,7 +106,8 @@ def _review_greeting(greeting: str, job: dict, config: dict) -> dict | None:
         company=job["company"],
         greeting=greeting,
     )
-    response = _call_claude(prompt, config)
+    ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
+    response = _call_claude(prompt, config, max_tokens=ai_cfg.get("greeting_review_max_tokens", 4096))
     if not response:
         return None
     try:
@@ -122,7 +145,8 @@ def _generate_greeting_once(job: dict, resume_summary: str, config: dict, critiq
         extra_highlights=extra_highlights,
     )
 
-    greeting = _call_claude(prompt, config)
+    ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
+    greeting = _call_claude(prompt, config, max_tokens=ai_cfg.get("greeting_max_tokens", 8192))
     if not greeting:
         return None
 
@@ -201,6 +225,9 @@ def generate_greetings(config: dict) -> int:
                     best_greeting = greeting
 
             if not best_greeting:
+                update_job_status(db, job["id"], "ready")
+                add_history(db, job["id"], "greeting_failed", "AI 未返回完整招呼语，岗位已恢复为待确认")
+                progress.update(task, advance=1, description=f"生成招呼语失败 ({count}/{len(jobs)})")
                 continue
 
             update_job_greeting(db, job["id"], best_greeting)

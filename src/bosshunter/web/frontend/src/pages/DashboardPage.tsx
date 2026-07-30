@@ -6,12 +6,14 @@ import { parseHistoryDetail } from '@/lib/historyDetail'
 import { getActionLabel, getStatusLabel } from '@/lib/status'
 import { BriefcaseBusiness, Download, ExternalLink, Eye, MessageCircle, Play, RefreshCw, Square } from 'lucide-react'
 
-type WorkbenchMode = 'full' | 'collect' | 'monitor'
+type WorkbenchMode = 'full' | 'collect' | 'rescore' | 'monitor'
 type DashboardView = 'workbench' | 'jobs' | 'monitor'
 
 const TASK_STAGE_LABELS = [
   '开始采集岗位',
   '开始 AI 评分',
+  '开始重新评分',
+  'AI 评分进度',
   '等待前端确认投递',
   '发送失败待处理',
   '执行一轮监测',
@@ -20,6 +22,7 @@ const TASK_STAGE_LABELS = [
 
 function currentTaskStage(logs: string[] = []) {
   for (const log of logs.slice().reverse()) {
+    if (log.includes('AI 评分进度')) return log
     const stage = TASK_STAGE_LABELS.find(label => log.includes(label))
     if (stage) return stage
   }
@@ -59,6 +62,11 @@ const modes: Array<{ mode: WorkbenchMode; title: string; description: string }> 
     mode: 'collect',
     title: '单独采集',
     description: '采集岗位、AI评分、确认投递、发送招呼语；完成后不进入持续监测。',
+  },
+  {
+    mode: 'rescore',
+    title: '重新评分',
+    description: '重试尚未成功评分的岗位，并重新评分之前被 AI 判为低分的岗位；不会发送招呼语。',
   },
   {
     mode: 'monitor',
@@ -294,7 +302,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         </div>
 
 
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           {modes.map(item => {
             const isActive = activeTask?.mode === item.mode
             const disabled = Boolean(activeTask && !isActive)

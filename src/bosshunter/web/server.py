@@ -163,7 +163,7 @@ def _sanitize_config_for_write(data):
 def _preflight_messages(mode: str, config: dict) -> list[str]:
 	"""Return user-actionable blockers before starting a dashboard task."""
 	messages: list[str] = []
-	if mode not in {"full", "collect", "monitor"}:
+	if mode not in {"full", "collect", "rescore", "monitor"}:
 		messages.append(f"不支持的任务模式：{mode}")
 
 	profile = config.get("profile", {})
@@ -174,7 +174,7 @@ def _preflight_messages(mode: str, config: dict) -> list[str]:
 	if mode in {"full", "collect"} and not config.get("search", {}).get("keywords"):
 		messages.append("请先在配置页填写搜索关键词。")
 
-	if mode in {"full", "collect"}:
+	if mode in {"full", "collect", "rescore"}:
 		ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
 		has_ai_key = bool(
 			os.environ.get("ANTHROPIC_API_KEY")
@@ -203,6 +203,12 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 	from bosshunter.ai.scorer import score_jobs
 	from bosshunter.scraper.jobs import scrape_jobs
 
+	config = dict(config)
+	config["_workbench_stop_event"] = task.stop_requested
+	config["_workbench_score_progress"] = lambda state: _log(
+		task,
+		f"AI 评分进度 {state['completed']}/{state['total']}：通过 {state['scored']}，过滤 {state['filtered']}，失败 {state['failed']}",
+	)
 	keywords = config.get("search", {}).get("keywords", [])
 	_log(task, "开始采集岗位")
 	scrape_jobs(config, keywords)
@@ -210,6 +216,19 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 		return
 	_log(task, "开始 AI 评分")
 	score_jobs(config)
+
+
+def _execute_rescore(task: WorkbenchTask, config: dict) -> None:
+	from bosshunter.ai.scorer import score_jobs
+
+	config = dict(config)
+	config["_workbench_stop_event"] = task.stop_requested
+	config["_workbench_score_progress"] = lambda state: _log(
+		task,
+		f"AI 评分进度 {state['completed']}/{state['total']}：通过 {state['scored']}，过滤 {state['filtered']}，失败 {state['failed']}",
+	)
+	_log(task, "开始重新评分")
+	score_jobs(config, rescore_filtered=True)
 
 
 def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
@@ -277,18 +296,30 @@ def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
 
 	config = dict(config)
 	config["_workbench_stop_event"] = task.stop_requested
+	selected_job_ids = [str(job_id) for job_id in config.get("_workbench_job_ids", []) if str(job_id)]
 	if not config.get("_workbench_skip_greeting"):
 		_log(task, "生成招呼语")
-		generate_greetings(config)
+		generated_count = generate_greetings(config)
+		_log(task, f"招呼语生成完成：{generated_count}/{len(selected_job_ids) or generated_count}")
 		if task.stop_requested.is_set():
 			return
+		if selected_job_ids and generated_count != len(selected_job_ids):
+			raise RuntimeError(
+				f"招呼语生成失败：选择 {len(selected_job_ids)} 个岗位，仅成功生成 {generated_count} 条；未发送任何消息"
+			)
 	_log(task, "发送招呼语")
-	send_greetings(config, force=True)
+	sent_count = send_greetings(config, force=True)
+	_log(task, f"招呼语发送完成：{sent_count}/{len(selected_job_ids) or sent_count}")
+	if selected_job_ids and sent_count != len(selected_job_ids):
+		raise RuntimeError(
+			f"招呼语发送未完成：选择 {len(selected_job_ids)} 个岗位，仅成功发送 {sent_count} 条；请查看失败记录后重试"
+		)
 
 
 task_runner._executors.update({
 	"full": _execute_full,
 	"collect": _execute_collect,
+	"rescore": _execute_rescore,
 	"monitor": _execute_monitor,
 	"deliver": _execute_deliver,
 })
