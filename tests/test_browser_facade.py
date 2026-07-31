@@ -31,6 +31,19 @@ class BrowserFacadeTests(unittest.TestCase):
 
     @patch("bosshunter.browser.RuntimeClient")
     @patch("bosshunter.browser.ensure_runtime")
+    def test_new_tab_can_be_opened_in_foreground_for_startup(self, ensure_runtime, client_cls):
+        import bosshunter.browser as browser
+
+        ensure_runtime.return_value = True
+        client_cls.return_value.new_tab.return_value = "target-1"
+
+        result = browser.new_tab("http://127.0.0.1:8686", background=False)
+
+        self.assertEqual(result, "target-1")
+        client_cls.return_value.new_tab.assert_called_once_with("http://127.0.0.1:8686", background=False)
+
+    @patch("bosshunter.browser.RuntimeClient")
+    @patch("bosshunter.browser.ensure_runtime")
     def test_evaluate_returns_runtime_value(self, ensure_runtime, client_cls):
         import bosshunter.browser as browser
 

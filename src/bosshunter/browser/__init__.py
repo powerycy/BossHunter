@@ -50,11 +50,13 @@ def find_boss_tab() -> dict | None:
     return None
 
 
-def new_tab(url: str) -> str | None:
-    """Open a new background tab and return target ID."""
+def new_tab(url: str, background: bool = True) -> str | None:
+    """Open a tab and return its target ID. Existing automation stays background by default."""
     if not _ready():
         return None
-    return _client().new_tab(url)
+    if background:
+        return _client().new_tab(url)
+    return _client().new_tab(url, background=False)
 
 
 def close_tab(target_id: str) -> bool:

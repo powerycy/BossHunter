@@ -103,7 +103,10 @@ class BrowserRuntimeManagerTests(unittest.TestCase):
     @patch("bosshunter.browser.runtime.runtime_targets")
     @patch("bosshunter.browser.runtime.start_runtime")
     @patch("bosshunter.browser.runtime.check_node_available")
-    def test_ensure_runtime_starts_builtin_runtime_when_auto_start_enabled(self, check_node, start_runtime, runtime_targets):
+    @patch("bosshunter.browser.runtime.runtime_health", return_value=None)
+    def test_ensure_runtime_starts_builtin_runtime_when_auto_start_enabled(
+        self, runtime_health, check_node, start_runtime, runtime_targets
+    ):
         from bosshunter.browser.runtime import ensure_runtime
 
         check_node.return_value = {"available": True, "version": "v22.1.0"}
@@ -116,6 +119,7 @@ class BrowserRuntimeManagerTests(unittest.TestCase):
 
     @patch("bosshunter.browser.runtime.time.sleep")
     @patch("bosshunter.browser.runtime._is_port_available")
+    @patch("bosshunter.browser.runtime._chrome_debugging_available", return_value=True)
     @patch("bosshunter.browser.runtime.runtime_health")
     @patch("bosshunter.browser.runtime.runtime_targets")
     @patch("bosshunter.browser.runtime.start_runtime")
@@ -126,6 +130,7 @@ class BrowserRuntimeManagerTests(unittest.TestCase):
         start_runtime,
         runtime_targets,
         runtime_health,
+        chrome_debugging_available,
         is_port_available,
         sleep,
     ):
@@ -145,6 +150,61 @@ class BrowserRuntimeManagerTests(unittest.TestCase):
         self.assertEqual(config["browser"]["proxy_port"], 3457)
         self.assertEqual(start_runtime.call_args.args[0]["proxy_port"], 3457)
         self.assertEqual(get_runtime_url(), "http://127.0.0.1:3457")
+
+    @patch("bosshunter.browser.runtime.time.sleep")
+    @patch("bosshunter.browser.runtime._is_port_available")
+    @patch("bosshunter.browser.runtime._chrome_debugging_available", return_value=True)
+    @patch("bosshunter.browser.runtime.runtime_health")
+    @patch("bosshunter.browser.runtime.runtime_targets")
+    @patch("bosshunter.browser.runtime.start_runtime")
+    @patch("bosshunter.browser.runtime.check_node_available")
+    def test_ensure_runtime_replaces_stale_disconnected_bosshunter_runtime(
+        self,
+        check_node,
+        start_runtime,
+        runtime_targets,
+        runtime_health,
+        chrome_debugging_available,
+        is_port_available,
+        sleep,
+    ):
+        from bosshunter.browser.runtime import ensure_runtime
+
+        config = {"browser": {"runtime": "builtin", "auto_start_proxy": True, "proxy_host": "127.0.0.1", "proxy_port": 3456}}
+        check_node.return_value = {"available": True, "version": "v22.1.0"}
+        runtime_health.return_value = {"status": "ok", "runtime": "bosshunter", "connected": False}
+        is_port_available.side_effect = lambda host, port: port == 3457
+        runtime_targets.side_effect = lambda browser: [{"targetId": "abc"}] if browser["proxy_port"] == 3457 else None
+
+        self.assertTrue(ensure_runtime(config, wait_seconds=0.01))
+        self.assertEqual(config["browser"]["proxy_port"], 3457)
+        start_runtime.assert_called_once()
+
+    @patch("bosshunter.browser.runtime._find_reusable_runtime_port", return_value=3457)
+    @patch("bosshunter.browser.runtime._chrome_debugging_available", return_value=True)
+    @patch("bosshunter.browser.runtime.runtime_health")
+    @patch("bosshunter.browser.runtime.runtime_targets")
+    @patch("bosshunter.browser.runtime.start_runtime")
+    @patch("bosshunter.browser.runtime.check_node_available")
+    def test_ensure_runtime_reuses_connected_fallback_runtime(
+        self,
+        check_node,
+        start_runtime,
+        runtime_targets,
+        runtime_health,
+        chrome_debugging_available,
+        reusable_port,
+    ):
+        from bosshunter.browser.runtime import ensure_runtime
+
+        config = {"browser": {"runtime": "builtin", "auto_start_proxy": True, "proxy_port": 3456}}
+        check_node.return_value = {"available": True, "version": "v22.1.0"}
+        runtime_health.return_value = {"status": "ok", "runtime": "bosshunter", "connected": False}
+        runtime_targets.side_effect = lambda browser: [{"targetId": "abc"}] if browser["proxy_port"] == 3457 else None
+
+        self.assertTrue(ensure_runtime(config))
+        self.assertEqual(config["browser"]["proxy_port"], 3457)
+        start_runtime.assert_not_called()
 
     @patch("bosshunter.browser.runtime.subprocess.Popen")
     def test_start_runtime_sets_bosshunter_environment(self, popen):
@@ -166,6 +226,20 @@ class BrowserRuntimeSourceTests(unittest.TestCase):
 
         self.assertIn("/json/version", source)
         self.assertIn("webSocketDebuggerUrl", source)
+
+    def test_cdp_proxy_prefers_live_websocket_url_over_stale_active_port_path(self):
+        script = Path(__file__).parents[1] / "src" / "bosshunter" / "browser" / "runtime" / "cdp-proxy.mjs"
+        source = script.read_text(encoding="utf-8")
+
+        self.assertIn("wsPath: version?.webSocketDebuggerUrl ? null : wsPath", source)
+        self.assertIn("wsUrl: version?.webSocketDebuggerUrl || null", source)
+
+    def test_cdp_proxy_accepts_foreground_tab_requests(self):
+        script = Path(__file__).parents[1] / "src" / "bosshunter" / "browser" / "runtime" / "cdp-proxy.mjs"
+        source = script.read_text(encoding="utf-8")
+
+        self.assertIn("const background = q.background !== 'false';", source)
+        self.assertIn("Target.createTarget', { url: targetUrl, background }", source)
 
     def test_cdp_proxy_only_reuses_bosshunter_runtime_on_occupied_port(self):
         script = Path(__file__).parents[1] / "src" / "bosshunter" / "browser" / "runtime" / "cdp-proxy.mjs"

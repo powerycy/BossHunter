@@ -117,6 +117,7 @@ DEFAULTS: dict[str, Any] = {
         "proxy_host": "127.0.0.1",
         "proxy_port": 3456,
         "chrome_ports": [9222, 9229, 9333],
+        "chrome_profile_dir": "./data/chrome-debug-profile",
         "auto_start_proxy": True,
         "enable_port_guard": True,
         "site_patterns": True,

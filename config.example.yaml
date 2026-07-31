@@ -68,6 +68,8 @@ browser:
   proxy_host: "127.0.0.1"
   proxy_port: 3456
   chrome_ports: [9222, 9229, 9333]
+  # `bosshunter start` 使用的独立 Chrome 配置目录，不影响日常 Chrome。
+  chrome_profile_dir: "./data/chrome-debug-profile"
   auto_start_proxy: true
   enable_port_guard: true
   site_patterns: true

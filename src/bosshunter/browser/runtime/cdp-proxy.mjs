@@ -101,7 +101,16 @@ async function discoverChromePort() {
             ? 'Google Chrome Canary'
             : 'Google Chrome';
         console.log(`[BossHunter Browser Runtime] DevToolsActivePort: ${port}${wsPath ? ' with wsPath' : ''}`);
-        return { port, wsPath, product: version?.Browser || null, browserName };
+        // DevToolsActivePort can belong to a previously closed default-profile
+        // Chrome. Prefer the live endpoint returned by this port, otherwise a
+        // stale WebSocket path causes a misleading "connection failed" error.
+        return {
+          port,
+          wsPath: version?.webSocketDebuggerUrl ? null : wsPath,
+          wsUrl: version?.webSocketDebuggerUrl || null,
+          product: version?.Browser || null,
+          browserName,
+        };
       }
     } catch {}
   }
@@ -319,7 +328,8 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, resp.result.targetInfos.filter((target) => target.type === 'page'));
     } else if (pathname === '/new') {
       const targetUrl = q.url || 'about:blank';
-      const resp = await sendCDP('Target.createTarget', { url: targetUrl, background: true });
+      const background = q.background !== 'false';
+      const resp = await sendCDP('Target.createTarget', { url: targetUrl, background });
       const targetId = resp.result.targetId;
       if (targetUrl !== 'about:blank') {
         try {

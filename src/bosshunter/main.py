@@ -1,6 +1,8 @@
 """BossHunter CLI - 主入口"""
 
 import os
+import threading
+import time
 from pathlib import Path
 
 import click
@@ -57,6 +59,80 @@ def _is_first_run(config_path: Path | None = None) -> bool:
 def _prompt_setup(port: int = 8686) -> None:
     """Show first-run setup prompt pointing to Web Dashboard."""
     console.print()
+
+
+def _wait_for_dashboard(port: int, timeout: float = 30) -> bool:
+    """Wait until the local HTTP server accepts requests before opening Chrome."""
+    import httpx
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            response = httpx.get(f"http://127.0.0.1:{port}/api/health", timeout=1, trust_env=False)
+            if response.status_code == 200:
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.2)
+    return False
+
+
+def _open_tab_once(url: str, background: bool = True) -> bool:
+    """Open a tab only when the selected Chrome profile does not already have it.
+
+    Chrome may restore the dedicated profile's last session while also opening the
+    URL supplied at launch. Remove restored duplicates so the user sees one
+    dashboard and one BOSS page only.
+    """
+    from bosshunter.browser import close_tab, get_page_targets, new_tab
+
+    normalized = url.rstrip("/")
+    matches = [
+        target
+        for target in get_page_targets()
+        if str(target.get("url", "")).rstrip("/") == normalized
+    ]
+    if matches:
+        for duplicate in matches[1:]:
+            target_id = duplicate.get("targetId")
+            if target_id:
+                close_tab(target_id)
+        return True
+    return new_tab(url, background=background) is not None
+
+
+def _bootstrap_browser(config: dict, dashboard_url: str, existing_chrome: bool) -> None:
+    """Connect Chrome only after Bottle is listening, preventing failed dashboard tabs."""
+    from bosshunter.browser.launcher import DEFAULT_LOGIN_URL, launch_chrome
+    from bosshunter.browser.runtime import ensure_runtime
+
+    port = int(dashboard_url.rsplit(":", 1)[1])
+    if not _wait_for_dashboard(port):
+        console.print("[red]✗[/red] 工作台未在预期时间内启动，未打开浏览器")
+        return
+
+    if not existing_chrome:
+        # The dashboard is supplied only after its HTTP service is ready, so Chrome
+        # cannot show a transient “connection refused” page.
+        chrome = launch_chrome(config, dashboard_url, login_url="")
+        marker = "[green]✓[/green]" if chrome["ready"] else "[yellow]![/yellow]"
+        console.print(f"{marker} {chrome['message']}")
+        if not chrome["ready"]:
+            return
+
+    if not ensure_runtime(config):
+        console.print("[yellow]![/yellow] 浏览器运行组件未就绪，请在工作台中查看诊断信息")
+        return
+
+    # If the user closed every Chrome window, opening the dashboard in the
+    # foreground recreates a visible browser window. Keep BOSS as the adjacent
+    # background tab so the workbench remains the active page.
+    dashboard_ready = _open_tab_once(dashboard_url, background=False)
+    login_ready = _open_tab_once(DEFAULT_LOGIN_URL, background=True)
+    if dashboard_ready and login_ready:
+        console.print("[green]✓[/green] 浏览器运行组件已就绪，工作台和 BOSS直聘页面已打开")
+    else:
+        console.print("[yellow]![/yellow] 浏览器已连接，但页面打开不完整；请在工作台中重新检查")
     console.print("[bold cyan]═══ 欢迎使用 BossHunter ═══[/bold cyan]")
     console.print()
     console.print("[yellow]检测到尚未配置，建议先进入 Web 端完成初始设置：[/yellow]")
@@ -305,6 +381,38 @@ def web(ctx: click.Context, port: int, no_open: bool) -> None:
     _hint_star_support(ctx.obj["base_dir"])
     console.print()
     run_server(host="127.0.0.1", port=port, open_browser=not no_open)
+
+
+@cli.command()
+@click.option("--port", "-p", default=8686, help="工作台端口（默认 8686）")
+@click.option("--existing-chrome", is_flag=True, help="连接用户主动授权的现有 Chrome，而不启动独立配置档")
+@click.pass_context
+def start(ctx: click.Context, port: int, existing_chrome: bool) -> None:
+    """一键启动工作台、调试版 Chrome 和本地 Browser Runtime。"""
+    from bosshunter.web.server import run_server, set_base_dir
+
+    config = ctx.obj["config"]
+    dashboard_url = f"http://127.0.0.1:{port}"
+    console.print("[bold cyan]═══ BossHunter 一键启动 ═══[/bold cyan]")
+
+    if existing_chrome:
+        console.print("[bold]连接已有 Chrome[/bold]")
+        console.print("[dim]BossHunter 不会读取账号、Cookie 或浏览器配置档。[/dim]")
+        console.print("1. 在 Chrome 右上角的配置档菜单中，选择你要使用的账号。")
+        console.print("2. 在该 Chrome 地址栏打开: chrome://inspect/#remote-debugging")
+        console.print("3. 勾选 Allow remote debugging；如出现授权提示，请确认允许。")
+        click.pause("完成后按任意键连接 Chrome")
+    else:
+        console.print("[dim]工作台就绪后，将打开独立的 BossHunter Chrome。[/dim]")
+
+    set_base_dir(ctx.obj["base_dir"])
+    console.print(f"[green]✓[/green] 工作台: {dashboard_url}")
+    threading.Thread(
+        target=_bootstrap_browser,
+        args=(config, dashboard_url, existing_chrome),
+        daemon=True,
+    ).start()
+    run_server(host="127.0.0.1", port=port, open_browser=False)
 
 
 if __name__ == "__main__":

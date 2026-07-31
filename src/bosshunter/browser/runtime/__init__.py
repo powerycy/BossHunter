@@ -115,6 +115,18 @@ def runtime_targets(config: dict[str, Any] | None = None) -> list[dict[str, Any]
     return None
 
 
+def _chrome_debugging_available(browser: dict[str, Any]) -> bool:
+    """Return whether any configured Chrome debugging endpoint is responding."""
+    for port in browser.get("chrome_ports", [9222, 9229, 9333]):
+        try:
+            response = httpx.get(f"http://127.0.0.1:{int(port)}/json/version", timeout=1, trust_env=False)
+            if response.status_code == 200 and response.json().get("webSocketDebuggerUrl"):
+                return True
+        except (httpx.HTTPError, ValueError, TypeError):
+            continue
+    return False
+
+
 def _is_port_available(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -130,6 +142,19 @@ def _find_available_runtime_port(browser: dict[str, Any]) -> int | None:
     start_port = int(browser.get("proxy_port", 3456))
     for port in range(start_port + 1, min(start_port + 100, 65535) + 1):
         if _is_port_available(host, port):
+            return port
+    return None
+
+
+def _find_reusable_runtime_port(browser: dict[str, Any]) -> int | None:
+    """Find an already-connected BossHunter Runtime on a fallback local port."""
+    host = browser.get("proxy_host", "127.0.0.1")
+    start_port = int(browser.get("proxy_port", 3456))
+    for port in range(start_port + 1, min(start_port + 100, 65535) + 1):
+        candidate = dict(browser)
+        candidate["proxy_port"] = port
+        health = runtime_health(candidate)
+        if health and health.get("runtime") == "bosshunter" and health.get("connected"):
             return port
     return None
 
@@ -186,7 +211,20 @@ def ensure_runtime(config: dict[str, Any] | None = None, wait_seconds: float = 1
         return False
 
     health = runtime_health(browser)
-    if health and health.get("runtime") != "bosshunter":
+    stale_bosshunter_runtime = (
+        health
+        and health.get("runtime") == "bosshunter"
+        and not health.get("connected")
+        and _chrome_debugging_available(browser)
+    )
+    if health and (health.get("runtime") != "bosshunter" or stale_bosshunter_runtime):
+        reusable_port = _find_reusable_runtime_port(browser)
+        if reusable_port is not None:
+            _switch_runtime_port(config, browser, reusable_port)
+            if runtime_targets(browser) is not None:
+                set_browser_config(browser)
+                return True
+
         fallback_port = _find_available_runtime_port(browser)
         if fallback_port is None:
             return False
