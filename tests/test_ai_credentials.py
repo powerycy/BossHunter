@@ -194,6 +194,33 @@ class AnthropicCredentialTests(unittest.TestCase):
         self.assertEqual(calls["message"]["model"], "Claude Sonnet 4.6")
         self.assertEqual(calls["message"]["max_tokens"], 123)
 
+    def test_anthropic_text_blocks_are_combined_and_reasoning_is_ignored(self):
+        class Client:
+            def __init__(self, **kwargs):
+                self.messages = self
+
+            def create(self, **kwargs):
+                return SimpleNamespace(
+                    content=[
+                        SimpleNamespace(type="thinking", thinking="internal reasoning"),
+                        SimpleNamespace(type="text", text="第一段"),
+                        SimpleNamespace(type="text", text="第二段"),
+                    ]
+                )
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(credentials, "resolve_anthropic_model", return_value="claude-sonnet-4-6"),
+            patch.dict("sys.modules", {"anthropic": SimpleNamespace(Anthropic=Client)}),
+        ):
+            result = credentials.call_anthropic_text(
+                "prompt",
+                {"ai": {"api_key": "key", "thinking": "off"}},
+                256,
+            )
+
+        self.assertEqual(result, "第一段\n第二段")
+
     def test_anthropic_auto_thinking_retries_without_unsupported_parameter(self):
         requests = []
 
@@ -346,6 +373,71 @@ class AnthropicCredentialTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[0], "https://api.deepseek.com/chat/completions")
         self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer deepseek-secret")
         self.assertEqual(post.call_args.kwargs["json"]["model"], "provider-current-model")
+
+    def test_openai_compatible_accepts_array_content(self):
+        class CompletionResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "choices": [{
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "第一段"},
+                                {"type": "output_text", "text": "第二段"},
+                            ]
+                        }
+                    }]
+                }
+
+        config = {
+            "ai": {
+                "service": "deepseek",
+                "provider": "openai_compatible",
+                "model": "provider-current-model",
+                "thinking": "off",
+            }
+        }
+        with (
+            patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
+            patch("bosshunter.ai.credentials.httpx.post", return_value=CompletionResponse()),
+        ):
+            result = credentials.call_openai_compatible_text("prompt", config, 123)
+
+        self.assertEqual(result, "第一段\n第二段")
+
+    def test_openai_compatible_does_not_use_reasoning_as_final_answer(self):
+        class CompletionResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": None,
+                            "reasoning_content": "这只是模型思考过程",
+                        },
+                    }]
+                }
+
+        config = {
+            "ai": {
+                "service": "deepseek",
+                "provider": "openai_compatible",
+                "model": "provider-current-model",
+                "thinking": "off",
+            }
+        }
+        with (
+            patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
+            patch("bosshunter.ai.credentials.httpx.post", return_value=CompletionResponse()),
+        ):
+            result = credentials.call_openai_compatible_text("prompt", config, 123)
+
+        self.assertIsNone(result)
 
     def test_openai_compatible_auto_thinking_falls_back_only_for_compatibility_error(self):
         class UnsupportedThinkingResponse:

@@ -215,12 +215,13 @@ class BrowserRuntimeSourceTests(unittest.TestCase):
         self.assertIn("health.runtime === RUNTIME_NAME", source)
         self.assertNotIn("data.includes", source)
 
-    def test_cdp_proxy_foregrounds_pages_and_uses_platform_select_all(self):
+    def test_cdp_proxy_supports_background_tabs_and_platform_select_all(self):
         script = Path(__file__).parents[1] / "src" / "bosshunter" / "browser" / "runtime" / "cdp-proxy.mjs"
         source = script.read_text(encoding="utf-8")
 
-        self.assertIn("background: false", source)
-        self.assertIn("'Page.bringToFront'", source)
+        self.assertIn("q.background === '1'", source)
+        self.assertIn("{ url: targetUrl, background }", source)
+        self.assertNotIn("'Page.bringToFront'", source)
         self.assertIn("process.platform === 'darwin'", source)
         self.assertIn("pathname === '/key'", source)
 

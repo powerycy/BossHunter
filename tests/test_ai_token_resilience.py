@@ -245,6 +245,59 @@ class ScorerTokenResilienceTests(unittest.TestCase):
 
 
 class GreeterTokenResilienceTests(unittest.TestCase):
+    def test_greeting_json_wrapper_is_normalized(self):
+        response = '```json\n{"greeting":"您好，我的产品经验与岗位需求比较匹配。"}\n```'
+
+        result = greeter._normalize_greeting_response(response)
+
+        self.assertEqual(result, "您好，我的产品经验与岗位需求比较匹配。")
+
+    def test_embedded_nested_greeting_json_is_normalized(self):
+        response = '以下是结果：{"data":{"message":{"content":"您好，期待和您进一步沟通。"}}}'
+
+        result = greeter._normalize_greeting_response(response)
+
+        self.assertEqual(result, "您好，期待和您进一步沟通。")
+
+    def test_malformed_structured_greeting_is_retried_instead_of_saved(self):
+        self.assertIsNone(greeter._normalize_greeting_response('{"greeting":"未结束'))
+
+    def test_invalid_review_format_keeps_the_generated_greeting(self):
+        db = MagicMock()
+        jobs = [_job("review-format")]
+        logs: list[str] = []
+
+        with (
+            patch("bosshunter.ai.greeter.get_db", return_value=db),
+            patch("bosshunter.ai.greeter.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.greeter._get_resume_summary", return_value="真实简历摘要"),
+            patch(
+                "bosshunter.ai.greeter._call_claude",
+                side_effect=[
+                    "这是一条可用的个性化招呼语。",
+                    "评分很好，但没有按 JSON 返回。",
+                ],
+            ) as call_ai,
+            patch("bosshunter.ai.greeter.update_job_greeting") as update_greeting,
+            patch("bosshunter.ai.greeter.update_job_status") as update_status,
+        ):
+            count = greeter.generate_greetings(
+                {
+                    "ai": {"greeting_max_iterations": 2},
+                    "_workbench_log": logs.append,
+                }
+            )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(call_ai.call_count, 2)
+        update_greeting.assert_called_once_with(
+            db,
+            "review-format",
+            "这是一条可用的个性化招呼语。",
+        )
+        update_status.assert_called_once_with(db, "review-format", "ready")
+        self.assertTrue(any("质量检查返回格式无法识别" in message for message in logs))
+
     def test_empty_greeting_retries_before_leaving_job_pending(self):
         db = MagicMock()
         jobs = [_job("retry-empty")]

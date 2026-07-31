@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import yaml
 
@@ -130,6 +130,65 @@ class ConfigValidationTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         get_db.assert_not_called()
+
+    def test_reply_monitor_opens_chat_in_background(self):
+        from bosshunter.executor import monitor
+
+        tracked_job = {"id": "job-1", "status": "sent"}
+        db = Mock()
+        with patch.object(monitor, "get_db", return_value=db), \
+             patch.object(
+                 monitor,
+                 "get_jobs_by_status",
+                 side_effect=[[tracked_job], [], [], [], []],
+             ), \
+             patch.object(monitor, "new_tab", return_value="chat-target") as new_tab, \
+             patch.object(monitor, "wait_for_load"), \
+             patch.object(monitor, "evaluate", return_value="[]"), \
+             patch.object(monitor, "close_tab"), \
+             patch.object(monitor.time, "sleep"):
+            result = monitor.check_replies(
+                {"monitor": {"chat_url": "https://www.zhipin.com/web/geek/chat"}}
+            )
+
+        self.assertEqual(result, [])
+        new_tab.assert_called_once_with(
+            "https://www.zhipin.com/web/geek/chat",
+            background=True,
+        )
+
+    def test_monitor_job_pages_stay_in_background(self):
+        from bosshunter.executor import monitor
+
+        with patch.object(
+            monitor,
+            "new_tab",
+            side_effect=["job-target-1", "job-target-2"],
+        ) as new_tab, \
+             patch.object(monitor, "wait_for_load"), \
+             patch.object(monitor, "click", return_value=False), \
+             patch.object(monitor, "close_tab"), \
+             patch.object(monitor, "_open_conversation_from_chat_list", return_value=None), \
+             patch.object(monitor.time, "sleep"):
+            result = monitor._open_conversation(
+                {"url": "https://www.zhipin.com/job_detail/job-1.html"},
+                {"monitor": {}},
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(
+            new_tab.call_args_list,
+            [
+                call(
+                    "https://www.zhipin.com/job_detail/job-1.html",
+                    background=True,
+                ),
+                call(
+                    "https://www.zhipin.com/job_detail/job-1.html",
+                    background=True,
+                ),
+            ],
+        )
 
 
 class AiPromptRegressionTests(unittest.TestCase):

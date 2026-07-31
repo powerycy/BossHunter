@@ -591,6 +591,7 @@ class ResumePdfRuntimeTests(unittest.TestCase):
         self.assertTrue(result)
         new_tab.assert_called_once()
         self.assertTrue(new_tab.call_args.args[0].startswith("file:///"))
+        self.assertIs(new_tab.call_args.kwargs["background"], True)
         print_pdf.assert_called_once_with("target-1", output)
         close_tab.assert_called_once_with("target-1")
 

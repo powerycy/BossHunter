@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from bosshunter.ai.credentials import AIRequestError, call_anthropic_text, get_ai_api_key
+from bosshunter.cancellation import run_cancellable
 from bosshunter.db import (
     add_history,
     get_db,
@@ -67,12 +68,15 @@ def _call_claude(prompt: str, config: dict, max_tokens: int | None = None) -> st
         token_limit = max(128, min(int(token_limit or 8192), 65536))
     except (TypeError, ValueError):
         token_limit = 8192
-    return call_anthropic_text(
-        prompt,
+    return run_cancellable(
+        lambda: call_anthropic_text(
+            prompt,
+            config,
+            token_limit,
+            timeout=ai_cfg.get("scoring_timeout_seconds", ai_cfg.get("timeout_seconds", 180)),
+            purpose="scoring",
+        ),
         config,
-        token_limit,
-        timeout=ai_cfg.get("scoring_timeout_seconds", ai_cfg.get("timeout_seconds", 180)),
-        purpose="scoring",
     )
 
 

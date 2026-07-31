@@ -23,6 +23,39 @@ class AIRequestError(RuntimeError):
         self.status_code = status_code
 
 
+def _extract_text_content(value: object) -> str | None:
+    """Normalize provider text blocks without treating reasoning as final output."""
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+
+    if isinstance(value, (list, tuple)):
+        parts = [_extract_text_content(item) for item in value]
+        text = "\n".join(part for part in parts if part)
+        return text.strip() or None
+
+    if isinstance(value, dict):
+        block_type = str(value.get("type") or "").lower()
+        if block_type in {"thinking", "reasoning", "analysis"}:
+            return None
+        for key in ("text", "content", "output_text"):
+            if key in value:
+                text = _extract_text_content(value.get(key))
+                if text:
+                    return text
+        return None
+
+    block_type = str(getattr(value, "type", "") or "").lower()
+    if block_type in {"thinking", "reasoning", "analysis"}:
+        return None
+    for key in ("text", "content", "output_text"):
+        if hasattr(value, key):
+            text = _extract_text_content(getattr(value, key))
+            if text:
+                return text
+    return None
+
+
 def _response_error_detail(response: object | None) -> str:
     if response is None:
         return ""
@@ -434,10 +467,9 @@ def call_anthropic_text(
         if getattr(response, "stop_reason", None) == "max_tokens":
             output_truncated = True
             continue
-        for block in response.content:
-            text = getattr(block, "text", None)
-            if isinstance(text, str) and text.strip():
-                return text.strip()
+        text = _extract_text_content(getattr(response, "content", None))
+        if text:
+            return text
     if output_truncated:
         raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
     if compatibility_error is not None:
@@ -493,16 +525,25 @@ def call_openai_compatible_text(
                 continue
             raise normalize_ai_error(exc, response) from exc
 
-        choices = response.json().get("choices", [])
+        payload_data = response.json()
+        choices = payload_data.get("choices", []) if isinstance(payload_data, dict) else []
         if not choices:
+            if isinstance(payload_data, dict):
+                direct_text = _extract_text_content(payload_data.get("output_text"))
+                if direct_text:
+                    return direct_text
             continue
-        if choices[0].get("finish_reason") in {"length", "max_tokens"}:
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        if choice.get("finish_reason") in {"length", "max_tokens"}:
             output_truncated = True
             continue
-        message = choices[0].get("message", {})
-        content = message.get("content")
-        if isinstance(content, str) and content.strip():
-            return content.strip()
+        message = choice.get("message", {})
+        content = message.get("content") if isinstance(message, dict) else None
+        text = _extract_text_content(content)
+        if not text:
+            text = _extract_text_content(choice.get("text"))
+        if text:
+            return text
     if output_truncated:
         raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
     if compatibility_error is not None:

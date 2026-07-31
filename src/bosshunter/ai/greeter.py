@@ -1,12 +1,14 @@
 """AI Greeter - Generate personalized greeting messages with self-review."""
 
 import json
+import re
 from pathlib import Path
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from bosshunter.ai.credentials import AIRequestError, call_anthropic_text
+from bosshunter.cancellation import OperationCancelled, run_cancellable
 from bosshunter.db import add_history, get_db, get_jobs_by_status, update_job_greeting, update_job_status
 
 console = Console()
@@ -84,15 +86,18 @@ def _call_claude(
         token_limit = max(128, min(int(token_limit or default_tokens), 65536))
     except (TypeError, ValueError):
         token_limit = default_tokens
-    return call_anthropic_text(
-        prompt,
-        config,
-        token_limit,
-        timeout=ai_cfg.get(
-            f"{purpose}_timeout_seconds",
-            ai_cfg.get("greeting_timeout_seconds", ai_cfg.get("timeout_seconds", 180)),
+    return run_cancellable(
+        lambda: call_anthropic_text(
+            prompt,
+            config,
+            token_limit,
+            timeout=ai_cfg.get(
+                f"{purpose}_timeout_seconds",
+                ai_cfg.get("greeting_timeout_seconds", ai_cfg.get("timeout_seconds", 180)),
+            ),
+            purpose=purpose,
         ),
-        purpose=purpose,
+        config,
     )
 
 
@@ -113,6 +118,119 @@ def _notify(config: dict, message: str, *, error: bool = False) -> None:
         callback(message)
 
 
+def _json_greeting_text(value: object) -> str | None:
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, list):
+        for item in value:
+            nested = _json_greeting_text(item)
+            if nested:
+                return nested
+        return None
+    if not isinstance(value, dict):
+        return None
+    for key in ("greeting", "message", "text", "content"):
+        nested = _json_greeting_text(value.get(key))
+        if nested:
+            return nested
+    for key in ("data", "result", "output"):
+        nested = _json_greeting_text(value.get(key))
+        if nested:
+            return nested
+    return None
+
+
+def _normalize_greeting_response(response: str | None) -> str | None:
+    """Accept common provider wrappers while rejecting non-answer payloads."""
+    if not isinstance(response, str):
+        return None
+    greeting = response.strip()
+    if not greeting:
+        return None
+
+    fenced = re.fullmatch(
+        r"```(?:json|text|markdown|md)?\s*(.*?)\s*```",
+        greeting,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if fenced:
+        greeting = fenced.group(1).strip()
+
+    parsed_greeting = None
+    structured_response = greeting.startswith("{") or greeting.startswith("[")
+    if structured_response:
+        try:
+            parsed = json.loads(greeting)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        parsed_greeting = _json_greeting_text(parsed)
+    else:
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(greeting):
+            if char not in "[{":
+                continue
+            try:
+                parsed, _ = decoder.raw_decode(greeting[index:])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            parsed_greeting = _json_greeting_text(parsed)
+            if parsed_greeting:
+                break
+    if structured_response and parsed_greeting is None:
+        return None
+    if parsed_greeting is not None:
+        greeting = parsed_greeting
+
+    greeting = re.sub(
+        r"^\s*(?:最终)?(?:打招呼语|招呼语|消息内容|回复)\s*[:：]\s*",
+        "",
+        greeting,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    greeting = greeting.strip().strip('"\'“”‘’').strip()
+    if not greeting:
+        return None
+    if re.fullmatch(r"(?is)(?:抱歉|无法|不能).{0,80}", greeting):
+        return None
+
+    if len(greeting) > 150:
+        cut = greeting[:150]
+        for sep in ("。", "！", "？", "～", "\n"):
+            idx = cut.rfind(sep)
+            if idx > 50:
+                greeting = cut[:idx + 1]
+                break
+        else:
+            greeting = cut
+    return greeting.strip() or None
+
+
+def _parse_review_response(response: str | None) -> dict | None:
+    if not isinstance(response, str) or not response.strip():
+        return None
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(response):
+        if char != "{":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(response[index:])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        try:
+            avg = float(parsed.get("avg"))
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= avg <= 10:
+            continue
+        parsed["avg"] = avg
+        parsed["critique"] = str(parsed.get("critique") or "")
+        return parsed
+    return None
+
+
 def _review_greeting(
     greeting: str,
     job: dict,
@@ -126,16 +244,7 @@ def _review_greeting(
         greeting=greeting,
     )
     response = _call_claude(prompt, config, max_tokens, purpose="greeting_review")
-    if not response:
-        return None
-    try:
-        start = response.find("{")
-        end = response.rfind("}") + 1
-        if start >= 0 and end > start:
-            return json.loads(response[start:end])
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return None
+    return _parse_review_response(response)
 
 
 def _generate_greeting_once(
@@ -175,24 +284,8 @@ def _generate_greeting_once(
 
     ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
     token_limit = max_tokens if max_tokens is not None else ai_cfg.get("greeting_max_tokens", 8192)
-    greeting = _call_claude(prompt, config, token_limit)
-    if not greeting:
-        return None
-
-    # Clean up
-    greeting = greeting.strip('"\'')
-    # Enforce max length
-    if len(greeting) > 150:
-        cut = greeting[:150]
-        for sep in ("。", "！", "～", "！", "\n"):
-            idx = cut.rfind(sep)
-            if idx > 50:
-                greeting = cut[:idx + 1]
-                break
-        else:
-            greeting = cut
-
-    return greeting
+    response = _call_claude(prompt, config, token_limit)
+    return _normalize_greeting_response(response)
 
 
 def _generate_with_token_retry(
@@ -325,6 +418,7 @@ def generate_greetings(config: dict) -> int:
     failed = 0
     pause_reason = ""
     stop_event = config.get("_workbench_stop_event")
+    cancelled = False
 
     with Progress(
         SpinnerColumn(),
@@ -346,8 +440,17 @@ def generate_greetings(config: dict) -> int:
                 if iteration > 0 and best_greeting:
                     try:
                         review = _review_with_token_retry(best_greeting, job, config)
+                    except OperationCancelled:
+                        cancelled = True
+                        break
                     except AIRequestError as exc:
                         pause_after_current = exc.user_message
+                        break
+                    if review is None:
+                        _notify(
+                            config,
+                            f"{job['company']}｜{job['title']} 的质量检查返回格式无法识别，已保留可用招呼语并继续。",
+                        )
                         break
                     if review and review.get("avg", 10) >= review_threshold:
                         break
@@ -355,6 +458,9 @@ def generate_greetings(config: dict) -> int:
 
                 try:
                     greeting = _generate_with_token_retry(job, resume_summary, config, critique)
+                except OperationCancelled:
+                    cancelled = True
+                    break
                 except AIRequestError as exc:
                     if best_greeting:
                         pause_after_current = exc.user_message
@@ -371,6 +477,8 @@ def generate_greetings(config: dict) -> int:
                 if max_iterations == 0:
                     break
 
+            if cancelled or (stop_event is not None and stop_event.is_set()):
+                break
             if not best_greeting:
                 if not pause_reason and not (stop_event is not None and stop_event.is_set()):
                     add_history(db, job["id"], "greeting_failed", "AI 未返回完整招呼语，岗位保留为待生成")

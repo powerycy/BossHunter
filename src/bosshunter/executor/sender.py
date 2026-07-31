@@ -124,8 +124,10 @@ CHAT_BUTTON_SCRIPT_FOR_TESTS = """
     });
     btn.scrollIntoView({block: 'center', inline: 'center'});
     const rect = btn.getBoundingClientRect();
+    btn.click();
     return JSON.stringify({
         success: true,
+        interaction: 'dom_click',
         x: rect.x + rect.width / 2,
         y: rect.y + rect.height / 2,
         button_text: (btn.innerText || btn.textContent || '').trim(),
@@ -168,17 +170,24 @@ def _detect_greet_popup(target_id: str) -> dict:
         const visible = (element) => element && !!(
             element.offsetWidth || element.offsetHeight || element.getClientRects().length
         );
+        const explicitPreset = Array.from(document.querySelectorAll('.greet-boss-pop, .greet-pop'))
+            .find((element) => visible(element));
+        if (explicitPreset) {
+            return JSON.stringify({success: true, popup: true, kind: 'preset_greeting'});
+        }
+
         const startChat = Array.from(document.querySelectorAll('.dialog-wrap.startchat-dialog'))
             .find((element) => visible(element) && element.querySelector('textarea.input-area'));
         if (startChat) {
             return JSON.stringify({success: true, popup: true, kind: 'startchat_dialog'});
         }
 
-        const preset = Array.from(document.querySelectorAll('.greet-boss-pop, .greet-pop, .dialog-wrap'))
+        const preset = Array.from(document.querySelectorAll('.dialog-wrap'))
             .find((element) => {
                 if (!visible(element)) return false;
                 const text = (element.innerText || element.textContent || '').trim();
-                return /预设招呼语|默认招呼语|自动招呼语|打招呼语/.test(text);
+                const hasEditableGreeting = !!element.querySelector('textarea.input-area');
+                return !hasEditableGreeting && /预设招呼语|默认招呼语|自动招呼语|打招呼语/.test(text);
             });
         if (preset) {
             return JSON.stringify({success: true, popup: true, kind: 'preset_greeting'});
@@ -197,13 +206,170 @@ def _is_preset_greeting_popup(state: dict) -> bool:
     return state.get("kind") in {None, "preset_greeting"}
 
 
-def _preset_greeting_error() -> dict:
-    return {
-        "success": False,
-        "error": "preset_greeting_enabled",
-        "history_detail": "检测到 BOSS 预设招呼语弹窗，请关闭平台自动招呼语后重试",
-        "skip_backoff": True,
-    }
+def _confirm_preset_greeting(target_id: str) -> dict:
+    result = _parse_js_result(evaluate(target_id, """
+    (() => {
+        const visible = (element) => {
+            if (!element) return false;
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return !!(rect.width && rect.height && style.display !== 'none'
+                && style.visibility !== 'hidden' && style.pointerEvents !== 'none');
+        };
+        const dialogs = Array.from(document.querySelectorAll('.greet-boss-pop, .greet-pop, .dialog-wrap'))
+            .filter(visible);
+        const popup = dialogs.find((element) =>
+            element.matches('.greet-boss-pop, .greet-pop')
+            || /预设招呼语|默认招呼语|自动招呼语|打招呼语/.test(
+                (element.innerText || element.textContent || '').trim()
+            )
+        );
+        if (!popup) return JSON.stringify({success: false, error: 'preset_popup_missing'});
+        const buttons = Array.from(popup.querySelectorAll(
+            '[ka="dialog_confirm"], .btn-sure, button, [role="button"]'
+        )).filter((element) => {
+            if (!visible(element) || element.disabled || element.classList.contains('disabled')) return false;
+            const text = (element.innerText || element.textContent || '').trim();
+            return element.matches('[ka="dialog_confirm"], .btn-sure')
+                || /确定|确认|继续|开始沟通|立即沟通/.test(text);
+        });
+        const button = buttons[0];
+        if (!button) return JSON.stringify({success: false, error: 'preset_confirm_missing'});
+        button.scrollIntoView({block: 'center', inline: 'center'});
+        button.click();
+        return JSON.stringify({success: true, action: 'preset_confirmed'});
+    })()
+    """))
+    if not result.get("success"):
+        return {
+            **result,
+            "history_detail": "检测到平台招呼语，但无法确认招呼语弹窗",
+            "skip_backoff": True,
+        }
+    return {"success": True, "action": "preset_confirmed"}
+
+
+def _submit_startchat_greeting(target_id: str, greeting: str) -> dict:
+    greeting_escaped = json.dumps(greeting, ensure_ascii=False)
+    input_state = _parse_js_result(evaluate(target_id, """
+    (() => {
+        const visible = (element) => {
+            if (!element) return false;
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return !!(rect.width && rect.height && style.display !== 'none'
+                && style.visibility !== 'hidden' && style.pointerEvents !== 'none');
+        };
+        const dialog = Array.from(document.querySelectorAll('.dialog-wrap.startchat-dialog'))
+            .find(visible);
+        const input = dialog && Array.from(dialog.querySelectorAll('textarea.input-area, textarea'))
+            .find(visible);
+        if (!input) return JSON.stringify({success: false, error: 'startchat_input_missing'});
+        input.scrollIntoView({block: 'center', inline: 'center'});
+        const rect = input.getBoundingClientRect();
+        return JSON.stringify({
+            success: true,
+            x: rect.x + rect.width / 2,
+            y: rect.y + rect.height / 2
+        });
+    })()
+    """))
+    if not input_state.get("success"):
+        return {
+            **input_state,
+            "history_detail": "首次沟通弹窗中未找到招呼语输入框",
+            "skip_backoff": True,
+        }
+    if not click_at(target_id, f"{input_state['x']},{input_state['y']}"):
+        return {"success": False, "error": "startchat_input_focus_failed", "skip_backoff": True}
+    if not press_key(target_id, "SelectAll") or not press_key(target_id, "Backspace"):
+        return {"success": False, "error": "startchat_input_clear_failed", "skip_backoff": True}
+    if not type_text(target_id, greeting, human=True):
+        return {"success": False, "error": "startchat_trusted_input_failed", "skip_backoff": True}
+
+    submit_state = _parse_js_result(evaluate(target_id, f"""
+    (() => {{
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const visible = (element) => {{
+            if (!element) return false;
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return !!(rect.width && rect.height && style.display !== 'none'
+                && style.visibility !== 'hidden' && style.pointerEvents !== 'none');
+        }};
+        const dialog = Array.from(document.querySelectorAll('.dialog-wrap.startchat-dialog'))
+            .find(visible);
+        const input = dialog && Array.from(dialog.querySelectorAll('textarea.input-area, textarea'))
+            .find(visible);
+        if (!input || normalize(input.value) !== normalize({greeting_escaped})) {{
+            return JSON.stringify({{success: false, error: 'startchat_input_not_filled'}});
+        }}
+        const buttons = Array.from(dialog.querySelectorAll(
+            '.send-message, [ka="dialog_confirm"], .btn-sure, .btn-send, '
+            + '.send-btn, button, [role="button"]'
+        )).filter((element) => {{
+            if (!visible(element) || element.disabled || element.classList.contains('disabled')) return false;
+            const text = (element.innerText || element.textContent || '').trim();
+            return element.matches(
+                '.send-message, [ka="dialog_confirm"], .btn-sure, .btn-send, .send-btn'
+            ) || /发送|确定|开始沟通|立即沟通/.test(text);
+        }});
+        const button = buttons[0];
+        if (!button) return JSON.stringify({{success: false, error: 'startchat_submit_missing'}});
+        button.scrollIntoView({{block: 'center', inline: 'center'}});
+        const rect = button.getBoundingClientRect();
+        return JSON.stringify({{
+            success: true,
+            x: rect.x + rect.width / 2,
+            y: rect.y + rect.height / 2
+        }});
+    }})()
+    """))
+    if not submit_state.get("success"):
+        return {
+            **submit_state,
+            "history_detail": "首次沟通招呼语未被 BOSS 输入组件接受",
+            "skip_backoff": True,
+        }
+    if not click_at(target_id, f"{submit_state['x']},{submit_state['y']}"):
+        return {
+            "success": False,
+            "error": "startchat_submit_click_failed",
+            "history_detail": "首次沟通招呼语已填写，但真实提交点击失败",
+            "skip_backoff": True,
+        }
+    return {"success": True, "action": "first_contact_submitted"}
+
+
+def _navigate_to_chat_redirect(target_id: str, click_result: dict) -> bool:
+    """Reuse BOSS's own chat destination without foregrounding the job tab."""
+    redirect_url = str(click_result.get("redirectUrl") or "").strip()
+    if not redirect_url.startswith("/web/geek/chat"):
+        return False
+    return navigate(target_id, urljoin("https://www.zhipin.com", redirect_url))
+
+
+def _handle_greet_popup(target_id: str, greeting: str, click_result: dict | None = None) -> dict:
+    state = _detect_greet_popup(target_id)
+    if not state.get("success"):
+        return {
+            "success": False,
+            "error": state.get("error", "popup_detection_failed"),
+            "history_detail": "无法识别首次沟通页面状态",
+            "skip_backoff": True,
+        }
+    if _is_preset_greeting_popup(state):
+        return _confirm_preset_greeting(target_id)
+    if state.get("kind") == "startchat_dialog":
+        if click_result and _navigate_to_chat_redirect(target_id, click_result):
+            return {"success": True, "action": "startchat_redirected"}
+        return {
+            "success": False,
+            "error": "startchat_redirect_unavailable",
+            "history_detail": "首次沟通弹窗缺少可验证的聊天地址，已停止发送且未切换前台",
+            "skip_backoff": True,
+        }
+    return {"success": True, "action": "no_popup"}
 
 
 def _chat_target_matches_job(target_id: str, job: dict) -> bool:
@@ -216,16 +382,20 @@ def _chat_target_matches_job(target_id: str, job: dict) -> bool:
         const expectedId = normalize({job_id});
         const expectedCompany = normalize({company});
         const expectedTitle = normalize({title});
-        const pageText = normalize(document.body ? document.body.innerText : '');
-        const html = document.documentElement ? document.documentElement.outerHTML : '';
-        const resources = performance.getEntriesByType('resource').map((entry) => entry.name || '');
+        const activeRoots = Array.from(new Set([
+            document.querySelector('.chat-conversation'),
+            document.querySelector('.friend-content.selected')
+        ].filter(Boolean)));
+        const activeText = normalize(
+            activeRoots.map((element) => element.innerText || element.textContent || '').join(' ')
+        );
+        const activeHtml = activeRoots.map((element) => element.outerHTML || '').join(' ');
         const idMatch = !!expectedId && (
             location.href.includes(expectedId) ||
-            html.includes(expectedId) ||
-            resources.some((url) => url.includes(expectedId))
+            activeHtml.includes(expectedId)
         );
-        const identityMatch = !!expectedCompany && pageText.includes(expectedCompany) &&
-            (!expectedTitle || pageText.includes(expectedTitle));
+        const identityMatch = !!expectedCompany && activeText.includes(expectedCompany) &&
+            (!expectedTitle || activeText.includes(expectedTitle));
         return JSON.stringify({{success: true, matches: idMatch || identityMatch}});
     }})()
     """))
@@ -237,6 +407,7 @@ def _wait_for_chat_page(
     stop_event,
     attempts: int = 20,
     job: dict | None = None,
+    excluded_target_ids: set[str] | None = None,
 ) -> dict:
     for _ in range(attempts):
         if _sleep_or_stop(0.5, stop_event):
@@ -269,25 +440,11 @@ def _click_chat_button(target_id: str, stop_event, attempts: int = 30) -> dict:
             return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}
         last_result = _parse_js_result(evaluate(target_id, click_chat_js))
         if last_result.get("success"):
-            x = last_result.get("x")
-            y = last_result.get("y")
-            # Older runtime/test responses represent a completed DOM click.
-            if x is None or y is None:
-                return last_result
-            if click_at(target_id, f"{x},{y}"):
-                return last_result
-            last_result = {"success": False, "error": "chat_button_click_failed"}
+            return last_result
         if attempt < attempts - 1 and _sleep_or_stop(1, stop_event):
             return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}
 
     return last_result
-
-
-def _navigate_to_chat_redirect(target_id: str, click_result: dict) -> bool:
-    redirect_url = str(click_result.get("redirectUrl") or "").strip()
-    if not redirect_url.startswith("/web/geek/chat"):
-        return False
-    return navigate(target_id, urljoin("https://www.zhipin.com", redirect_url))
 
 
 def _adopt_chat_target(current_target_id: str, chat_ready: dict) -> str:
@@ -342,6 +499,43 @@ def _message_delivery_state(target_id: str, greeting: str) -> str:
     if not result.get("success"):
         return "missing"
     return str(result.get("state") or "missing")
+
+
+def _submit_chat_message_background(target_id: str, greeting: str) -> dict:
+    """Use BossHunter's original Vue submit path without foregrounding Chrome."""
+    greeting_escaped = json.dumps(greeting, ensure_ascii=False)
+    result = _parse_js_result(evaluate(target_id, f"""
+    (() => {{
+        const input = document.querySelector('#chat-input');
+        if (!input) return JSON.stringify({{success: false, error: 'no_chat_input'}});
+
+        let vue = null;
+        let element = input;
+        for (let index = 0; index < 15 && element; index += 1) {{
+            if (element.__vue__) {{
+                vue = element.__vue__;
+                break;
+            }}
+            element = element.parentElement;
+        }}
+        if (!vue || typeof vue.handleSubmit !== 'function') {{
+            return JSON.stringify({{success: false, error: 'legacy_submit_unavailable'}});
+        }}
+
+        input.innerText = {greeting_escaped};
+        input.dispatchEvent(new InputEvent('input', {{
+            bubbles: true,
+            inputType: 'insertText',
+            data: {greeting_escaped}
+        }}));
+        if (vue._data) vue._data.enableSubmit = true;
+        vue.handleSubmit();
+        return JSON.stringify({{success: true, action: 'chat_submitted_background'}});
+    }})()
+    """))
+    if result.get("success"):
+        return {"success": True, "action": "chat_submitted_background"}
+    return result
 
 
 def _fill_chat_input(target_id: str, greeting: str) -> dict:
@@ -433,7 +627,12 @@ JS_SEND_GREETING = """
 
 def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tuple[dict, str | None]:
     stop_event = throttle_config.get("_workbench_stop_event")
-    target_id = new_tab(job["url"])
+    existing_target_ids = {
+        str(target.get("targetId") or "")
+        for target in get_page_targets()
+        if target.get("targetId")
+    }
+    target_id = new_tab(job["url"], background=True)
     if not target_id:
         return {"success": False, "error": "open_page_failed", "history_detail": "无法打开页面", "skip_backoff": True}, None
 
@@ -484,46 +683,98 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
         close_tab(target_id)
         return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
 
-    popup_state = _detect_greet_popup(target_id)
-    if _is_preset_greeting_popup(popup_state):
-        return _preset_greeting_error(), target_id
-    if popup_state.get("kind") == "startchat_dialog":
-        _navigate_to_chat_redirect(target_id, result1a)
+    popup_result = _handle_greet_popup(target_id, greeting, result1a)
+    if not popup_result.get("success"):
+        return popup_result, target_id
+    contact_action = str(popup_result.get("action") or "no_popup")
 
     navigation_attempts = int(throttle_config.get("_chat_navigation_attempts", 20))
-    chat_ready = _wait_for_chat_page(target_id, stop_event, navigation_attempts, job)
+    chat_ready = _wait_for_chat_page(
+        target_id,
+        stop_event,
+        navigation_attempts,
+        job,
+        excluded_target_ids=existing_target_ids,
+    )
     if chat_ready.get("success"):
         target_id = _adopt_chat_target(target_id, chat_ready)
     if chat_ready.get("error") == "stopped":
         return chat_ready, None
-    if not chat_ready.get("success") and _navigate_to_chat_redirect(target_id, result1a):
-        chat_ready = _wait_for_chat_page(target_id, stop_event, navigation_attempts, job)
-        if chat_ready.get("success"):
-            target_id = _adopt_chat_target(target_id, chat_ready)
-        if chat_ready.get("error") == "stopped":
-            return chat_ready, None
-    if not chat_ready.get("success"):
+    if not chat_ready.get("success") and contact_action not in {
+        "first_contact_submitted",
+        "startchat_redirected",
+    }:
         console.print("[yellow]    ! 沟通按钮未跳转聊天页，尝试真实点击兜底[/yellow]")
         if click_at(target_id, CHAT_BUTTON_SELECTOR):
             if _sleep_or_stop(1, stop_event):
                 close_tab(target_id)
                 return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
-            popup_state = _detect_greet_popup(target_id)
-            if _is_preset_greeting_popup(popup_state):
-                return _preset_greeting_error(), target_id
-            if popup_state.get("kind") == "startchat_dialog":
-                _navigate_to_chat_redirect(target_id, result1a)
-            chat_ready = _wait_for_chat_page(target_id, stop_event, navigation_attempts, job)
+            popup_result = _handle_greet_popup(target_id, greeting, result1a)
+            if not popup_result.get("success"):
+                return popup_result, target_id
+            contact_action = str(popup_result.get("action") or "no_popup")
+            chat_ready = _wait_for_chat_page(
+                target_id,
+                stop_event,
+                navigation_attempts,
+                job,
+                excluded_target_ids=existing_target_ids,
+            )
             if chat_ready.get("success"):
                 target_id = _adopt_chat_target(target_id, chat_ready)
             if chat_ready.get("error") == "stopped":
                 return chat_ready, None
 
     if not chat_ready.get("success"):
+        if contact_action == "first_contact_submitted":
+            return {
+                "success": False,
+                "error": "first_contact_navigation_unverified",
+                "history_detail": "首次招呼语已经提交，但未能进入对应会话验证结果；为避免重复发送，请人工检查",
+                "skip_backoff": True,
+            }, target_id
         return {
             "success": False,
             "error": "no_chat_input",
             "history_detail": "发送失败: 未进入具体聊天会话，可能是BOSS继续沟通跳转失败",
+            "skip_backoff": True,
+        }, target_id
+
+    verification_attempts = int(throttle_config.get("_send_verification_attempts", 20))
+    if contact_action == "first_contact_submitted":
+        for _ in range(max(1, verification_attempts)):
+            if _sleep_or_stop(0.5, stop_event):
+                close_tab(target_id)
+                return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
+            delivery_state = _message_delivery_state(target_id, greeting)
+            if delivery_state == "failed":
+                return {
+                    "success": False,
+                    "error": "first_contact_send_rejected",
+                    "history_detail": "首次沟通招呼语被标记为发送失败",
+                    "skip_backoff": True,
+                }, target_id
+            if delivery_state == "delivered":
+                if _sleep_or_stop(2, stop_event):
+                    close_tab(target_id)
+                    return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
+                if _message_delivery_state(target_id, greeting) == "delivered":
+                    close_tab(target_id)
+                    return {
+                        "success": True,
+                        "verified": True,
+                        "first_contact": True,
+                    }, None
+                return {
+                    "success": False,
+                    "error": "first_contact_send_not_stable",
+                    "history_detail": "首次招呼语曾出现但未稳定保留在会话中",
+                    "skip_backoff": True,
+                }, target_id
+        return {
+            "success": False,
+            "error": "first_contact_delivery_unverified",
+            "history_detail": "首次招呼语已提交，但会话中未确认对应消息；为避免重复发送，请人工检查",
             "skip_backoff": True,
         }, target_id
 
@@ -539,25 +790,26 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
             "skip_backoff": True,
         }, target_id
 
-    input_result = _fill_chat_input(target_id, greeting)
-    if not input_result.get("success"):
-        return input_result, target_id
-    if input_result.get("disabled"):
-        return {
-            "success": False,
-            "error": "send_button_unavailable",
-            "history_detail": "招呼语已填入，但发送按钮不可用，未标记成功",
-            "skip_backoff": True,
-        }, target_id
-    if not click_at(target_id, ".btn-send:not(.disabled)"):
-        return {
-            "success": False,
-            "error": "send_button_click_failed",
-            "history_detail": "招呼语已填入，但发送按钮点击失败，未标记成功",
-            "skip_backoff": True,
-        }, target_id
+    submit_result = _submit_chat_message_background(target_id, greeting)
+    if not submit_result.get("success"):
+        input_result = _fill_chat_input(target_id, greeting)
+        if not input_result.get("success"):
+            return input_result, target_id
+        if input_result.get("disabled"):
+            return {
+                "success": False,
+                "error": "send_button_unavailable",
+                "history_detail": "招呼语已填入，但发送按钮不可用，未标记成功",
+                "skip_backoff": True,
+            }, target_id
+        if not click_at(target_id, ".btn-send:not(.disabled)"):
+            return {
+                "success": False,
+                "error": "send_button_click_failed",
+                "history_detail": "招呼语已填入，但发送按钮点击失败，未标记成功",
+                "skip_backoff": True,
+            }, target_id
 
-    verification_attempts = int(throttle_config.get("_send_verification_attempts", 20))
     for _ in range(max(1, verification_attempts)):
         if _sleep_or_stop(0.5, stop_event):
             close_tab(target_id)
@@ -694,7 +946,10 @@ def send_greetings(config: dict, force: bool = False) -> int:
                     break
 
             if not result_data.get("success"):
-                console.print(f"[yellow]    ! 发送失败，保留页面便于排查: {result_data.get('error', 'unknown')}[/yellow]")
+                console.print(f"[yellow]    ! 发送失败，已记录并关闭任务页面: {result_data.get('error', 'unknown')}[/yellow]")
+                if failed_target_id:
+                    close_tab(failed_target_id)
+                    failed_target_id = None
 
             if result_data.get("success"):
                 throttle.mark()

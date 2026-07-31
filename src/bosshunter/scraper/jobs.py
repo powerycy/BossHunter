@@ -193,7 +193,7 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                     search_url += f"&page={page}"
 
                 # Open search page
-                target_id = new_tab(search_url)
+                target_id = new_tab(search_url, background=True)
                 if not target_id:
                     if page == 1:
                         progress.update(task, description=f"[red]✗ 无法打开搜索页: {label}[/red]")
@@ -247,7 +247,7 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                     # Open detail page for full JD
                     throttle.wait()
                     detail_url = f"https://www.zhipin.com{job_url}"
-                    detail_target = new_tab(detail_url)
+                    detail_target = new_tab(detail_url, background=True)
                     if not detail_target:
                         continue
 

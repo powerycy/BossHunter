@@ -50,11 +50,11 @@ def find_boss_tab() -> dict | None:
     return None
 
 
-def new_tab(url: str) -> str | None:
-    """Open a foreground tab and return target ID."""
+def new_tab(url: str, background: bool = False) -> str | None:
+    """Open a tab and return its target ID."""
     if not _ready():
         return None
-    return _client().new_tab(url)
+    return _client().new_tab(url, background=background)
 
 
 def close_tab(target_id: str) -> bool:

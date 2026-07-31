@@ -13,7 +13,7 @@ import yaml
 from bosshunter.db import add_history, get_db, insert_job, update_job_score, update_job_status
 from bosshunter.throttle import SendWindowChecker
 from bosshunter.web import server
-from threading import Event
+from threading import Event, Lock
 
 from bosshunter.web.tasks import TaskAlreadyRunningError, WorkbenchTask, WorkbenchTaskRunner
 
@@ -536,6 +536,109 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(confirmation_event.is_set())
         self.assertEqual(full_task.context["confirmed_job_ids"], ["ready-job"])
         self.assertEqual(json.loads(response_body)["id"], "full-task")
+
+    def test_web_api_deliver_queues_jobs_while_full_task_is_monitoring(self):
+        # Arrange
+        wakeup_event = Event()
+        full_task = WorkbenchTask(id="full-monitoring", mode="full", label="运行全流程")
+        full_task.context.update({
+            "monitoring": True,
+            "monitor_queue_lock": Lock(),
+            "monitor_wakeup_event": wakeup_event,
+            "pending_deliveries": [],
+        })
+        runner = WorkbenchTaskRunner()
+        runner._tasks[full_task.id] = full_task
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("ready-job"))
+                update_job_status(db, "ready-job", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            body = json.dumps({"job_ids": ["ready-job"]}).encode("utf-8")
+            status_headers = {}
+
+            def start_response(status, headers, exc_info=None):
+                status_headers["status"] = status
+                status_headers["headers"] = dict(headers)
+
+            environ = {
+                "REQUEST_METHOD": "POST",
+                "PATH_INFO": "/api/workbench/deliver",
+                "QUERY_STRING": "",
+                "CONTENT_LENGTH": str(len(body)),
+                "CONTENT_TYPE": "application/json",
+                "SERVER_NAME": "127.0.0.1",
+                "SERVER_PORT": "8686",
+                "wsgi.version": (1, 0),
+                "wsgi.url_scheme": "http",
+                "wsgi.input": io.BytesIO(body),
+                "wsgi.errors": io.StringIO(),
+                "wsgi.multithread": False,
+                "wsgi.multiprocess": False,
+                "wsgi.run_once": False,
+            }
+
+            # Act
+            with patch.object(server, "task_runner", runner):
+                response_body = b"".join(
+                    chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+                    for chunk in server.app(environ, start_response)
+                ).decode("utf-8")
+
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                status = verify_db.execute(
+                    "SELECT status FROM jobs WHERE id = ?",
+                    ("ready-job",),
+                ).fetchone()["status"]
+            finally:
+                verify_db.close()
+
+        # Assert
+        self.assertTrue(status_headers["status"].startswith("200"), response_body)
+        self.assertEqual(json.loads(response_body)["id"], "full-monitoring")
+        self.assertEqual(status, "approved")
+        self.assertTrue(wakeup_event.is_set())
+        self.assertEqual(
+            full_task.context["pending_deliveries"],
+            [{"job_ids": ["ready-job"], "direct_send": False}],
+        )
+
+    def test_monitor_loop_processes_queued_delivery_before_next_check(self):
+        # Arrange
+        task = WorkbenchTask(id="monitoring-task", mode="full", label="运行全流程")
+        task.context.update({
+            "monitor_queue_lock": Lock(),
+            "monitor_wakeup_event": Event(),
+            "pending_deliveries": [
+                {"job_ids": ["approved-a", "approved-b"], "direct_send": False}
+            ],
+        })
+
+        def stop_after_monitor(_config):
+            task.stop_requested.set()
+
+        # Act
+        with patch.object(server, "_execute_deliver") as execute_deliver, \
+             patch(
+                 "bosshunter.executor.monitor.monitor_and_send_resumes",
+                 side_effect=stop_after_monitor,
+             ):
+            server._execute_monitor(task, {"monitor": {"interval": 30}})
+
+        # Assert
+        execute_deliver.assert_called_once()
+        deliver_config = execute_deliver.call_args.args[1]
+        self.assertEqual(
+            deliver_config["_workbench_job_ids"],
+            ["approved-a", "approved-b"],
+        )
 
     def test_web_api_deliver_ignores_stale_stopped_full_task_waiting_context(self):
         # Arrange

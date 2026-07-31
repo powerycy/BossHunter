@@ -9,6 +9,7 @@ from rich.console import Console
 
 from bosshunter.ai.credentials import call_anthropic_text
 from bosshunter.browser import close_tab, new_tab, print_pdf
+from bosshunter.cancellation import OperationCancelled, run_cancellable, stop_requested
 from bosshunter.db import get_db
 
 console = Console()
@@ -404,7 +405,12 @@ def _call_claude(prompt: str, config: dict) -> str | None:
     try:
         ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
         max_tokens = int(ai_cfg.get("resume_max_tokens") or 8000)
-        return call_anthropic_text(prompt, config, max_tokens)
+        return run_cancellable(
+            lambda: call_anthropic_text(prompt, config, max_tokens),
+            config,
+        )
+    except OperationCancelled:
+        raise
     except Exception as e:
         _last_resume_api_error = str(e)
         console.print(f"[red]API 调用失败: {e}[/red]")
@@ -476,7 +482,7 @@ def _render_pdf_via_cdp(html_content: str, output_path: Path) -> bool:
 
     target_id = None
     try:
-        target_id = new_tab(file_url)
+        target_id = new_tab(file_url, background=True)
         if not target_id:
             return False
 
@@ -544,7 +550,14 @@ def generate_tailored_resume(job_id: str, config: dict) -> Path | None:
     tailored_md = None
     prompt = base_prompt
     for attempt in range(2):
-        raw_tailored_md = _call_claude(prompt, config)
+        try:
+            raw_tailored_md = _call_claude(prompt, config)
+        except OperationCancelled:
+            db.close()
+            raise
+        if stop_requested(config):
+            db.close()
+            raise OperationCancelled("用户已请求停止")
         if not raw_tailored_md:
             if _last_resume_api_error:
                 return fail(f"AI 服务调用失败：{_last_resume_api_error}")
@@ -596,6 +609,9 @@ def generate_tailored_resume(job_id: str, config: dict) -> Path | None:
 
     if not tailored_md:
         return fail("生成结果未通过校验")
+    if stop_requested(config):
+        db.close()
+        raise OperationCancelled("用户已请求停止")
 
     # Determine output directory
     output_dir = Path(config.get("profile", {}).get("resume_output_dir", "./data/resumes"))

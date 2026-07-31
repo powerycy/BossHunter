@@ -319,7 +319,8 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, resp.result.targetInfos.filter((target) => target.type === 'page'));
     } else if (pathname === '/new') {
       const targetUrl = q.url || 'about:blank';
-      const resp = await sendCDP('Target.createTarget', { url: targetUrl, background: false });
+      const background = q.background === '1' || q.background === 'true';
+      const resp = await sendCDP('Target.createTarget', { url: targetUrl, background });
       const targetId = resp.result.targetId;
       if (targetUrl !== 'about:blank') {
         try {
@@ -377,8 +378,6 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, value || resp.result || {}, value?.error ? 400 : 200);
     } else if (pathname === '/clickAt') {
       const sessionId = await ensureSession(q.target);
-      await sendCDP('Page.bringToFront', {}, sessionId);
-      await new Promise((resolve) => setTimeout(resolve, 120));
       const body = (await readBody(req)).trim();
       if (!body) {
         sendJson(res, { error: 'POST body must be a CSS selector or x,y coordinates' }, 400);
@@ -445,8 +444,6 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, { success: true, files: body.files.length });
     } else if (pathname === '/type') {
       const sessionId = await ensureSession(q.target);
-      await sendCDP('Page.bringToFront', {}, sessionId);
-      await new Promise((resolve) => setTimeout(resolve, 120));
       const text = await readBody(req);
       if (!text) {
         sendJson(res, { error: 'POST body must contain text' }, 400);
@@ -465,7 +462,6 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, { typed: true, length: text.length, human: q.human === '1' });
     } else if (pathname === '/key') {
       const sessionId = await ensureSession(q.target);
-      await sendCDP('Page.bringToFront', {}, sessionId);
       const key = (await readBody(req)).trim();
       if (key === 'SelectAll') {
         const onMac = process.platform === 'darwin';

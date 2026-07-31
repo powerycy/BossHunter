@@ -15,7 +15,20 @@ class BrowserFacadeTests(unittest.TestCase):
 
         self.assertEqual(result, "target-1")
         ensure_runtime.assert_called_once()
-        client_cls.return_value.new_tab.assert_called_once_with("https://example.com")
+        client_cls.return_value.new_tab.assert_called_once_with("https://example.com", background=False)
+
+    @patch("bosshunter.browser.RuntimeClient")
+    @patch("bosshunter.browser.ensure_runtime")
+    def test_new_tab_can_open_in_background(self, ensure_runtime, client_cls):
+        import bosshunter.browser as browser
+
+        ensure_runtime.return_value = True
+        client_cls.return_value.new_tab.return_value = "target-1"
+
+        result = browser.new_tab("https://example.com", background=True)
+
+        self.assertEqual(result, "target-1")
+        client_cls.return_value.new_tab.assert_called_once_with("https://example.com", background=True)
 
     @patch("bosshunter.browser.RuntimeClient")
     @patch("bosshunter.browser.ensure_runtime")

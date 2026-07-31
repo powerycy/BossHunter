@@ -10,7 +10,7 @@ import mimetypes
 import time
 from copy import deepcopy
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 
 from bottle import Bottle, request, response, static_file, abort
 
@@ -242,6 +242,44 @@ def _execute_rescore(task: WorkbenchTask, config: dict) -> None:
 	score_jobs(score_config, rescore_filtered=True)
 
 
+def _queue_monitor_delivery(
+	task: WorkbenchTask,
+	job_ids: list[str],
+	*,
+	direct_send: bool = False,
+) -> dict:
+	"""Queue confirmed jobs on a task that is already in its monitor loop."""
+	queue_lock = task.context.get("monitor_queue_lock")
+	if queue_lock is None:
+		queue_lock = Lock()
+		task.context["monitor_queue_lock"] = queue_lock
+	with queue_lock:
+		pending = task.context.setdefault("pending_deliveries", [])
+		queued_ids = {
+			str(job_id)
+			for batch in pending
+			for job_id in batch.get("job_ids", [])
+		}
+		new_ids = [job_id for job_id in job_ids if job_id not in queued_ids]
+		if new_ids:
+			pending.append({"job_ids": new_ids, "direct_send": direct_send})
+			_log(task, f"监测期间新增 {len(new_ids)} 个确认投递岗位，已加入发送队列")
+	wakeup_event = task.context.get("monitor_wakeup_event")
+	if isinstance(wakeup_event, Event):
+		wakeup_event.set()
+	return task.snapshot()
+
+
+def _take_monitor_deliveries(task: WorkbenchTask) -> list[dict]:
+	queue_lock = task.context.get("monitor_queue_lock")
+	if queue_lock is None:
+		return []
+	with queue_lock:
+		pending = list(task.context.get("pending_deliveries", []))
+		task.context["pending_deliveries"] = []
+	return pending
+
+
 def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
 	from bosshunter.executor.monitor import monitor_and_send_resumes
 
@@ -249,13 +287,31 @@ def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
 	monitor_config["_workbench_stop_event"] = task.stop_requested
 	interval_min = int(config.get("monitor", {}).get("interval", 30) or 30)
 	interval_sec = max(interval_min * 60, 1)
-	while not task.stop_requested.is_set():
-		_log(task, "执行一轮监测")
-		monitor_and_send_resumes(monitor_config)
-		if task.stop_requested.is_set():
-			return
-		_log(task, f"本轮监测完成，{interval_min} 分钟后再次检查")
-		task.stop_requested.wait(interval_sec)
+	queue_lock = task.context.setdefault("monitor_queue_lock", Lock())
+	wakeup_event = task.context.setdefault("monitor_wakeup_event", Event())
+	task.context["monitoring"] = True
+	try:
+		while not task.stop_requested.is_set():
+			for batch in _take_monitor_deliveries(task):
+				deliver_config = dict(config)
+				deliver_config["_workbench_job_ids"] = batch.get("job_ids", [])
+				if batch.get("direct_send"):
+					deliver_config["_workbench_skip_greeting"] = True
+				_log(task, f"处理监测期间新增的 {len(deliver_config['_workbench_job_ids'])} 个投递岗位")
+				_execute_deliver(task, deliver_config)
+				if task.stop_requested.is_set():
+					return
+			_log(task, "执行一轮监测")
+			monitor_and_send_resumes(monitor_config)
+			if task.stop_requested.is_set():
+				return
+			_log(task, f"本轮监测完成，{interval_min} 分钟后再次检查")
+			wakeup_event.wait(interval_sec)
+			wakeup_event.clear()
+	finally:
+		task.context["monitoring"] = False
+		task.context.pop("monitor_wakeup_event", None)
+		task.context.pop("monitor_queue_lock", None)
 
 
 def _execute_full(task: WorkbenchTask, config: dict) -> None:
@@ -546,6 +602,22 @@ def api_workbench_deliver():
 				if isinstance(confirmation_event, Event):
 					confirmation_event.set()
 				return _json_response(waiting_task.snapshot())
+
+		status = task_runner.status()
+		active_task = status.get("active") or {}
+		monitoring_task = task_runner._tasks.get(active_task.get("id"))
+		if (
+			monitoring_task
+			and monitoring_task.status == "running"
+			and monitoring_task.context.get("monitoring")
+		):
+			return _json_response(
+				_queue_monitor_delivery(
+					monitoring_task,
+					job_ids,
+					direct_send=direct_send,
+				)
+			)
 
 		deliver_options = {"_workbench_job_ids": job_ids}
 		if direct_send:
