@@ -184,6 +184,20 @@ class JobSelectionTests(unittest.TestCase):
 
         self.assertEqual([job["id"] for job in jobs], ["scored"])
 
+    def test_pending_confirmation_keeps_approved_jobs_without_greetings_recoverable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = get_db(Path(tmp) / "bosshunter.db")
+            try:
+                insert_job(db, _job("approved"))
+                update_job_score(db, "approved", 88, "good match")
+                update_job_status(db, "approved", "approved")
+
+                jobs = get_jobs_pending_confirmation(db)
+            finally:
+                db.close()
+
+        self.assertEqual([job["id"] for job in jobs], ["approved"])
+
     def test_ready_to_send_requires_a_non_empty_greeting(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")

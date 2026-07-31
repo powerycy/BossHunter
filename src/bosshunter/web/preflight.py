@@ -15,6 +15,7 @@ from bosshunter.ai.credentials import (
 	get_ai_base_url,
 	get_ai_key_source,
 	get_ai_service,
+	get_openai_compatible_model,
 )
 from bosshunter.browser.diagnostics import run_browser_diagnostics
 
@@ -185,13 +186,23 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 			)
 		]
 
+	effective_model = (
+		get_openai_compatible_model(config)
+		if provider == "openai_compatible"
+		else model
+	)
+	model_detail = (
+		f"当前模型：{model}（调用时将使用：{effective_model}）"
+		if effective_model != model
+		else f"当前模型：{model}"
+	)
 	return [
 		_check(
 			"ai_connection",
 			"AI 接口连接",
 			"pass",
 			"AI 接口连接正常",
-			f"已验证凭证和服务地址，当前模型：{model}；Key 来源：{key_source or '未知'}。",
+			f"已验证凭证和服务地址，{model_detail}；Key 来源：{key_source or '未知'}。",
 		)
 	]
 
@@ -347,7 +358,7 @@ def _configuration_checks(mode: str, config: dict) -> list[dict[str, str]]:
 				"简历文件",
 				"error",
 				"尚未配置有效简历",
-				"打开“配置 → 个人信息”，上传 .md 或 .docx 简历。",
+				"打开“配置 → 个人信息”，上传 .md、.docx 或 .pdf 简历。",
 				"config",
 			)
 		)

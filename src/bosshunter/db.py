@@ -131,10 +131,10 @@ def get_jobs_by_status(conn: sqlite3.Connection, status: str) -> list[dict]:
 
 
 def get_jobs_pending_confirmation(conn: sqlite3.Connection) -> list[dict]:
-    """Get scored jobs that still need manual confirmation."""
+    """Get selected jobs that still need a greeting/send task to run."""
     rows = conn.execute("""
         SELECT * FROM jobs
-        WHERE status = 'ready'
+        WHERE status IN ('ready', 'approved')
           AND (greeting IS NULL OR TRIM(greeting) = '')
         ORDER BY score DESC
     """).fetchall()

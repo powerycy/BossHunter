@@ -180,7 +180,7 @@ def _preflight_messages(mode: str, config: dict) -> list[str]:
 	profile = config.get("profile", {})
 	resume_path = profile.get("resume_path", "")
 	if not resume_path or not Path(str(resume_path)).exists():
-		messages.append("请先在配置页上传 .md 或 .docx 简历。")
+		messages.append("请先在配置页上传 .md、.docx 或 .pdf 简历。")
 
 	if mode in {"full", "collect"} and not config.get("search", {}).get("keywords"):
 		messages.append("请先在配置页填写搜索关键词。")
@@ -206,15 +206,20 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 	from bosshunter.ai.scorer import score_jobs
 	from bosshunter.scraper.jobs import scrape_jobs
 
+	config = dict(config)
+	config["_workbench_stop_event"] = task.stop_requested
+	config["_workbench_log"] = lambda message: _log(task, message)
 	keywords = config.get("search", {}).get("keywords", [])
 	_log(task, "开始采集岗位")
-	scrape_jobs(config, keywords)
+	collected = scrape_jobs(config, keywords, stop_event=task.stop_requested)
 	if task.stop_requested.is_set():
 		return
-	_log(task, "开始 AI 评分")
-	score_config = dict(config)
-	score_config["_workbench_log"] = lambda message: _log(task, message)
-	score_jobs(score_config)
+	_log(task, f"采集完成，新增 {collected} 个岗位；开始 AI 评分")
+	scored, filtered = score_jobs(config)
+	if not task.stop_requested.is_set():
+		_log(task, f"AI 评分完成：通过 {scored} 个，过滤 {filtered} 个")
+		for error in config.get("_workbench_errors", [])[:1]:
+			_log(task, error)
 
 
 def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
@@ -255,6 +260,8 @@ def _execute_full(task: WorkbenchTask, config: dict) -> None:
 	confirmation_event = Event()
 	task.context["waiting_confirmation"] = True
 	task.context["confirmation_event"] = confirmation_event
+	if task.context.get("delivery_requested"):
+		confirmation_event.set()
 	_log(task, "等待前端确认投递")
 	while not task.stop_requested.is_set() and not confirmation_event.wait(0.5):
 		pass
@@ -282,14 +289,15 @@ def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
 
 	config = dict(config)
 	config["_workbench_stop_event"] = task.stop_requested
-	config["_workbench_log"] = lambda message: _log(task, message)
 	if not config.get("_workbench_skip_greeting"):
 		_log(task, "生成招呼语")
 		generate_greetings(config)
 		if task.stop_requested.is_set():
 			return
 	_log(task, "发送招呼语")
-	send_greetings(config, force=True)
+	# Sending must honour the user's configured time window.  Collection and
+	# scoring may run at any time, but browser actions on BOSS cannot bypass it.
+	send_greetings(config)
 
 
 task_runner._executors.update({
@@ -495,20 +503,9 @@ def api_workbench_deliver():
 			db.close()
 
 		if not direct_send:
-			status = task_runner.status()
-			active_task = status.get("active") or {}
-			waiting_task = task_runner._tasks.get(active_task.get("id"))
-			if (
-				waiting_task
-				and waiting_task.mode == "full"
-				and waiting_task.status == "running"
-				and waiting_task.context.get("waiting_confirmation")
-			):
-				waiting_task.context["confirmed_job_ids"] = job_ids
-				confirmation_event = waiting_task.context.get("confirmation_event")
-				if isinstance(confirmation_event, Event):
-					confirmation_event.set()
-				return _json_response(waiting_task.snapshot())
+			waiting_task = task_runner.queue_full_delivery(job_ids)
+			if waiting_task:
+				return _json_response(waiting_task)
 
 		deliver_options = {"_workbench_job_ids": job_ids}
 		if direct_send:
@@ -735,7 +732,6 @@ def api_resume_get():
 @app.route("/api/resume/upload", method="POST")
 def api_resume_upload():
 	try:
-		import yaml
 		upload = request.files.get("file")
 		if not upload:
 			return _json_response({"error": "No file uploaded"}, 400)
@@ -753,12 +749,8 @@ def api_resume_upload():
 		dest = RESUME_DIR / safe_name
 		dest.write_bytes(stored_content)
 
-		# Update config
-		config = load_config(CONFIG_PATH)
-		config.setdefault("profile", {})["resume_path"] = str(dest)
-		with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-			yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-
+		# The browser keeps this path in its draft. config.yaml is updated only by
+		# POST /api/config after the user explicitly clicks the Save button.
 		return _json_response({
 			"success": True,
 			"filename": safe_name,

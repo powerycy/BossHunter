@@ -289,7 +289,7 @@ def call_openai_compatible_text(prompt: str, config: dict, max_tokens: int) -> s
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
     api_key = get_ai_api_key(config)
     base_url = get_ai_base_url(config)
-    model = ai_cfg.get("model") or ""
+    model = get_openai_compatible_model(config)
     if not api_key or not base_url:
         return None
 
@@ -316,6 +316,14 @@ def call_openai_compatible_text(prompt: str, config: dict, max_tokens: int) -> s
         raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
     content = choices[0].get("message", {}).get("content")
     return content.strip() if isinstance(content, str) else None
+
+
+def get_openai_compatible_model(config: dict) -> str:
+    """Return the API model ID, normalising providers with case-sensitive IDs."""
+    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
+    model = str(ai_cfg.get("model") or "").strip()
+    # DeepSeek's OpenAI-compatible endpoint accepts lower-case model IDs only.
+    return model.lower() if get_ai_service(config) == "deepseek" else model
 
 
 def _match_model_name(requested: str, available: list[str]) -> str | None:

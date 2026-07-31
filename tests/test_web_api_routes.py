@@ -9,6 +9,8 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 import yaml
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from bosshunter.db import add_history, get_db, insert_job, update_job_score, update_job_status
 from bosshunter.throttle import SendWindowChecker
@@ -398,6 +400,20 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertFalse(executed.is_set())
         self.assertIsNone(runner.status()["active"])
 
+    def test_full_task_can_start_after_send_window_deadline(self):
+        # Collection and scoring must not be blocked by the greeting send window.
+        executed = Event()
+        runner = WorkbenchTaskRunner({"full": lambda task, config: executed.set()})
+
+        with patch("bosshunter.web.tasks.datetime") as mock_datetime:
+            mock_datetime.now.return_value = datetime(2026, 7, 31, 19, 0)
+            task = runner.start("full", {"throttle": {"send_windows": ["09:00-16:00"]}})
+            runner.wait(timeout=1)
+
+        self.assertTrue(executed.is_set())
+        self.assertEqual(task["status"], "running")
+        self.assertIsNone(task["deadline_at"])
+
     def test_send_window_checker_uses_last_window_end_as_daily_deadline(self):
         checker = SendWindowChecker(["09:00-12:00", "14:00-17:30", "99:00-100:00"])
 
@@ -486,6 +502,17 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(confirmation_event.is_set())
         self.assertEqual(full_task.context["confirmed_job_ids"], ["ready-job"])
         self.assertEqual(json.loads(response_body)["id"], "full-task")
+
+    def test_task_runner_queues_delivery_before_full_task_reaches_wait_state(self):
+        runner = WorkbenchTaskRunner()
+        full_task = WorkbenchTask(id="full-task", mode="full", label="运行全流程")
+        runner._tasks[full_task.id] = full_task
+
+        queued = runner.queue_full_delivery(["job-a", "job-b"])
+
+        self.assertEqual(queued["id"], "full-task")
+        self.assertEqual(full_task.context["confirmed_job_ids"], ["job-a", "job-b"])
+        self.assertTrue(full_task.context["delivery_requested"])
 
     def test_web_api_deliver_ignores_stale_stopped_full_task_waiting_context(self):
         # Arrange
@@ -763,7 +790,7 @@ class WebApiRouteTests(unittest.TestCase):
             self.assertTrue(status.startswith("200"), body)
             self.assertEqual(payload["filename"], "张三的中文简历.md")
             self.assertEqual(stored_path.read_bytes(), content)
-            self.assertEqual(config["profile"]["resume_path"], str(stored_path))
+            self.assertIsNone(config.get("profile", {}).get("resume_path"))
 
     def test_web_api_resume_upload_converts_docx_to_markdown(self):
         # Arrange
@@ -806,6 +833,80 @@ class WebApiRouteTests(unittest.TestCase):
             self.assertIn("# 李雷", stored_content)
             self.assertIn("- 5 年产品经验", stored_content)
 
+    @patch("bosshunter.web.resume_upload.PdfReader")
+    def test_web_api_resume_upload_converts_pdf_to_markdown(self, pdf_reader):
+        # Arrange
+        page = pdf_reader.return_value.pages.__getitem__.return_value
+        pdf_reader.return_value.pages = [page]
+        page.extract_text.return_value = "张三\n产品经理\n5 年经验"
+        pdf_reader.return_value.is_encrypted = False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+
+            # Act
+            status, _, body = self._upload_resume("张三简历.pdf", b"%PDF-1.7 sample", "application/pdf")
+            payload = json.loads(body)
+            stored_path = Path(payload["path"])
+
+            # Assert
+            self.assertTrue(status.startswith("200"), body)
+            self.assertEqual(payload["filename"], "张三简历.md")
+            self.assertEqual(stored_path.read_text(encoding="utf-8"), "张三\n产品经理\n5 年经验\n")
+
+    def test_web_api_resume_upload_extracts_text_from_real_pdf(self):
+        # Arrange: make a minimal PDF that contains a real text layer.
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        font = DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        })
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        })
+        contents = DecodedStreamObject()
+        contents.set_data(b"BT /F1 12 Tf 72 720 Td (Jane Resume - Product Manager) Tj ET")
+        page[NameObject("/Contents")] = contents
+        pdf = io.BytesIO()
+        writer.write(pdf)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+
+            # Act
+            status, _, body = self._upload_resume("resume.pdf", pdf.getvalue(), "application/pdf")
+            payload = json.loads(body)
+
+            # Assert
+            self.assertTrue(status.startswith("200"), body)
+            self.assertIn("Jane Resume - Product Manager", Path(payload["path"]).read_text(encoding="utf-8"))
+
+    @patch("bosshunter.web.resume_upload.PdfReader")
+    def test_web_api_resume_upload_rejects_scanned_pdf_without_text(self, pdf_reader):
+        # Arrange
+        page = pdf_reader.return_value.pages.__getitem__.return_value
+        pdf_reader.return_value.pages = [page]
+        page.extract_text.return_value = ""
+        pdf_reader.return_value.is_encrypted = False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+
+            # Act
+            status, _, body = self._upload_resume("扫描简历.pdf", b"%PDF-1.7 sample", "application/pdf")
+
+            # Assert
+            self.assertTrue(status.startswith("400"), body)
+            self.assertIn("扫描版简历", json.loads(body)["error"])
+
     def test_web_api_resume_upload_rejects_legacy_doc_format(self):
         # Arrange
         with tempfile.TemporaryDirectory() as tmp:
@@ -818,7 +919,7 @@ class WebApiRouteTests(unittest.TestCase):
 
             # Assert
             self.assertTrue(status.startswith("400"), body)
-            self.assertEqual(json.loads(body), {"error": "仅支持 .md 或 .docx 格式"})
+            self.assertEqual(json.loads(body), {"error": "仅支持 .md、.docx 或 .pdf 格式"})
 
     def test_web_api_history_dismiss_reply_adds_dismissed_history_without_rejecting_job(self):
         # Arrange
