@@ -135,7 +135,10 @@ const statItems = [
 ]
 
 function jobSubtitle(job: Job) {
-  return [job.score ? `匹配 ${job.score}` : '', job.salary, getStatusLabel(job.status)].filter(Boolean).join(' · ')
+  const stage = job.status === 'approved' && !job.greeting
+    ? '已确认，待继续投递'
+    : getStatusLabel(job.status)
+  return [job.score ? `匹配 ${job.score}` : '', job.salary, stage].filter(Boolean).join(' · ')
 }
 
 async function parsePreflightResponse(res: Response) {
@@ -646,8 +649,8 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       <section className="rounded-3xl border border-card-border bg-white p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h3 className="text-lg font-black">今日待确认</h3>
-            <p className="mt-1 text-xs text-muted">展示需要你人工确认是否推进投递的岗位，支持全选、部分选择、一键投递。</p>
+            <h3 className="text-lg font-black">今日待投递</h3>
+            <p className="mt-1 text-xs text-muted">展示待确认岗位，以及已确认但尚未启动的任务；支持全选、部分选择、一键投递。</p>
           </div>
           <div className="flex gap-2">
             <Button variant="secondary" size="sm" onClick={() => setSelected(todayJobs.map(job => job.id))}>全选</Button>
@@ -669,7 +672,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             ))}
           </div>
         ) : (
-          <div className="rounded-2xl border border-dashed border-card-border bg-[#FFFCFA] p-5 text-sm text-muted">今天暂时没有待确认岗位。</div>
+          <div className="rounded-2xl border border-dashed border-card-border bg-[#FFFCFA] p-5 text-sm text-muted">今天暂时没有待投递岗位。</div>
         )}
       </section>
 

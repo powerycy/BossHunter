@@ -5,6 +5,7 @@ import random
 import re
 import time
 import hashlib
+from threading import Event
 from urllib.parse import quote
 
 from rich.console import Console
@@ -129,7 +130,18 @@ def _generate_job_id(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:16]
 
 
-def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> int:
+def _stop_requested(stop_event: Event | None) -> bool:
+    return bool(stop_event and stop_event.is_set())
+
+
+def _sleep_or_stop(seconds: float, stop_event: Event | None) -> bool:
+    if stop_event:
+        return bool(stop_event.wait(seconds))
+    time.sleep(seconds)
+    return False
+
+
+def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None, stop_event: Event | None = None) -> int:
     """Scrape jobs from BOSS直聘 and store in database.
 
     Supports multi-keyword × multi-city combinations with pagination.
@@ -137,6 +149,12 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
     Returns the number of new jobs added.
     """
     db = get_db()
+    if stop_event is None:
+        candidate = config.get("_workbench_stop_event")
+        stop_event = candidate if isinstance(candidate, Event) else None
+    if _stop_requested(stop_event):
+        db.close()
+        return 0
     throttle = PageThrottle(delay_min=2.0, delay_max=5.0)
     deal_breakers = config.get("profile", {}).get("deal_breakers", [])
     new_count = 0
@@ -173,6 +191,8 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
         console=console
     ) as progress:
         for city, city_code, keyword in search_combos:
+            if _stop_requested(stop_event):
+                break
             if limit is not None and new_count >= limit:
                 break
 
@@ -181,6 +201,8 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
             keyword_new = 0
 
             for page in range(1, max_pages + 1):
+                if _stop_requested(stop_event):
+                    break
                 if limit is not None and new_count >= limit:
                     break
 
@@ -199,14 +221,23 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                         progress.update(task, description=f"[red]✗ 无法打开搜索页: {label}[/red]")
                     break
 
-                time.sleep(3)
-                wait_for_load(target_id, timeout=10)
+                if _sleep_or_stop(3, stop_event):
+                    close_tab(target_id)
+                    break
+                wait_for_load(target_id, timeout=10, stop_event=stop_event)
+                if _stop_requested(stop_event):
+                    close_tab(target_id)
+                    break
 
                 # Scroll to load all results on this page
                 scroll(target_id, y=2000)
-                time.sleep(1.5)
+                if _sleep_or_stop(1.5, stop_event):
+                    close_tab(target_id)
+                    break
                 scroll(target_id, y=4000)
-                time.sleep(1.5)
+                if _sleep_or_stop(1.5, stop_event):
+                    close_tab(target_id)
+                    break
 
                 # Extract job list
                 result = evaluate(target_id, JS_EXTRACT_LIST)
@@ -230,6 +261,8 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
 
                 # Process each job
                 for job_data in jobs_list:
+                    if _stop_requested(stop_event):
+                        break
                     if limit is not None and new_count >= limit:
                         break
 
@@ -245,14 +278,20 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                         continue
 
                     # Open detail page for full JD
-                    throttle.wait()
+                    if throttle.wait(stop_event):
+                        break
                     detail_url = f"https://www.zhipin.com{job_url}"
                     detail_target = new_tab(detail_url)
                     if not detail_target:
                         continue
 
-                    time.sleep(2)
-                    wait_for_load(detail_target, timeout=10)
+                    if _sleep_or_stop(2, stop_event):
+                        close_tab(detail_target)
+                        break
+                    wait_for_load(detail_target, timeout=10, stop_event=stop_event)
+                    if _stop_requested(stop_event):
+                        close_tab(detail_target)
+                        break
 
                     # Extract detail
                     detail_result = evaluate(detail_target, JS_EXTRACT_DETAIL)
@@ -290,7 +329,8 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
 
                 # Anti-scraping: pause between pages
                 if page < max_pages:
-                    time.sleep(random.uniform(3.0, 6.0))
+                    if _sleep_or_stop(random.uniform(3.0, 6.0), stop_event):
+                        break
 
             progress.update(task, description=f"搜索: {label} (新增 {keyword_new})")
 

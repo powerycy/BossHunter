@@ -248,6 +248,29 @@ class AnthropicCredentialTests(unittest.TestCase):
         self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer deepseek-secret")
         self.assertEqual(post.call_args.kwargs["json"]["model"], "provider-current-model")
 
+    def test_deepseek_model_name_is_normalized_for_case_sensitive_api(self):
+        class CompletionResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        config = {
+            "ai": {
+                "service": "deepseek",
+                "provider": "openai_compatible",
+                "model": "DeepSeek-V4-Flash",
+            }
+        }
+        with (
+            patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
+            patch("bosshunter.ai.credentials.httpx.post", return_value=CompletionResponse()) as post,
+        ):
+            credentials.call_openai_compatible_text("prompt", config, 8)
+
+        self.assertEqual(post.call_args.kwargs["json"]["model"], "deepseek-v4-flash")
+
 
 if __name__ == "__main__":
     unittest.main()

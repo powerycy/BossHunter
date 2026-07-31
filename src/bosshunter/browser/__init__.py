@@ -136,12 +136,17 @@ def get_page_info(target_id: str) -> dict | None:
     return _client().info(target_id)
 
 
-def wait_for_load(target_id: str, timeout: float = 10.0) -> bool:
+def wait_for_load(target_id: str, timeout: float = 10.0, stop_event=None) -> bool:
     """Wait for page ready state to become complete."""
     start = time.time()
     while time.time() - start < timeout:
+        if stop_event and stop_event.is_set():
+            return False
         info = get_page_info(target_id)
         if info and info.get("ready") == "complete":
             return True
-        time.sleep(0.5)
+        if stop_event and stop_event.wait(0.5):
+            return False
+        if not stop_event:
+            time.sleep(0.5)
     return False

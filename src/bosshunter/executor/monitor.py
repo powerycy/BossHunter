@@ -183,6 +183,19 @@ def _call_claude(prompt: str, config: dict) -> str | None:
         return None
 
 
+def _stop_requested(config: dict) -> bool:
+    stop_event = config.get("_workbench_stop_event")
+    return bool(isinstance(stop_event, Event) and stop_event.is_set())
+
+
+def _sleep_or_stop(seconds: float, config: dict) -> bool:
+    stop_event = config.get("_workbench_stop_event")
+    if isinstance(stop_event, Event):
+        return bool(stop_event.wait(seconds))
+    time.sleep(seconds)
+    return False
+
+
 def _detect_rejection(messages: list[dict]) -> bool:
     """Check if HR is rejecting in messages AFTER user's last reply."""
     rejection_keywords = ["不合适", "不匹配", "不太合适", "暂时没有", "不符合", "不太符合",
@@ -677,6 +690,8 @@ def check_replies(config: dict) -> list[dict]:
 
     Returns list of conversations with replies (including matched job info).
     """
+    if _stop_requested(config):
+        return []
     db = get_db()
     monitor_cfg = config.get("monitor", {})
     chat_url = monitor_cfg.get("chat_url", "https://www.zhipin.com/web/geek/chat")
@@ -703,9 +718,15 @@ def check_replies(config: dict) -> list[dict]:
         db.close()
         return []
 
-    time.sleep(3)
-    wait_for_load(target_id, timeout=10)
-    time.sleep(2)
+    if _sleep_or_stop(3, config):
+        close_tab(target_id)
+        db.close()
+        return []
+    wait_for_load(target_id, timeout=10, stop_event=config.get("_workbench_stop_event"))
+    if _sleep_or_stop(2, config):
+        close_tab(target_id)
+        db.close()
+        return []
 
     # Extract chat list
     raw = evaluate(target_id, JS_EXTRACT_CHAT_LIST)
@@ -733,6 +754,8 @@ def check_replies(config: dict) -> list[dict]:
     # Match conversations to tracked jobs and find ones with HR replies
     results = []
     for conv in conversations:
+        if _stop_requested(config):
+            break
         if not conv.get("has_reply"):
             continue
 
@@ -801,6 +824,8 @@ def _handle_conversation(job: dict, config: dict) -> str:
 
     Returns action taken: 'skipped_user_replied', 'skipped_existing_resume', 'rejected', 'needs_resume', 'auto_replied', 'failed'
     """
+    if _stop_requested(config):
+        return "stopped"
     console.print(f"\n  [bold]处理: {job['company']} - {job['title']}[/bold]")
 
     # Open the conversation
@@ -809,7 +834,9 @@ def _handle_conversation(job: dict, config: dict) -> str:
         console.print("[yellow]    无法打开对话[/yellow]")
         return "failed"
 
-    time.sleep(2)
+    if _sleep_or_stop(2, config):
+        close_tab(target_id)
+        return "stopped"
 
     # Extract full conversation messages
     raw = evaluate(target_id, JS_EXTRACT_CONVERSATION)
@@ -865,6 +892,9 @@ def _handle_conversation(job: dict, config: dict) -> str:
             resume_path = None
             resume_failure_reason = f"生成过程发生异常：{exc}"
             console.print(f"[red]    定制简历生成异常：{exc}[/red]")
+        if _stop_requested(config):
+            close_tab(target_id)
+            return "stopped"
         if resume_path:
             console.print(f"[bold green]    ✓ 定制简历已生成: {resume_path}[/bold green]")
             console.print(f"[bold yellow]    ⚠ 请手动发送上述简历给 {job['company']} HR[/bold yellow]")
@@ -1167,6 +1197,9 @@ def monitor_and_send_resumes(config: dict) -> dict:
             job = item["job"]
             replied_job_ids.add(job["id"])
             action = _handle_conversation(job, config)
+
+            if action == "stopped":
+                break
 
             if action in ("skipped_user_replied", "skipped_existing_resume", "skipped_dismissed_reply"):
                 summary["skipped"] += 1

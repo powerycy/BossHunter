@@ -1,6 +1,7 @@
 """AI Greeter - Generate personalized greeting messages with self-review."""
 
 import json
+from threading import Event
 from pathlib import Path
 
 from rich.console import Console
@@ -241,6 +242,8 @@ def _review_with_token_retry(greeting: str, job: dict, config: dict) -> dict | N
 def generate_greetings(config: dict) -> int:
     """Generate greetings for approved jobs with optional self-review. Returns count generated."""
     db = get_db()
+    stop_event = config.get("_workbench_stop_event")
+    stop_event = stop_event if isinstance(stop_event, Event) else None
     jobs = get_jobs_by_status(db, "approved")
     _workbench_job_ids = {str(job_id) for job_id in config.get("_workbench_job_ids", [])}
     if _workbench_job_ids:
@@ -276,10 +279,14 @@ def generate_greetings(config: dict) -> int:
         task = progress.add_task(f"生成招呼语 (0/{len(jobs)})", total=len(jobs))
 
         for index, job in enumerate(jobs, start=1):
+            if stop_event and stop_event.is_set():
+                break
             best_greeting = None
             pause_after_current = ""
 
             for iteration in range(max_iterations + 1):
+                if stop_event and stop_event.is_set():
+                    break
                 critique = ""
                 if iteration > 0 and best_greeting:
                     try:
@@ -298,6 +305,9 @@ def generate_greetings(config: dict) -> int:
                         pause_after_current = exc.user_message
                     else:
                         pause_reason = exc.user_message
+                    break
+
+                if stop_event and stop_event.is_set():
                     break
 
                 if not greeting:

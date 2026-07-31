@@ -20,7 +20,9 @@ MODE_LABELS = {
 
 TERMINAL_STATUSES = {"completed", "failed", "stopped"}
 ACTIVE_STATUSES = {"running", "stopping"}
-DEADLINE_MODES = {"full", "monitor", "deliver"}
+# Collection and scoring are safe to run outside the greeting send window.
+# Only a standalone delivery task receives a hard daily delivery deadline.
+DEADLINE_MODES = {"deliver"}
 
 
 class TaskAlreadyRunningError(RuntimeError):
@@ -128,6 +130,26 @@ class WorkbenchTaskRunner:
             if reason and (not task.logs or task.logs[-1] != reason):
                 task.logs.append(reason)
             task.updated_at = datetime.now().isoformat(timespec="seconds")
+            confirmation_event = task.context.get("confirmation_event")
+            if isinstance(confirmation_event, Event):
+                confirmation_event.set()
+            return task.snapshot()
+
+    def queue_full_delivery(self, job_ids: list[str]) -> dict | None:
+        """Hand selected jobs to the active full-flow task, even during its transition.
+
+        The dashboard request and the worker thread run concurrently.  Keeping the
+        selection on the task before its confirmation event exists prevents a click
+        from being stranded between "waiting" state updates.
+        """
+        with self._lock:
+            task = self._active_task_locked()
+            if not task or task.mode != "full":
+                return None
+
+            existing_ids = [str(job_id) for job_id in task.context.get("confirmed_job_ids", [])]
+            task.context["confirmed_job_ids"] = list(dict.fromkeys([*existing_ids, *job_ids]))
+            task.context["delivery_requested"] = True
             confirmation_event = task.context.get("confirmation_event")
             if isinstance(confirmation_event, Event):
                 confirmation_event.set()

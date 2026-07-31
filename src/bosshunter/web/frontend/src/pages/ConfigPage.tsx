@@ -56,8 +56,17 @@ export default function ConfigPage() {
   const [resumeUploadError, setResumeUploadError] = useState('')
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
 
+  const loadSavedResume = async () => {
+    try {
+      const res = await fetch('/api/resume')
+      setResumeInfo(await res.json())
+    } catch {
+      setResumeInfo(null)
+    }
+  }
+
   useEffect(() => {
-    fetch('/api/resume').then(r => r.json()).then(setResumeInfo).catch(() => {})
+    void loadSavedResume()
   }, [])
 
   const toggleSection = (key: string) => {
@@ -86,10 +95,14 @@ export default function ConfigPage() {
     }
   }
 
-  const handleResumeDelete = async () => {
-    await fetch('/api/resume', { method: 'DELETE' })
+  const handleResumeDelete = () => {
     setResumeInfo(null)
     updateConfig('profile.resume_path', '')
+  }
+
+  const handleReset = async () => {
+    resetConfig()
+    await loadSavedResume()
   }
 
   const handleAiTest = async () => {
@@ -165,7 +178,7 @@ export default function ConfigPage() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={resetConfig}><RotateCcw className="w-3 h-3 mr-1" />重置</Button>
+            <Button variant="ghost" size="sm" onClick={handleReset}><RotateCcw className="w-3 h-3 mr-1" />重置</Button>
             <Button size="sm" onClick={saveConfig} disabled={saving || !dirty}><Save className="w-3 h-3 mr-1" />{saving ? '保存中...' : '保存'}</Button>
           </div>
         </div>
@@ -187,8 +200,8 @@ export default function ConfigPage() {
               ) : (
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-card-border p-6 transition-colors hover:border-primary/50 hover:bg-[#FFFCFA]">
                   <Upload className="mb-2 h-6 w-6 text-muted" />
-                  <span className="text-sm text-muted">拖拽或点击上传 (.md、.docx)</span>
-                  <input type="file" accept=".md,.docx" onChange={handleResumeUpload} className="hidden" />
+                  <span className="text-sm text-muted">拖拽或点击上传 (.md、.docx、.pdf)</span>
+                  <input type="file" accept=".md,.docx,.pdf,application/pdf" onChange={handleResumeUpload} className="hidden" />
                 </label>
               )}
               {resumeUploadError && (

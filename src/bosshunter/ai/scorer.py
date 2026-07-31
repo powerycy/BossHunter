@@ -1,6 +1,7 @@
 """AI Scorer - Match jobs against resume using Claude API."""
 
 import json
+from threading import Event
 from pathlib import Path
 
 from rich.console import Console
@@ -103,6 +104,8 @@ def _parse_score_response(text: str) -> dict | None:
 def score_jobs(config: dict) -> tuple[int, int]:
     """Score all pending jobs. Returns (scored_count, filtered_count)."""
     db = get_db()
+    stop_event = config.get("_workbench_stop_event")
+    stop_event = stop_event if isinstance(stop_event, Event) else None
     resume = _load_resume(config)
     if not resume:
         console.print("[red]无法读取简历文件[/red]")
@@ -131,6 +134,8 @@ def score_jobs(config: dict) -> tuple[int, int]:
             task = progress.add_task(f"评分中 (0/{len(pending_jobs)})", total=len(pending_jobs))
 
             for job in pending_jobs:
+                if stop_event and stop_event.is_set():
+                    break
                 try:
                     # Stage 1: Keyword pre-filter (free, no API calls)
                     qs, qs_reason = quick_score(job, config)
@@ -189,6 +194,9 @@ def score_jobs(config: dict) -> tuple[int, int]:
                                 failed += 1
                                 _notify(config, f"已跳过 {job['company']}｜{job['title']}：压缩后仍超过模型上下文限制。")
                                 continue
+
+                    if stop_event and stop_event.is_set():
+                        break
 
                     if not response:
                         pause_reason = "AI 服务未返回评分结果，请检查模型和 API 配置"

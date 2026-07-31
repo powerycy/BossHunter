@@ -1,4 +1,4 @@
-"""Resume upload filename handling and Word-to-Markdown conversion."""
+"""Resume upload filename handling and document-to-Markdown conversion."""
 
 from __future__ import annotations
 
@@ -9,9 +9,12 @@ from pathlib import Path
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
+
 
 MAX_DOCX_XML_SIZE = 20 * 1024 * 1024
-SUPPORTED_RESUME_EXTENSIONS = {".md", ".docx"}
+SUPPORTED_RESUME_EXTENSIONS = {".md", ".docx", ".pdf"}
 _WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _W = f"{{{_WORD_NAMESPACE}}}"
 
@@ -34,7 +37,7 @@ def safe_resume_filename(raw_filename: str) -> str:
 
 	suffix = Path(name).suffix.lower()
 	if suffix not in SUPPORTED_RESUME_EXTENSIONS:
-		raise ResumeUploadError("仅支持 .md 或 .docx 格式")
+		raise ResumeUploadError("仅支持 .md、.docx 或 .pdf 格式")
 
 	stem = name[: -len(Path(name).suffix)].strip().strip(".")
 	if not stem:
@@ -47,12 +50,31 @@ def safe_resume_filename(raw_filename: str) -> str:
 def prepare_resume_content(filename: str, content: bytes) -> tuple[str, bytes]:
 	"""Return the Markdown storage filename and UTF-8 content for an upload."""
 	safe_name = safe_resume_filename(filename)
-	if Path(safe_name).suffix.lower() == ".md":
+	suffix = Path(safe_name).suffix.lower()
+	if suffix == ".md":
 		return safe_name, content
 
-	markdown = docx_to_markdown(content)
+	markdown = docx_to_markdown(content) if suffix == ".docx" else pdf_to_markdown(content)
 	output_name = f"{Path(safe_name).stem}.md"
 	return output_name, markdown.encode("utf-8")
+
+
+def pdf_to_markdown(content: bytes) -> str:
+	"""Extract text-layer content from a PDF resume as Markdown-like plain text."""
+	try:
+		reader = PdfReader(BytesIO(content))
+		if reader.is_encrypted and reader.decrypt("") == 0:
+			raise ResumeUploadError("PDF 已加密，请上传未加密的简历")
+		pages = [page.extract_text() or "" for page in reader.pages]
+	except ResumeUploadError:
+		raise
+	except (PdfReadError, OSError, ValueError) as exc:
+		raise ResumeUploadError("PDF 文件无效或已损坏") from exc
+
+	text = "\n\n".join(page.strip() for page in pages if page.strip()).strip()
+	if not text:
+		raise ResumeUploadError("未能从 PDF 提取文字；扫描版简历请先 OCR 后再上传")
+	return f"{text}\n"
 
 
 def docx_to_markdown(content: bytes) -> str:
