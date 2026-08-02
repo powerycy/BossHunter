@@ -37,7 +37,6 @@
 
 - [@yukinoshi](https://github.com/yukinoshi)：提交 [#25](https://github.com/powerycy/BossHunter/pull/25)，贡献多 AI 服务兼容与 Thinking 参数等改进思路。
 - [@elowenzhouyb-source](https://github.com/elowenzhouyb-source)：提交 [#27](https://github.com/powerycy/BossHunter/pull/27)，贡献 AI 评分、招呼语与发送可靠性等改进思路。
-- [@atticus-zhou](https://github.com/atticus-zhou)：作为 #27 分支代码提交作者参与实现。
 
 ## 更新说明写作规则
 

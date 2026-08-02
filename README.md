@@ -374,16 +374,20 @@ A: 项目通过 CDP (Chrome DevTools Protocol) 直连你日常使用的浏览器
 
 - [@yukinoshi](https://github.com/yukinoshi)：提交 [#25](https://github.com/powerycy/BossHunter/pull/25)，贡献多 AI 服务兼容与 Thinking 参数等改进思路。
 - [@elowenzhouyb-source](https://github.com/elowenzhouyb-source)：提交 [#27](https://github.com/powerycy/BossHunter/pull/27)，贡献 AI 评分、招呼语与发送可靠性等改进思路。
-- [@atticus-zhou](https://github.com/atticus-zhou)：作为 #27 分支代码提交作者参与实现。
 
 </details>
 
-### v2.1.1 稳定性修复
+<details>
+<summary><strong>展开查看 v2.1.1 稳定性修复</strong></summary>
+
+### 稳定性修复
 
 - **Token 截断自动恢复**：评分或招呼语回答因输出上限被截断时，自动增大当前请求的输出 Token 上限后重试。
 - **上下文超限自动恢复**：简历或岗位内容超过模型上下文时，保留关键信息并压缩当前请求后重试。
 - **失败不丢进度**：单个岗位仍失败时保留待处理状态；额度不足、限流或鉴权异常会保存已完成结果并安全暂停。
 - **前端明确反馈**：工作台任务日志会显示 Token、额度、限流、鉴权或连接问题，不再只表现为操作中断。
+
+</details>
 
 <details>
 <summary><strong>展开查看 v2.1.0 更新说明</strong></summary>
