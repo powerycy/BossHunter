@@ -357,7 +357,10 @@ A: 项目通过 CDP (Chrome DevTools Protocol) 直连你日常使用的浏览器
 
 > 查看每个版本的完整说明：[CHANGELOG.md](CHANGELOG.md)
 
-### v2.2.0 功能与稳定性更新
+<details>
+<summary><strong>展开查看 v2.2.0 功能与稳定性更新</strong></summary>
+
+### 功能与稳定性更新
 
 - **部分失败继续流程**：单个岗位发送失败后单独记录，其他岗位和后续 HR 回复监测继续执行。
 - **额度待办自动续发**：因每日额度未执行的已确认岗位保留招呼语，下次运行全流程时优先处理。
@@ -366,6 +369,14 @@ A: 项目通过 CDP (Chrome DevTools Protocol) 直连你日常使用的浏览器
 - **停止更及时**：采集、AI 请求、招呼语、发送和监测统一响应停止请求，已完成结果会保留。
 - **工作台简化**：移除普通用户不需要的全量重新评分入口，三个主要操作按三栏布局展示。
 - **系统性风险仍会暂停**：验证码、限流、账号拦截或连续系统错误会中止发送，避免继续触发平台风控。
+
+### 贡献者致谢
+
+- [@yukinoshi](https://github.com/yukinoshi)：提交 [#25](https://github.com/powerycy/BossHunter/pull/25)，贡献多 AI 服务兼容与 Thinking 参数等改进思路。
+- [@elowenzhouyb-source](https://github.com/elowenzhouyb-source)：提交 [#27](https://github.com/powerycy/BossHunter/pull/27)，贡献 AI 评分、招呼语与发送可靠性等改进思路。
+- [@atticus-zhou](https://github.com/atticus-zhou)：作为 #27 分支代码提交作者参与实现。
+
+</details>
 
 ### v2.1.1 稳定性修复
 
