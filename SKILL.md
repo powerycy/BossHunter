@@ -77,6 +77,16 @@ bosshunter web
 
 如果 `config.yaml` 已存在且用户没有明确要求重新配置，跳过 onboarding，直接响应用户意图。
 
+## 正式运行前的必备步骤
+
+1. **使用 Google Chrome**：BossHunter 通过 Chrome DevTools Protocol 操作浏览器，不要用 Safari 或其他未连接浏览器替代。
+2. **开启 Chrome 远程调试**：访问 `chrome://inspect/#remote-debugging` 并勾选 Allow remote debugging，或用 `--remote-debugging-port=9222` 启动 Chrome。
+3. **提前登录招聘网站**：必须在已开启远程调试的同一 Chrome 窗口中登录，并在任务期间保持窗口打开。
+4. **连接 AI API**：运行 `bosshunter web`，在本地面板的「AI 设置」中选择服务商、填写 API Key 和模型，然后运行 `bosshunter ai-status`。不得让用户在聊天中发送 Key。
+5. **检查浏览器连接**：运行 `bosshunter connect`。该命令只检测连接，不会代替用户启动 Chrome。
+
+只有 AI 和 Chrome 连接都检测通过后，才引导用户运行 `bosshunter run`。
+
 ---
 
 ## 前置检查
