@@ -849,6 +849,21 @@ def send_greetings(config: dict, force: bool = False) -> int:
     db = get_db()
     throttle_config = config.get("throttle", {})
     stop_event = config.get("_workbench_stop_event")
+    workbench_job_ids = {str(job_id) for job_id in config.get("_workbench_job_ids", [])}
+    send_report = {
+        "requested_count": len(workbench_job_ids),
+        "eligible_count": 0,
+        "scheduled_count": 0,
+        "attempted_count": 0,
+        "sent_count": 0,
+        "failed_count": 0,
+        "deferred_count": len(workbench_job_ids),
+        "quota_deferred_count": 0,
+        "stop_reason": None,
+    }
+    # Keep the integer return value for CLI/backward compatibility while giving
+    # the web workflow enough detail to distinguish failures from quota deferrals.
+    config["_workbench_send_report"] = send_report
     if isinstance(stop_event, Event):
         throttle_config = dict(throttle_config)
         throttle_config["_workbench_stop_event"] = stop_event
@@ -858,6 +873,7 @@ def send_greetings(config: dict, force: bool = False) -> int:
     if not force and should_take_day_off(day_off_prob):
         console.print("[yellow]🎲 今日随机休息（防检测），跳过发送[/yellow]")
         add_risk_event(db, "day_off", "随机休息日")
+        send_report["stop_reason"] = "day_off"
         db.close()
         return 0
 
@@ -869,16 +885,19 @@ def send_greetings(config: dict, force: bool = False) -> int:
         console.print("[yellow]⏰ 当前不在发送时间窗口内，暂不发送[/yellow]")
         console.print(f"[dim]  {info}[/dim]")
         add_risk_event(db, "outside_window", info)
+        send_report["stop_reason"] = "outside_window"
         db.close()
         return 0
 
     jobs = get_jobs_ready_to_send(db)
-    _workbench_job_ids = {str(job_id) for job_id in config.get("_workbench_job_ids", [])}
-    if _workbench_job_ids:
-        jobs = [job for job in jobs if str(job["id"]) in _workbench_job_ids]
+    if workbench_job_ids:
+        jobs = [job for job in jobs if str(job["id"]) in workbench_job_ids]
+    send_report["eligible_count"] = len(jobs)
+    send_report["deferred_count"] = len(workbench_job_ids) if workbench_job_ids else len(jobs)
 
     if not jobs:
         console.print("[yellow]没有已生成招呼语的待发送岗位，请先运行 bosshunter greet[/yellow]")
+        send_report["stop_reason"] = "no_ready_jobs"
         db.close()
         return 0
 
@@ -896,10 +915,16 @@ def send_greetings(config: dict, force: bool = False) -> int:
     remaining_quota = daily_limit - already_sent
     if remaining_quota <= 0:
         console.print(f"[yellow]今日已达发送上限 ({daily_limit})[/yellow]")
+        send_report["quota_deferred_count"] = len(jobs)
+        send_report["stop_reason"] = "daily_limit"
         db.close()
         return 0
 
     jobs_to_send = jobs[:remaining_quota]
+    send_report["scheduled_count"] = len(jobs_to_send)
+    send_report["quota_deferred_count"] = max(len(jobs) - len(jobs_to_send), 0)
+    if send_report["quota_deferred_count"]:
+        send_report["stop_reason"] = "daily_limit"
     throttle = RequestThrottle(delay_min=interval_min, delay_max=interval_max)
     backoff = ProgressiveBackoff()
     sent_count = 0
@@ -918,11 +943,14 @@ def send_greetings(config: dict, force: bool = False) -> int:
         for job in jobs_to_send:
             if _stop_requested(stop_event):
                 console.print("[yellow]已请求停止，结束发送[/yellow]")
+                send_report["stop_reason"] = "stopped"
                 break
 
             greeting = job.get("greeting", "")
             if not greeting:
                 update_job_status(db, job["id"], "error")
+                send_report["attempted_count"] += 1
+                send_report["failed_count"] += 1
                 progress.update(task, advance=1)
                 continue
 
@@ -931,19 +959,24 @@ def send_greetings(config: dict, force: bool = False) -> int:
                 progress.update(task, description="等待间隔...")
                 if throttle.wait(stop_event):
                     console.print("[yellow]已请求停止，结束发送[/yellow]")
+                    send_report["stop_reason"] = "stopped"
                     break
 
             progress.update(task, description=f"发送: {job['company'][:10]} - {job['title'][:15]}")
 
             result_data, failed_target_id = _send_greeting_once(job, greeting, throttle_config)
             if result_data.get("error") == "stopped":
+                send_report["stop_reason"] = "stopped"
                 break
             if result_data.get("error") == "no_chat_input" and failed_target_id:
                 console.print("[yellow]    ! 未进入具体聊天会话，重新打开岗位页再试一次[/yellow]")
                 close_tab(failed_target_id)
                 result_data, failed_target_id = _send_greeting_once(job, greeting, throttle_config)
                 if result_data.get("error") == "stopped":
+                    send_report["stop_reason"] = "stopped"
                     break
+
+            send_report["attempted_count"] += 1
 
             if not result_data.get("success"):
                 console.print(f"[yellow]    ! 发送失败，已记录并关闭任务页面: {result_data.get('error', 'unknown')}[/yellow]")
@@ -956,9 +989,11 @@ def send_greetings(config: dict, force: bool = False) -> int:
                 update_job_status(db, job["id"], "sent")
                 add_history(db, job["id"], "sent", greeting[:50])
                 sent_count += 1
+                send_report["sent_count"] = sent_count
                 backoff.record_success()
             else:
                 error = result_data.get("error", "unknown")
+                send_report["failed_count"] += 1
                 update_job_status(db, job["id"], "error")
                 add_history(db, job["id"], "error", result_data.get("history_detail", f"发送失败: {error}"))
                 if result_data.get("skip_backoff"):
@@ -975,20 +1010,29 @@ def send_greetings(config: dict, force: bool = False) -> int:
                 if error in ["captcha", "rate_limit", "blocked"]:
                     console.print(f"\n[red]⚠ 检测到风控信号: {error}，安全暂停[/red]")
                     add_risk_event(db, error, f"触发风控: {error}")
+                    send_report["stop_reason"] = error
                     break
 
                 # If too many consecutive errors, pause
                 if backoff.should_pause_long:
                     console.print(f"\n[red]⚠ 连续错误过多，暂停 {int(pause_duration/60)} 分钟[/red]")
                     add_risk_event(db, "backoff_pause", f"暂停{int(pause_duration)}秒")
+                    send_report["stop_reason"] = "consecutive_errors"
                     break
                 elif pause_duration > 0:
                     console.print(f"\n[yellow]  错误退避: 额外等待 {int(pause_duration)}秒[/yellow]")
                     if _sleep_or_stop(pause_duration, stop_event):
+                        send_report["stop_reason"] = "stopped"
                         break
 
             progress.update(task, advance=1)
 
     console.print(f"\n[green]✓ 成功发送 {sent_count} 条[/green]")
+    report_total = len(workbench_job_ids) if workbench_job_ids else len(jobs)
+    send_report["sent_count"] = sent_count
+    send_report["deferred_count"] = max(
+        report_total - sent_count - send_report["failed_count"],
+        0,
+    )
     db.close()
     return sent_count

@@ -10,7 +10,14 @@ from zipfile import ZipFile
 
 import yaml
 
-from bosshunter.db import add_history, get_db, insert_job, update_job_score, update_job_status
+from bosshunter.db import (
+    add_history,
+    get_db,
+    insert_job,
+    update_job_greeting,
+    update_job_score,
+    update_job_status,
+)
 from bosshunter.throttle import SendWindowChecker
 from bosshunter.web import server
 from threading import Event, Lock
@@ -713,7 +720,11 @@ class WebApiRouteTests(unittest.TestCase):
             calls.append("collect")
 
         def fake_deliver(task, config):
-            calls.append(("deliver", config.get("_workbench_job_ids")))
+            calls.append((
+                "deliver",
+                config.get("_workbench_job_ids"),
+                config.get("throttle", {}).get("daily_limit"),
+            ))
 
         def fake_monitor(task, config):
             calls.append("monitor")
@@ -735,7 +746,8 @@ class WebApiRouteTests(unittest.TestCase):
 
             with patch.object(server, "_execute_collect", side_effect=fake_collect), \
                  patch.object(server, "_execute_deliver", side_effect=fake_deliver), \
-                 patch.object(server, "_execute_monitor", side_effect=fake_monitor):
+                 patch.object(server, "_execute_monitor", side_effect=fake_monitor), \
+                 patch.object(server, "load_config", return_value={"throttle": {"daily_limit": 40}}):
                 task = runner.start("full", {})
                 for _ in range(50):
                     running_task = runner._tasks[task["id"]]
@@ -748,7 +760,96 @@ class WebApiRouteTests(unittest.TestCase):
                 runner.wait(timeout=1)
 
         # Assert
-        self.assertEqual(calls, ["collect", ("deliver", ["ready-a", "ready-b"]), "monitor"])
+        self.assertEqual(
+            calls,
+            ["collect", ("deliver", ["ready-a", "ready-b"], 40), "monitor"],
+        )
+
+    def test_full_task_sends_previous_confirmed_backlog_before_collecting(self):
+        # Arrange
+        calls = []
+        task = WorkbenchTask(id="backlog-first", mode="full", label="运行全流程")
+
+        def fake_deliver(_task, deliver_config):
+            calls.append((
+                "deliver",
+                deliver_config.get("_workbench_job_ids"),
+                deliver_config.get("_workbench_skip_greeting"),
+                deliver_config.get("throttle", {}).get("daily_limit"),
+            ))
+
+        def fake_collect(_task, _config):
+            calls.append("collect")
+
+        # Act
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("deferred-ready"))
+                update_job_status(db, "deferred-ready", "ready")
+                update_job_greeting(db, "deferred-ready", "您好，我对这个岗位很感兴趣。")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch.object(server, "_execute_deliver", side_effect=fake_deliver), \
+                 patch.object(server, "_execute_collect", side_effect=fake_collect), \
+                 patch.object(server, "load_config", return_value={"throttle": {"daily_limit": 40}}):
+                server._execute_full(task, {})
+
+        # Assert
+        self.assertEqual(
+            calls,
+            [("deliver", ["deferred-ready"], True, 40), "collect"],
+        )
+        self.assertIn("优先续发上次已确认但未完成的 1 个岗位", task.logs)
+
+    def test_deliver_keeps_partial_result_and_continues_after_single_failure(self):
+        # Arrange
+        task = WorkbenchTask(id="partial-delivery", mode="full", label="运行全流程")
+        config = {"_workbench_job_ids": ["job-a", "job-b", "job-c"]}
+
+        def fake_send(send_config, force=False):
+            send_config["_workbench_send_report"] = {
+                "sent_count": 1,
+                "failed_count": 1,
+                "deferred_count": 1,
+                "quota_deferred_count": 1,
+                "stop_reason": "daily_limit",
+            }
+            return 1
+
+        # Act: a partial result must not raise and abort the full workflow.
+        with patch("bosshunter.ai.greeter.generate_greetings", return_value=3), \
+             patch("bosshunter.executor.sender.send_greetings", side_effect=fake_send):
+            server._execute_deliver(task, config)
+
+        # Assert
+        self.assertIn("招呼语发送结果：成功 1，失败 1，待下次发送 1（共 3）", task.logs)
+        self.assertIn("1 个岗位发送失败已单独记录，继续后续流程", task.logs)
+        self.assertIn("1 个岗位因今日发送额度未执行，已保留在“待发送招呼语”", task.logs)
+
+    def test_deliver_still_stops_on_account_risk_signal(self):
+        # Arrange
+        task = WorkbenchTask(id="risk-delivery", mode="full", label="运行全流程")
+        config = {"_workbench_job_ids": ["job-a", "job-b"]}
+
+        def fake_send(send_config, force=False):
+            send_config["_workbench_send_report"] = {
+                "sent_count": 0,
+                "failed_count": 1,
+                "deferred_count": 1,
+                "quota_deferred_count": 0,
+                "stop_reason": "captcha",
+            }
+            return 0
+
+        # Act / Assert
+        with patch("bosshunter.ai.greeter.generate_greetings", return_value=2), \
+             patch("bosshunter.executor.sender.send_greetings", side_effect=fake_send), \
+             self.assertRaisesRegex(RuntimeError, "验证码"):
+            server._execute_deliver(task, config)
 
     def test_web_api_workbench_reject_marks_selected_ready_jobs_rejected(self):
         # Arrange

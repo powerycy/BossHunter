@@ -122,11 +122,6 @@ const modes: Array<{ mode: WorkbenchMode; title: string; description: string }> 
     description: '采集岗位、AI评分、确认投递、发送招呼语；完成后不进入持续监测。',
   },
   {
-    mode: 'rescore',
-    title: '重新评分',
-    description: '重试未成功评分的岗位，并重新评分之前被 AI 判为低分的岗位；不会发送招呼语。',
-  },
-  {
     mode: 'monitor',
     title: '单独监测',
     description: '只监测过往已投递项目；发现 HR 要简历或问题后进入对应处理。',
@@ -465,7 +460,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         </div>
 
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           {modes.map(item => {
             const isActive = activeTask?.mode === item.mode
             const disabled = Boolean(activeTask && !isActive)

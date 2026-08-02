@@ -535,6 +535,56 @@ class JobSelectionTests(unittest.TestCase):
             self.assertEqual(sent, 0)
             close_tab.assert_called_once_with("task-target")
 
+    def test_send_greetings_reports_failed_and_quota_deferred_jobs_separately(self):
+        jobs = [_job(f"quota-{index}") for index in range(3)]
+        for job in jobs:
+            job["greeting"] = f"您好，我对 {job['id']} 很感兴趣。"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "bosshunter.db"
+            db = get_db(db_path)
+            try:
+                for job in jobs:
+                    insert_job(db, job)
+                    update_job_status(db, job["id"], "ready")
+                    update_job_greeting(db, job["id"], job["greeting"])
+            finally:
+                db.close()
+
+            failure = {
+                "success": False,
+                "error": "no_chat_input",
+                "history_detail": "未进入具体聊天会话",
+                "skip_backoff": True,
+            }
+            config = {
+                "_workbench_job_ids": [job["id"] for job in jobs],
+                "throttle": {
+                    "daily_limit": 2,
+                    "interval_min": 0,
+                    "interval_max": 0,
+                },
+            }
+            with patch("bosshunter.db.DB_PATH", db_path), \
+                 patch("bosshunter.executor.sender.should_take_day_off", return_value=False), \
+                 patch("bosshunter.executor.sender.SendWindowChecker.is_active", return_value=True), \
+                 patch(
+                     "bosshunter.executor.sender._send_greeting_once",
+                     side_effect=[({"success": True}, None), (failure, None)],
+                 ):
+                sent = send_greetings(config, force=True)
+
+            report = config["_workbench_send_report"]
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(report["scheduled_count"], 2)
+        self.assertEqual(report["attempted_count"], 2)
+        self.assertEqual(report["sent_count"], 1)
+        self.assertEqual(report["failed_count"], 1)
+        self.assertEqual(report["deferred_count"], 1)
+        self.assertEqual(report["quota_deferred_count"], 1)
+        self.assertEqual(report["stop_reason"], "daily_limit")
+
     def test_pending_confirmation_excludes_jobs_with_greetings(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")

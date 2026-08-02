@@ -315,6 +315,20 @@ def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
 
 
 def _execute_full(task: WorkbenchTask, config: dict) -> None:
+	db = _get_web_db()
+	try:
+		deferred_job_ids = [str(job["id"]) for job in get_jobs_ready_to_send(db)]
+	finally:
+		db.close()
+	if deferred_job_ids:
+		_log(task, f"优先续发上次已确认但未完成的 {len(deferred_job_ids)} 个岗位")
+		deferred_config = load_config(CONFIG_PATH)
+		deferred_config["_workbench_job_ids"] = deferred_job_ids
+		deferred_config["_workbench_skip_greeting"] = True
+		_execute_deliver(task, deferred_config)
+		if task.stop_requested.is_set():
+			return
+
 	_execute_collect(task, config)
 	if task.stop_requested.is_set():
 		return
@@ -349,12 +363,14 @@ def _execute_full(task: WorkbenchTask, config: dict) -> None:
 
 	task.context["waiting_confirmation"] = False
 	_log(task, f"前端已确认 {len(job_ids)} 个岗位，继续投递")
-	deliver_config = dict(config)
+	# The user may adjust the daily limit or other send settings while reviewing
+	# jobs. Reload immediately before delivery instead of using the task-start snapshot.
+	deliver_config = load_config(CONFIG_PATH)
 	deliver_config["_workbench_job_ids"] = job_ids
 	_execute_deliver(task, deliver_config)
 	if task.stop_requested.is_set():
 		return
-	_execute_monitor(task, config)
+	_execute_monitor(task, load_config(CONFIG_PATH))
 
 
 def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
@@ -377,11 +393,35 @@ def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
 			)
 	_log(task, "发送招呼语")
 	sent_count = send_greetings(config, force=True)
-	_log(task, f"招呼语发送完成：{sent_count}/{len(selected_job_ids) or sent_count}")
-	if selected_job_ids and sent_count != len(selected_job_ids):
-		raise RuntimeError(
-			f"招呼语发送未完成：选择 {len(selected_job_ids)} 个岗位，仅成功发送 {sent_count} 条；请查看失败记录后重试"
-		)
+	report = config.get("_workbench_send_report", {})
+	failed_count = int(report.get("failed_count", 0) or 0)
+	deferred_count = int(report.get("deferred_count", 0) or 0)
+	quota_deferred_count = min(
+		int(report.get("quota_deferred_count", 0) or 0),
+		deferred_count,
+	)
+	paused_count = max(deferred_count - quota_deferred_count, 0)
+	total_count = len(selected_job_ids) or sent_count + failed_count + deferred_count
+	_log(
+		task,
+		f"招呼语发送结果：成功 {sent_count}，失败 {failed_count}，待下次发送 {deferred_count}（共 {total_count}）",
+	)
+	if failed_count:
+		_log(task, f"{failed_count} 个岗位发送失败已单独记录，继续后续流程")
+	if quota_deferred_count:
+		_log(task, f"{quota_deferred_count} 个岗位因今日发送额度未执行，已保留在“待发送招呼语”")
+	if paused_count:
+		_log(task, f"{paused_count} 个岗位本轮未执行，已保留在“待发送招呼语”")
+
+	stop_reason = report.get("stop_reason")
+	if stop_reason in {"captcha", "rate_limit", "blocked", "consecutive_errors"}:
+		reason_labels = {
+			"captcha": "验证码",
+			"rate_limit": "频率限制",
+			"blocked": "账号或请求被拦截",
+			"consecutive_errors": "连续错误过多",
+		}
+		raise RuntimeError(f"发送已安全暂停：检测到{reason_labels[stop_reason]}")
 
 
 task_runner._executors.update({
