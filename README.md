@@ -35,14 +35,6 @@
 
 ## 项目演示
 
-### 在线评委演示（无需部署）
-
-> **直接体验：** [打开 BossHunter 评委演示模式](https://powerycy.github.io/BossHunter/)
->
-> 使用匿名简历和模拟 JD，体验岗位预筛、AI 评分排序、个性化招呼语、人工确认、状态漏斗与定制简历。无需登录、API Key 或招聘平台账号，不会执行真实抓取和发送。
-
-公开使用手册与 2026 外滩黑客松材料见 [`docs/hackathon2026`](docs/hackathon2026/README.md)。
-
 ### 产品功能演示视频（推荐先看）
 
 > **完整演示入口：** [点击观看 BossHunter 产品功能演示视频](docs/demo/JD猎手_AI求职_BossHunter_产品功能演示.mp4)
