@@ -15,13 +15,20 @@ from bosshunter.browser import (
 )
 from bosshunter.config import CITY_CODES
 from bosshunter.db import get_db, job_exists, insert_job
-from bosshunter.job_filters import matching_deal_breaker
+from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.throttle import PageThrottle
 
 console = Console()
 
 # BOSS直聘搜索页 URL 模板
 SEARCH_URL = "https://www.zhipin.com/web/geek/job?query={keyword}&city={city_code}"
+
+
+def _resolve_city_code(city: str, config: dict) -> str | None:
+    custom_codes = config.get("search", {}).get("city_codes", {})
+    if isinstance(custom_codes, dict) and custom_codes.get(city):
+        return str(custom_codes[city])
+    return CITY_CODES.get(city)
 
 # JS: 从搜索列表页提取岗位卡片数据
 JS_EXTRACT_LIST = """
@@ -129,7 +136,13 @@ def _generate_job_id(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:16]
 
 
-def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> int:
+def scrape_jobs(
+    config: dict,
+    keywords: list[str],
+    limit: int | None = None,
+    *,
+    new_job_ids: set[str] | None = None,
+) -> int:
     """Scrape jobs from BOSS直聘 and store in database.
 
     Supports multi-keyword × multi-city combinations with pagination.
@@ -139,6 +152,7 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
     db = get_db()
     throttle = PageThrottle(delay_min=2.0, delay_max=5.0)
     deal_breakers = config.get("profile", {}).get("deal_breakers", [])
+    blocked_companies = config.get("profile", {}).get("blocked_companies", [])
     new_count = 0
 
     # Pagination config
@@ -153,7 +167,7 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
     # Build search combinations: city × keyword
     search_combos = []
     for city in cities:
-        city_code = CITY_CODES.get(city)
+        city_code = _resolve_city_code(city, config)
         if not city_code:
             console.print(f"[yellow]⚠ 未识别的城市: {city}，已跳过[/yellow]")
             continue
@@ -243,6 +257,8 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                     # Skip deal breakers
                     if matching_deal_breaker(job_data.get("title", ""), deal_breakers):
                         continue
+                    if matching_blocked_company(job_data.get("company", ""), blocked_companies):
+                        continue
 
                     # Open detail page for full JD
                     throttle.wait()
@@ -283,7 +299,11 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                         "url": detail_url,
                     }
 
+                    if matching_blocked_company(job_record["company"], blocked_companies):
+                        continue
                     insert_job(db, job_record)
+                    if new_job_ids is not None:
+                        new_job_ids.add(job_id)
                     new_count += 1
                     keyword_new += 1
                     progress.update(task, description=f"搜索: {label} 第{page}页 (新增 {keyword_new})")

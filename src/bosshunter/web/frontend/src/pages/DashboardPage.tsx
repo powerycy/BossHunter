@@ -433,7 +433,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   }
 
   if (view === 'jobs') {
-    return <JobsPoolView jobs={jobs} />
+    return <JobsPoolView jobs={jobs} refresh={refresh} />
   }
 
   if (view === 'monitor') {
@@ -735,7 +735,35 @@ function InfoBlock({ label, value }: { label: string; value: string }) {
   )
 }
 
-function JobsPoolView({ jobs }: { jobs: Job[] }) {
+function JobsPoolView({ jobs, refresh }: { jobs: Job[]; refresh: () => Promise<void> }) {
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [scoring, setScoring] = useState(false)
+  const [notice, setNotice] = useState('')
+  const scorePending = async () => {
+    const pendingIds = jobs.filter(job => job.status === 'pending').map(job => job.id)
+    const jobIds = selectedIds.length ? selectedIds : pendingIds
+    if (!jobIds.length) return
+    setScoring(true)
+    try {
+      const res = await fetch('/api/workbench/task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'score', job_ids: jobIds }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || '启动批量评分失败')
+      }
+      setNotice(`已启动 ${jobIds.length} 个岗位的 AI 评分`)
+      setSelectedIds([])
+      await refresh()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '启动批量评分失败')
+    } finally {
+      setScoring(false)
+    }
+  }
+
   return (
     <div className="rounded-3xl border border-card-border bg-white p-5">
       <div className="mb-4 flex items-center justify-between">
@@ -743,9 +771,15 @@ function JobsPoolView({ jobs }: { jobs: Job[] }) {
           <h2 className="text-2xl font-black">岗位池</h2>
           <p className="mt-1 text-sm text-muted">集中查看已采集岗位、AI 分数、状态和详情入口。</p>
         </div>
-        <BriefcaseBusiness className="h-6 w-6 text-primary" />
+        <div className="flex items-center gap-3">
+          <Button size="sm" disabled={scoring || !jobs.some(job => job.status === 'pending')} onClick={scorePending}>
+            <Play className="mr-2 h-4 w-4" />{scoring ? '启动中...' : selectedIds.length ? `评分已选 ${selectedIds.length} 项` : 'AI 批量评分'}
+          </Button>
+          <BriefcaseBusiness className="h-6 w-6 text-primary" />
+        </div>
       </div>
-      <JobsTable jobs={jobs} />
+      {notice && <div className="mb-3 rounded-md bg-[#FFF0E5] px-3 py-2 text-sm text-primary">{notice}</div>}
+      <JobsTable jobs={jobs} selectedIds={selectedIds} onSelectionChange={setSelectedIds} />
     </div>
   )
 }

@@ -79,10 +79,16 @@ class WebApiRouteTests(unittest.TestCase):
             "wsgi.run_once": False,
         }
 
-        body = b"".join(
-            chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
-            for chunk in server.app(environ, start_response)
-        ).decode("utf-8")
+        response_iter = server.app(environ, start_response)
+        try:
+            body = b"".join(
+                chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+                for chunk in response_iter
+            ).decode("utf-8")
+        finally:
+            close = getattr(response_iter, "close", None)
+            if close:
+                close()
         return status_headers["status"], status_headers["headers"], body
 
     def _upload_resume(self, filename: str, content: bytes, content_type: str):

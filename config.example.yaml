@@ -16,10 +16,12 @@ profile:
     - "你的核心竞争力描述"
   # 可选：在线作品集链接
   portfolio_url: ""
+  blocked_companies: []  # Case-insensitive substring rules, e.g. ["某公司"]
 
 search:
   keywords: ["关键词1", "关键词2"]
   cities: ["北京"]
+  city_codes: {}  # Custom city name -> BOSS city code, populated by the Web config page
   max_pages: 5
   sort: newest
 
@@ -45,6 +47,7 @@ ai:
   thinking: "auto"               # auto / disabled / enabled / off
   thinking_budget: 2048           # thinking=enabled 时使用，至少 1024
   timeout_seconds: 180
+  scoring_concurrency: 3  # AI scoring workers, from 1 to 5
   scoring_max_tokens: 8192
   scoring_max_attempts: 2
   greeting_max_tokens: 8192

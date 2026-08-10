@@ -35,6 +35,7 @@ from bosshunter.db import (
 )
 from bosshunter.web.preflight import check_ai_connection, collect_preflight_checks, error_messages
 from bosshunter.web.resume_upload import ResumeUploadError, prepare_resume_content
+from bosshunter.web.city_lookup import CityLookupError, lookup_city
 from bosshunter.web.tasks import TaskAlreadyRunningError, WorkbenchTask, WorkbenchTaskRunner
 
 mimetypes.add_type("application/javascript", ".js", strict=True)
@@ -191,7 +192,7 @@ def _preflight_messages(mode: str, config: dict) -> list[str]:
 	if mode in {"full", "collect"} and not config.get("search", {}).get("keywords"):
 		messages.append("请先在配置页填写搜索关键词。")
 
-	if mode in {"full", "collect", "rescore"} and not get_ai_api_key(config):
+	if mode in {"full", "collect", "rescore", "score"} and not get_ai_api_key(config):
 		messages.append("请先在配置页填写当前 AI 服务的 API Key，或设置对应的标准环境变量。")
 
 	return messages
@@ -214,7 +215,8 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 
 	keywords = config.get("search", {}).get("keywords", [])
 	_log(task, "开始采集岗位")
-	scrape_jobs(config, keywords)
+	new_job_ids: set[str] = set()
+	scrape_jobs(config, keywords, new_job_ids=new_job_ids)
 	if task.stop_requested.is_set():
 		return
 	_log(task, "开始 AI 评分")
@@ -225,7 +227,7 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 		task,
 		f"AI 评分进度 {state['completed']}/{state['total']}：通过 {state['scored']}，过滤 {state['filtered']}，失败 {state['failed']}",
 	)
-	score_jobs(score_config)
+	score_jobs(score_config, job_ids=new_job_ids)
 
 
 def _execute_rescore(task: WorkbenchTask, config: dict) -> None:
@@ -240,6 +242,21 @@ def _execute_rescore(task: WorkbenchTask, config: dict) -> None:
 	)
 	_log(task, "开始重新评分")
 	score_jobs(score_config, rescore_filtered=True)
+
+
+def _execute_score(task: WorkbenchTask, config: dict) -> None:
+	from bosshunter.ai.scorer import score_jobs
+
+	job_ids = {str(job_id) for job_id in config.get("_workbench_score_job_ids", []) if str(job_id)}
+	score_config = dict(config)
+	score_config["_workbench_stop_event"] = task.stop_requested
+	score_config["_workbench_log"] = lambda message: _log(task, message)
+	score_config["_workbench_score_progress"] = lambda state: _log(
+		task,
+		f"AI 评分进度 {state['completed']}/{state['total']}：通过 {state['scored']}，过滤 {state['filtered']}，失败 {state['failed']}",
+	)
+	_log(task, "开始批量评分")
+	score_jobs(score_config, job_ids=job_ids or None)
 
 
 def _queue_monitor_delivery(
@@ -428,6 +445,7 @@ task_runner._executors.update({
 	"full": _execute_full,
 	"collect": _execute_collect,
 	"rescore": _execute_rescore,
+	"score": _execute_score,
 	"monitor": _execute_monitor,
 	"deliver": _execute_deliver,
 })
@@ -591,7 +609,10 @@ def api_workbench_task_start():
 		messages = _preflight_messages(mode, load_config(CONFIG_PATH))
 		if messages:
 			return _json_response({"error": "请先处理启动前检查", "messages": messages}, 400)
-		task = task_runner.start(mode, _task_config())
+		extra = {}
+		if mode == "score":
+			extra["_workbench_score_job_ids"] = body.get("job_ids", [])
+		task = task_runner.start(mode, _task_config(extra))
 		return _json_response(task)
 	except TaskAlreadyRunningError as e:
 		return _json_response({"error": str(e)}, 409)
@@ -858,6 +879,16 @@ def api_config_download():
 @app.route("/api/config/cities")
 def api_cities():
 	return _json_response(CITY_CODES)
+
+
+@app.route("/api/config/cities/lookup", method="POST")
+def api_city_lookup():
+	try:
+		body = request.json or {}
+		city = str(body.get("city") or "")
+		return _json_response(lookup_city(city))
+	except CityLookupError as exc:
+		return _json_response({"error": str(exc)}, 400)
 
 
 # ─── Resume APIs ─────────────────────────────────────────

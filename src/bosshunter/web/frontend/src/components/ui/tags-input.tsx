@@ -7,15 +7,18 @@ interface TagsInputProps {
   onChange: (tags: string[]) => void
   placeholder?: string
   className?: string
+  onAdd?: (tag: string) => void
 }
 
-export function TagsInput({ value, onChange, placeholder = '输入后按回车添加', className }: TagsInputProps) {
+export function TagsInput({ value, onChange, placeholder = '输入后按回车添加', className, onAdd }: TagsInputProps) {
   const [input, setInput] = useState('')
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && input.trim()) {
       e.preventDefault()
-      if (!value.includes(input.trim())) {
+      if (onAdd) {
+        onAdd(input.trim())
+      } else if (!value.includes(input.trim())) {
         onChange([...value, input.trim()])
       }
       setInput('')

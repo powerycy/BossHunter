@@ -10,6 +10,7 @@
         {"key": "salary_min", "label": "最低薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
         {"key": "salary_max", "label": "最高薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
         {"key": "deal_breakers", "label": "排除关键词", "type": "tags", "description": "含这些词的岗位自动跳过"},
+        {"key": "blocked_companies", "label": "公司屏蔽", "type": "tags", "description": "公司名称包含这些关键词时自动跳过"},
         {"key": "allow_internship", "label": "接受实习/管培岗位", "type": "switch", "default": false, "description": "关闭时自动过滤实习、intern、管培岗位"}
       ]
     },
@@ -20,6 +21,7 @@
       "fields": [
         {"key": "keywords", "label": "搜索关键词", "type": "tags", "description": "BOSS 搜索框使用的关键词"},
         {"key": "cities", "label": "搜索城市", "type": "multi-select", "options_from": "cities", "description": "留空则使用目标城市"},
+        {"key": "city_codes", "label": "自定义城市编码", "type": "object", "default": {}, "description": "自定义城市名称与 BOSS 城市编码的映射"},
         {"key": "max_pages", "label": "每关键词翻页数", "type": "number", "min": 1, "max": 10, "default": 3}
       ]
     },
@@ -59,7 +61,8 @@
         {"key": "base_url", "label": "Base URL", "type": "text", "placeholder": "留空使用默认", "default": ""},
         {"key": "thinking", "label": "Thinking 模式", "type": "select", "options": ["auto", "disabled", "enabled", "off"], "default": "auto", "description": "auto 优先关闭推理输出，不兼容时安全回退；off 不发送 thinking 参数"},
         {"key": "thinking_budget", "label": "Thinking 预算", "type": "number", "min": 1024, "max": 32768, "default": 2048, "description": "仅 enabled 模式使用"},
-        {"key": "timeout_seconds", "label": "AI 请求超时 (秒)", "type": "number", "min": 5, "max": 600, "default": 180}
+        {"key": "timeout_seconds", "label": "AI 请求超时 (秒)", "type": "number", "min": 5, "max": 600, "default": 180},
+        {"key": "scoring_concurrency", "label": "AI 评分并发数", "type": "number", "min": 1, "max": 5, "default": 3}
       ]
     },
     {
