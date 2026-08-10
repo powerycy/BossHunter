@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bosshunter.ai import scorer
+from bosshunter import config as config_module
 from bosshunter.config import load_config
 from bosshunter.db import get_db, insert_job
 from bosshunter.web import server
@@ -124,6 +125,20 @@ class LowScoreDeletionTests(unittest.TestCase):
         config = load_config(Path("missing-config.yaml"))
 
         self.assertEqual(config["scoring"]["low_score_delete_threshold"], 50)
+
+
+class SearchConfigRecoveryTests(unittest.TestCase):
+    def test_unreadable_question_mark_search_values_are_reported(self):
+        warnings = config_module.find_unreadable_search_values(
+            {
+                "search": {
+                    "keywords": ["??????", "product manager"],
+                    "cities": ["??", "Shanghai"],
+                }
+            }
+        )
+
+        self.assertEqual(warnings, {"keywords": 1, "cities": 1})
 
 
 if __name__ == "__main__":

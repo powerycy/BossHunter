@@ -162,6 +162,25 @@ def normalize_scoring_config(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+def find_unreadable_search_values(config: dict[str, Any]) -> dict[str, int]:
+    """Count search values that have already been lost to question-mark encoding."""
+    search = config.get("search", {}) if isinstance(config, dict) else {}
+    if not isinstance(search, dict):
+        return {}
+    warnings: dict[str, int] = {}
+    for field in ("keywords", "cities"):
+        values = search.get(field, [])
+        if not isinstance(values, list):
+            continue
+        count = sum(
+            isinstance(value, str) and bool(value) and set(value) == {"?"}
+            for value in values
+        )
+        if count:
+            warnings[field] = count
+    return warnings
+
+
 def _validate_ai_provider(config: dict[str, Any]) -> None:
     """Fail fast when the configured AI provider is not supported."""
     ai_cfg = config.get("ai", {})

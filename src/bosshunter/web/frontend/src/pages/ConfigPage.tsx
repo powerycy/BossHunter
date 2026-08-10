@@ -59,6 +59,12 @@ export default function ConfigPage() {
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
   const [cityError, setCityError] = useState('')
 
+  const unreadableSearchValues = config?._warnings?.unreadable_search_values || {}
+  const isUnreadableSearchValue = (value: unknown) => (
+    typeof value === 'string' && value.length > 0 && /^\?+$/.test(value)
+  )
+  const visibleKeywords = (config?.search?.keywords || []).filter((value: unknown) => !isUnreadableSearchValue(value))
+
   useEffect(() => {
     fetch('/api/resume').then(r => r.json()).then(setResumeInfo).catch(() => {})
   }, [])
@@ -267,7 +273,10 @@ export default function ConfigPage() {
         <SectionCard title="搜索设置" sectionKey="search" expanded={expandedSections} toggle={toggleSection}>
           <div className="space-y-4">
             <Field label="搜索关键词">
-              <TagsInput value={config.search?.keywords || []} onChange={v => updateConfig('search.keywords', v)} />
+              <TagsInput value={visibleKeywords} onChange={v => updateConfig('search.keywords', v)} />
+              {unreadableSearchValues.keywords && (
+                <p className="mt-1 text-xs text-amber-600">发现 {unreadableSearchValues.keywords} 个无法读取的关键词，已隐藏。请重新输入后保存。</p>
+              )}
             </Field>
             <Field label="城市">
               {(() => {

@@ -16,7 +16,13 @@ from bottle import Bottle, request, response, static_file, abort
 
 from bosshunter import __version__
 from bosshunter.ai.credentials import get_ai_api_key
-from bosshunter.config import AI_SERVICE_PRESETS, CITY_CODES, load_config, normalize_scoring_config
+from bosshunter.config import (
+	AI_SERVICE_PRESETS,
+	CITY_CODES,
+	find_unreadable_search_values,
+	load_config,
+	normalize_scoring_config,
+)
 from bosshunter.db import (
 	add_history,
 	count_unresolved_monitor_items,
@@ -129,12 +135,16 @@ def _redact_config_for_response(config):
 		auth_token = ai_cfg.pop("auth_token", None)
 		if auth_token:
 			ai_cfg["auth_token_masked"] = _mask_api_key(str(auth_token))
+	warnings = find_unreadable_search_values(redacted)
+	if warnings:
+		redacted["_warnings"] = {"unreadable_search_values": warnings}
 	return redacted
 
 
 def _sanitize_config_for_write(data):
 	"""Remove browser-only fields and preserve existing secrets on blank posts."""
 	cleaned = deepcopy(data)
+	cleaned.pop("_warnings", None)
 	ai_cfg = cleaned.get("ai")
 	if not isinstance(ai_cfg, dict):
 		return cleaned
