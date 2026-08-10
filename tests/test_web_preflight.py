@@ -3,10 +3,18 @@ from unittest.mock import Mock, patch
 
 import httpx
 
-from bosshunter.web.preflight import check_ai_connection, check_browser_connection
+from bosshunter.web.preflight import collect_preflight_checks, check_ai_connection, check_browser_connection
 
 
 class AiPreflightTests(unittest.TestCase):
+	@patch("bosshunter.web.preflight.check_browser_connection", return_value=[])
+	@patch("bosshunter.web.preflight.check_ai_connection", return_value=[])
+	def test_score_mode_runs_normal_preflight_checks(self, ai_check, _browser_check):
+		checks = collect_preflight_checks("score", {"ai": {"api_key": "test-key"}})
+
+		self.assertFalse(any(check["id"] == "task_mode" for check in checks))
+		ai_check.assert_called_once()
+
 	def test_missing_api_key_returns_actionable_error(self):
 		checks = check_ai_connection({"ai": {"model": "claude-sonnet-4-6"}}, required=True)
 
