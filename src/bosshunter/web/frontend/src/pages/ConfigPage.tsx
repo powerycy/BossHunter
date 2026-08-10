@@ -322,9 +322,14 @@ export default function ConfigPage() {
               <Input type="number" value={config.search?.max_pages || 3} onChange={e => updateConfig('search.max_pages', Number(e.target.value))} min={1} max={10} />
             </Field>
             <Field label="采集并发数">
-              <Select value={String(config.search?.collection_concurrency ?? 1)} onChange={e => updateConfig('search.collection_concurrency', Number(e.target.value))}>
-                {[1, 2, 3].map(value => <option key={value} value={value}>{value}</option>)}
-              </Select>
+              <Input
+                type="number"
+                value={config.search?.collection_concurrency ?? 1}
+                onChange={e => updateConfig('search.collection_concurrency', Number(e.target.value))}
+                min={1}
+                max={3}
+                step={1}
+              />
               <p className="mt-1 text-xs text-amber-700">提高并发可能触发平台风控，甚至导致账号限制或封号；建议保持默认值 1。</p>
             </Field>
           </div>
