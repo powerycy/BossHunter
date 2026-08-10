@@ -525,7 +525,10 @@ def call_openai_compatible_text(
                 continue
             raise normalize_ai_error(exc, response) from exc
 
-        payload_data = response.json()
+        try:
+            payload_data = response.json()
+        except (TypeError, ValueError) as exc:
+            raise normalize_ai_error(exc, response) from exc
         choices = payload_data.get("choices", []) if isinstance(payload_data, dict) else []
         if not choices:
             if isinstance(payload_data, dict):

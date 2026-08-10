@@ -19,6 +19,25 @@ def _job(job_id: str) -> dict:
 
 
 class AiCredentialErrorTests(unittest.TestCase):
+    def test_openai_compatible_empty_success_response_is_normalized(self):
+        request = httpx.Request("POST", "https://example.com/chat/completions")
+        response = httpx.Response(200, request=request, content=b"")
+        config = {
+            "ai": {
+                "service": "custom",
+                "provider": "openai_compatible",
+                "model": "test-model",
+                "api_key": "secret",
+                "base_url": "https://example.com",
+            }
+        }
+
+        with patch("bosshunter.ai.credentials.httpx.post", return_value=response):
+            with self.assertRaises(credentials.AIRequestError) as raised:
+                credentials.call_openai_compatible_text("prompt", config, 256)
+
+        self.assertEqual(raised.exception.kind, "request_failed")
+
     def test_openai_compatible_quota_error_is_not_silently_swallowed(self):
         request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
         response = httpx.Response(
