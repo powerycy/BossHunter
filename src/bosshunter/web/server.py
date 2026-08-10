@@ -684,6 +684,42 @@ def api_workbench_task_pause(task_id):
 		return _json_response({"error": str(e)}, 500)
 
 
+@app.route("/api/workbench/task/<task_id>/resume", method="POST")
+def api_workbench_task_resume(task_id):
+	try:
+		source_task = task_runner._tasks.get(task_id)
+		if not source_task:
+			return _json_response({"error": "任务不存在"}, 404)
+		descriptor = source_task.context.get("resume")
+		mode = descriptor.get("mode") if isinstance(descriptor, dict) else ""
+		config = load_config(CONFIG_PATH)
+		messages = [] if mode == "deliver" else _preflight_messages(mode, config)
+		login_message = _boss_login_message(config)
+		if login_message:
+			messages.append(login_message)
+		if messages:
+			return _json_response({"error": "请先处理启动前检查", "messages": messages}, 400)
+		return _json_response(task_runner.resume(task_id, config))
+	except KeyError:
+		return _json_response({"error": "任务不存在"}, 404)
+	except (TaskAlreadyRunningError, ValueError) as e:
+		return _json_response({"error": str(e)}, 409)
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/workbench/task/<task_id>", method="DELETE")
+def api_workbench_task_delete(task_id):
+	try:
+		return _json_response(task_runner.delete(task_id))
+	except KeyError:
+		return _json_response({"error": "任务不存在"}, 404)
+	except TaskAlreadyRunningError as e:
+		return _json_response({"error": str(e)}, 409)
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
 @app.route("/api/workbench/deliver", method="POST")
 def api_workbench_deliver():
 	try:

@@ -45,6 +45,12 @@ class WorkbenchTask:
     context: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def snapshot(self) -> dict:
+        resume = self.context.get("resume")
+        can_resume = (
+            self.status == "stopped"
+            and isinstance(resume, dict)
+            and bool(resume.get("mode"))
+        )
         return {
             "id": self.id,
             "mode": self.mode,
@@ -57,6 +63,7 @@ class WorkbenchTask:
             "deadline_at": self.deadline_at,
             "stop_reason": self.stop_reason,
             "stop_requested": self.stop_requested.is_set(),
+            "can_resume": can_resume,
         }
 
 
@@ -83,6 +90,16 @@ class WorkbenchTaskRunner:
                 )
 
             task = WorkbenchTask(id=str(uuid4()), mode=mode, label=MODE_LABELS[mode])
+            resume_mode = mode
+            resume_job_ids: list[str] = []
+            if mode == "deliver":
+                resume_job_ids = [str(job_id) for job_id in config.get("_workbench_job_ids", []) if str(job_id)]
+                if not resume_job_ids:
+                    resume_mode = ""
+            elif mode == "score":
+                resume_job_ids = [str(job_id) for job_id in config.get("_workbench_score_job_ids", []) if str(job_id)]
+            if resume_mode:
+                task.context["resume"] = {"mode": resume_mode, "job_ids": resume_job_ids}
             deadline = _deadline_from_config(mode, config)
             if deadline:
                 task.deadline_at = deadline.isoformat(timespec="seconds")
@@ -106,6 +123,42 @@ class WorkbenchTaskRunner:
                 timer.start()
             thread.start()
             return task.snapshot()
+
+    def resume(self, task_id: str, config: dict) -> dict:
+        """Start a new task from a stopped task's safe resume descriptor."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                raise KeyError(task_id)
+            if task.status != "stopped":
+                raise ValueError("只有已暂停的任务可以继续")
+            descriptor = task.context.get("resume")
+            if not isinstance(descriptor, dict) or not descriptor.get("mode"):
+                raise ValueError("该任务没有可恢复的上下文")
+            mode = str(descriptor["mode"])
+            job_ids = [str(job_id) for job_id in descriptor.get("job_ids", []) if str(job_id)]
+
+        resume_config = dict(config)
+        if mode == "deliver":
+            resume_config["_workbench_job_ids"] = job_ids
+        elif mode == "score" and job_ids:
+            resume_config["_workbench_score_job_ids"] = job_ids
+        return self.start(mode, resume_config)
+
+    def delete(self, task_id: str) -> dict:
+        """Remove a terminal task card without touching job data."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                raise KeyError(task_id)
+            if task.status not in TERMINAL_STATUSES:
+                raise TaskAlreadyRunningError("请先暂停并等待任务停止后再删除任务卡")
+            self._tasks.pop(task_id, None)
+            self._threads.pop(task_id, None)
+            timer = self._deadline_timers.pop(task_id, None)
+        if timer:
+            timer.cancel()
+        return {"id": task_id, "deleted": True}
 
     def status(self) -> dict:
         with self._lock:

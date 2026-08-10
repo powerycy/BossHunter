@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Square,
   XCircle,
+  Trash2,
 } from 'lucide-react'
 
 type WorkbenchMode = 'full' | 'collect' | 'rescore' | 'monitor'
@@ -246,7 +247,18 @@ function PreflightPanel({
 }
 
 export default function DashboardPage({ view = 'workbench' }: DashboardPageProps) {
-  const { workbench, jobs, history, loading, error, refresh, startTask, pauseTask } = useDashboard(view)
+  const {
+    workbench,
+    jobs,
+    history,
+    loading,
+    error,
+    refresh,
+    startTask,
+    pauseTask,
+    resumeTask,
+    deleteTask,
+  } = useDashboard(view)
   const [selected, setSelected] = useState<string[]>([])
   const [notice, setNotice] = useState('')
   const [preflightChecks, setPreflightChecks] = useState<PreflightCheck[]>([])
@@ -254,6 +266,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const [selectedJob, setSelectedJob] = useState<Job | null>(null)
   const [modePending, setModePending] = useState<WorkbenchMode | null>(null)
   const [pausePending, setPausePending] = useState(false)
+  const [taskActionPending, setTaskActionPending] = useState(false)
   const [confirmedDeliveryIds, setConfirmedDeliveryIds] = useState<Set<string>>(new Set())
 
   const todayJobs = useMemo(
@@ -296,6 +309,34 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       setNotice(err instanceof Error ? err.message : '暂停失败')
     } finally {
       setPausePending(false)
+    }
+  }
+
+  const handleResumeTask = async () => {
+    if (!visibleTask?.can_resume || taskActionPending || activeTask) return
+    if (!window.confirm(`是否继续${visibleTask.label}任务？系统只会处理原任务尚未完成的岗位。`)) return
+    try {
+      setTaskActionPending(true)
+      await resumeTask(visibleTask.id)
+      setNotice(`${visibleTask.label}已继续运行。`)
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '继续任务失败')
+    } finally {
+      setTaskActionPending(false)
+    }
+  }
+
+  const handleDeleteTask = async () => {
+    if (!visibleTask || activeTask || !['completed', 'failed', 'stopped'].includes(visibleTask.status) || taskActionPending) return
+    if (!window.confirm('确定删除这张任务卡吗？只会移除任务卡，不会删除岗位、评分、招呼语或历史记录。')) return
+    try {
+      setTaskActionPending(true)
+      await deleteTask(visibleTask.id)
+      setNotice('任务卡已删除，岗位和历史数据已保留。')
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '删除任务卡失败')
+    } finally {
+      setTaskActionPending(false)
     }
   }
 
@@ -521,6 +562,30 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                   >
                     <Pause className="mr-2 h-4 w-4" />
                     {pausePending || activeTask.status === 'stopping' ? '暂停中...' : '暂停任务'}
+                  </Button>
+                )}
+                {!activeTask && visibleTask.can_resume && (
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    onClick={handleResumeTask}
+                    disabled={taskActionPending}
+                    title="继续任务"
+                    aria-label="继续任务"
+                  >
+                    <Play className="h-4 w-4" />
+                  </Button>
+                )}
+                {!activeTask && ['completed', 'failed', 'stopped'].includes(visibleTask.status) && (
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    onClick={handleDeleteTask}
+                    disabled={taskActionPending}
+                    title="删除任务卡"
+                    aria-label="删除任务卡"
+                  >
+                    <Trash2 className="h-4 w-4" />
                   </Button>
                 )}
                 <span className="rounded-full bg-[#FFF0E5] px-3 py-1 text-xs font-black text-primary">

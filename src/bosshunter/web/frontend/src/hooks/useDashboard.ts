@@ -49,6 +49,7 @@ interface WorkbenchTask {
   deadline_at?: string
   stop_reason?: string
   stop_requested: boolean
+  can_resume?: boolean
 }
 
 interface WorkbenchData {
@@ -165,13 +166,44 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
     await fetchAll()
   }
 
+  const resumeTask = async (taskId: string) => {
+    const res = await fetch(`/api/workbench/task/${taskId}/resume`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      const details = Array.isArray(data.messages) ? data.messages.map(String).filter(Boolean).join('，') : ''
+      throw new Error([data.error || '继续任务失败', details].filter(Boolean).join('：'))
+    }
+    await fetchAll()
+  }
+
+  const deleteTask = async (taskId: string) => {
+    const res = await fetch(`/api/workbench/task/${taskId}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || '删除任务卡失败')
+    }
+    await fetchAll()
+  }
+
   useEffect(() => {
     fetchAll()
     const interval = setInterval(fetchAll, 5000)
     return () => clearInterval(interval)
   }, [])
 
-  return { workbench, jobs, history, loading, error, refresh: fetchAll, startTask, stopTask, pauseTask }
+  return {
+    workbench,
+    jobs,
+    history,
+    loading,
+    error,
+    refresh: fetchAll,
+    startTask,
+    stopTask,
+    pauseTask,
+    resumeTask,
+    deleteTask,
+  }
 }
 
 export type { FunnelData, ActivityData, Job, TopCompany, WorkbenchData, WorkbenchTask, HistoryDetailPayload, HistoryItem }

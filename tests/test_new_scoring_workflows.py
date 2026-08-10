@@ -11,6 +11,15 @@ from bosshunter.web.tasks import WorkbenchTask
 class _RecordingRunner:
     def __init__(self):
         self.calls = []
+        self._tasks = {
+            "old": WorkbenchTask(
+                id="old",
+                mode="deliver",
+                label="deliver",
+                status="stopped",
+                context={"resume": {"mode": "deliver", "job_ids": ["job-a"]}},
+            ),
+        }
 
     def start(self, mode, config):
         self.calls.append((mode, config))
@@ -18,6 +27,14 @@ class _RecordingRunner:
 
     def status(self):
         return {"active": None}
+
+    def resume(self, task_id, config):
+        self.calls.append(("resume", task_id, config))
+        return {"id": "task-2", "mode": "deliver", "status": "running"}
+
+    def delete(self, task_id):
+        self.calls.append(("delete", task_id))
+        return {"id": task_id, "deleted": True}
 
 
 class ScoringWorkflowTests(unittest.TestCase):
@@ -29,7 +46,7 @@ class ScoringWorkflowTests(unittest.TestCase):
         server.task_runner = self.original_runner
         server.set_base_dir(self.original_base_dir)
 
-    def _post_json(self, path, payload):
+    def _post_json(self, path, payload, method="POST"):
         body = json.dumps(payload).encode("utf-8")
         result = {}
 
@@ -38,7 +55,7 @@ class ScoringWorkflowTests(unittest.TestCase):
             result["headers"] = dict(headers)
 
         environ = {
-            "REQUEST_METHOD": "POST",
+            "REQUEST_METHOD": method,
             "PATH_INFO": path,
             "QUERY_STRING": "",
             "CONTENT_LENGTH": str(len(body)),
@@ -137,6 +154,30 @@ class ScoringWorkflowTests(unittest.TestCase):
         self.assertTrue(status.startswith("400"))
         self.assertIn("log in to BOSS", payload["error"])
         self.assertEqual(runner.calls, [])
+
+    def test_task_resume_route_preserves_the_task_id_and_uses_current_config(self):
+        runner = _RecordingRunner()
+        server.task_runner = runner
+        config = {"ai": {"api_key": "test"}, "search": {"keywords": ["AI"]}}
+
+        with patch.object(server, "load_config", return_value=config), \
+             patch.object(server, "get_boss_login_status", return_value={"ready": True}), \
+             patch.object(server, "_preflight_messages", return_value=[]):
+            status, payload = self._post_json("/api/workbench/task/old/resume", {})
+
+        self.assertTrue(status.startswith("200"))
+        self.assertEqual(payload["id"], "task-2")
+        self.assertEqual(runner.calls[0][0:2], ("resume", "old"))
+
+    def test_task_delete_route_only_deletes_the_task_card(self):
+        runner = _RecordingRunner()
+        server.task_runner = runner
+
+        status, payload = self._post_json("/api/workbench/task/old", {}, method="DELETE")
+
+        self.assertTrue(status.startswith("200"))
+        self.assertEqual(payload, {"id": "old", "deleted": True})
+        self.assertEqual(runner.calls, [("delete", "old")])
 
     def test_city_lookup_route_returns_safe_error(self):
         with patch("bosshunter.web.server.lookup_city", side_effect=server.CityLookupError("unknown")):
