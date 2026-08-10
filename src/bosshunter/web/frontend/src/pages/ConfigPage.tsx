@@ -321,6 +321,16 @@ export default function ConfigPage() {
             <Field label={`通过阈值: ${config.scoring?.threshold || 60}`}>
               <Slider value={config.scoring?.threshold || 60} onChange={v => updateConfig('scoring.threshold', v)} min={0} max={100} />
             </Field>
+            <Field label="低分自动删除阈值">
+              <Input
+                type="number"
+                value={config.scoring?.low_score_delete_threshold ?? 50}
+                onChange={e => updateConfig('scoring.low_score_delete_threshold', Number(e.target.value))}
+                min={0}
+                max={100}
+              />
+              <p className="mt-1 text-xs text-muted">AI 评分完成后低于此分数的岗位永久删除；未评分岗位不会删除。</p>
+            </Field>
             <Field label="每轮最大候选数">
               <Input type="number" value={config.scoring?.max_candidates || 20} onChange={e => updateConfig('scoring.max_candidates', Number(e.target.value))} min={1} max={100} />
             </Field>

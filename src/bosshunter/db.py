@@ -113,6 +113,13 @@ def update_job_status(conn: sqlite3.Connection, job_id: str, status: str) -> Non
     conn.commit()
 
 
+def delete_job(conn: sqlite3.Connection, job_id: str) -> None:
+    """Permanently remove one job and its related history."""
+    conn.execute("DELETE FROM history WHERE job_id = ?", (job_id,))
+    conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    conn.commit()
+
+
 def add_history(conn: sqlite3.Connection, job_id: str, action: str, detail: str = "") -> None:
     """Add a history record."""
     conn.execute(

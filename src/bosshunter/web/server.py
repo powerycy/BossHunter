@@ -16,7 +16,7 @@ from bottle import Bottle, request, response, static_file, abort
 
 from bosshunter import __version__
 from bosshunter.ai.credentials import get_ai_api_key
-from bosshunter.config import AI_SERVICE_PRESETS, CITY_CODES, load_config
+from bosshunter.config import AI_SERVICE_PRESETS, CITY_CODES, load_config, normalize_scoring_config
 from bosshunter.db import (
 	add_history,
 	count_unresolved_monitor_items,
@@ -496,6 +496,8 @@ def api_jobs():
 	status_filter = request.params.get("status", None)
 	limit = int(request.params.get("limit", 100))
 	offset = int(request.params.get("offset", 0))
+	if limit < 0 or offset < 0:
+		return _json_response({"error": "limit and offset must be non-negative"}, 400)
 
 	db = _get_web_db()
 	try:
@@ -504,8 +506,13 @@ def api_jobs():
 		if status_filter:
 			query += " WHERE status = ?"
 			params.append(status_filter)
-		query += " ORDER BY score DESC, created_at DESC LIMIT ? OFFSET ?"
-		params.extend([limit, offset])
+		query += " ORDER BY score DESC, created_at DESC"
+		if limit:
+			query += " LIMIT ? OFFSET ?"
+			params.extend([limit, offset])
+		elif offset:
+			query += " LIMIT -1 OFFSET ?"
+			params.append(offset)
 
 		rows = db.execute(query, params).fetchall()
 		jobs = [dict(row) for row in rows]
@@ -842,6 +849,7 @@ def api_config_post():
 		if not isinstance(data, dict):
 			return _json_response({"error": "Config body must be an object"}, 400)
 		data = _sanitize_config_for_write(data)
+		normalize_scoring_config(data)
 
 		# Basic validation
 		profile = data.get("profile", {})

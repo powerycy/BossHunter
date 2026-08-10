@@ -81,6 +81,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "scoring": {
         "threshold": 71,
+        "low_score_delete_threshold": 50,
         "max_candidates": 20,
     },
     "throttle": {
@@ -144,8 +145,21 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
         with open(config_path, encoding="utf-8") as f:
             user_cfg = yaml.safe_load(f) or {}
         _deep_merge(cfg, user_cfg)
+    normalize_scoring_config(cfg)
     _validate_ai_provider(cfg)
     return cfg
+
+
+def normalize_scoring_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Normalize score thresholds shared by config loading and API writes."""
+    scoring = config.setdefault("scoring", {})
+    raw_delete_threshold = scoring.get("low_score_delete_threshold", 50)
+    try:
+        delete_threshold = int(raw_delete_threshold)
+    except (TypeError, ValueError):
+        delete_threshold = 50
+    scoring["low_score_delete_threshold"] = max(0, min(delete_threshold, 100))
+    return config
 
 
 def _validate_ai_provider(config: dict[str, Any]) -> None:

@@ -11,6 +11,7 @@ from bosshunter.ai.credentials import AIRequestError, call_anthropic_text, get_a
 from bosshunter.cancellation import run_cancellable
 from bosshunter.db import (
     add_history,
+    delete_job,
     get_db,
     get_jobs_by_status,
     reset_ai_filtered_jobs,
@@ -31,6 +32,16 @@ def get_scoring_concurrency(config: dict) -> int:
     except (TypeError, ValueError):
         value = 3
     return max(1, min(value, 5))
+
+
+def get_low_score_delete_threshold(config: dict) -> int:
+    """Return the safe score below which a completed evaluation is removed."""
+    raw_value = config.get("scoring", {}).get("low_score_delete_threshold", 50)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = 50
+    return max(0, min(value, 100))
 
 
 SCORING_PROMPT = """你是一位专业的求职顾问。请根据以下简历和岗位JD，评估候选人与该岗位的匹配度。
@@ -180,6 +191,26 @@ def _record_score_failure(db, job: dict, detail: str) -> None:
     add_history(db, job["id"], "score_failed", safe_detail)
 
 
+def _apply_score_result(
+    db,
+    job: dict,
+    score: int,
+    full_reason: str,
+    threshold: int,
+    low_score_delete_threshold: int,
+) -> str:
+    """Persist one successful score and return its resulting category."""
+    if score < low_score_delete_threshold:
+        delete_job(db, job["id"])
+        return "deleted"
+    update_job_score(db, job["id"], score, full_reason)
+    if score >= threshold:
+        update_job_status(db, job["id"], "ready")
+        return "ready"
+    update_job_status(db, job["id"], "filtered")
+    return "filtered"
+
+
 _BATCH_STOP_ERROR_KINDS = {"token_quota", "rate_limit", "auth", "network", "request_failed"}
 
 
@@ -256,6 +287,7 @@ def _score_jobs_concurrently(
             return 0, 0
 
         threshold = config.get("scoring", {}).get("threshold", 60)
+        low_score_delete_threshold = get_low_score_delete_threshold(config)
         ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
         try:
             max_attempts = max(1, min(int(ai_cfg.get("scoring_max_attempts", 2) or 2), 3))
@@ -306,12 +338,17 @@ def _score_jobs_concurrently(
                         pause_reason = outcome["pause_reason"]
                     elif outcome.get("result"):
                         score, full_reason = outcome["result"]
-                        update_job_score(db, job["id"], score, full_reason)
-                        if score >= threshold:
-                            update_job_status(db, job["id"], "ready")
+                        result_status = _apply_score_result(
+                            db,
+                            job,
+                            score,
+                            full_reason,
+                            threshold,
+                            low_score_delete_threshold,
+                        )
+                        if result_status == "ready":
                             scored += 1
                         else:
-                            update_job_status(db, job["id"], "filtered")
                             filtered += 1
                     else:
                         failed += 1
@@ -355,6 +392,7 @@ def _score_jobs_sequential(config: dict, *, rescore_filtered: bool = False) -> t
             _notify(config, f"已将 {reset_count} 个 AI 低分岗位加入重新评分队列。")
 
         threshold = config.get("scoring", {}).get("threshold", 60)
+        low_score_delete_threshold = get_low_score_delete_threshold(config)
         pending_jobs = get_jobs_by_status(db, "pending")
         if not pending_jobs:
             console.print("[yellow]没有待评分的岗位[/yellow]")
@@ -485,13 +523,17 @@ def _score_jobs_sequential(config: dict, *, rescore_filtered: bool = False) -> t
                         continue
 
                     score, full_reason = result
-                    update_job_score(db, job["id"], score, full_reason)
-
-                    if score >= threshold:
-                        update_job_status(db, job["id"], "ready")
+                    result_status = _apply_score_result(
+                        db,
+                        job,
+                        score,
+                        full_reason,
+                        threshold,
+                        low_score_delete_threshold,
+                    )
+                    if result_status == "ready":
                         scored += 1
                     else:
-                        update_job_status(db, job["id"], "filtered")
                         filtered += 1
                 finally:
                     processed += 1

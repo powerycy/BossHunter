@@ -30,7 +30,8 @@
       "label": "评分设置",
       "icon": "Star",
       "fields": [
-        {"key": "threshold", "label": "通过阈值", "type": "slider", "min": 0, "max": 100, "default": 71, "description": "低于此分自动过滤"},
+        {"key": "threshold", "label": "通过阈值", "type": "slider", "min": 0, "max": 100, "default": 71, "description": "达到此分数进入后续流程"},
+        {"key": "low_score_delete_threshold", "label": "低分自动删除阈值", "type": "number", "min": 0, "max": 100, "default": 50, "description": "AI 评分完成后低于此分数的岗位永久删除；未评分岗位不会删除"},
         {"key": "max_candidates", "label": "每轮最大候选数", "type": "number", "min": 1, "max": 100, "default": 20}
       ]
     },

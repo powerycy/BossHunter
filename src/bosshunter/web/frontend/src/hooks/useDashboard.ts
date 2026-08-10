@@ -112,7 +112,7 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
       const fetchOptions = { cache: 'no-store' as const }
       const [workbenchRes, jobsRes, historyRes] = await Promise.all([
         needsWorkbench ? fetch('/api/workbench', fetchOptions) : Promise.resolve(null),
-        needsJobs ? fetch('/api/jobs?limit=100', fetchOptions) : Promise.resolve(null),
+        needsJobs ? fetch('/api/jobs?limit=0', fetchOptions) : Promise.resolve(null),
         needsHistory ? fetch('/api/history?limit=50&include_unresolved=1', fetchOptions) : Promise.resolve(null),
       ])
       const [workbenchData, jobsData, historyData] = await Promise.all([
