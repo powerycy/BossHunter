@@ -5,15 +5,14 @@ import random
 import re
 import time
 import hashlib
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from urllib.parse import quote
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
-
 from bosshunter.browser import (
     new_tab, close_tab, evaluate, scroll, wait_for_load
 )
-from bosshunter.config import CITY_CODES
+from bosshunter.config import CITY_CODES, get_collection_concurrency
 from bosshunter.db import get_db, job_exists, insert_job
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.throttle import PageThrottle
@@ -136,6 +135,178 @@ def _generate_job_id(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:16]
 
 
+def _stop_requested(stop_event) -> bool:
+    return bool(stop_event is not None and stop_event.is_set())
+
+
+def _scrape_combo(
+    config: dict,
+    combo: tuple[str, str, str],
+    *,
+    max_pages: int,
+    limit: int | None,
+    stop_event,
+) -> tuple[int, set[str]]:
+    """Collect one city/keyword combination with worker-local resources."""
+    city, city_code, keyword = combo
+    db = get_db()
+    throttle = PageThrottle(delay_min=2.0, delay_max=5.0)
+    deal_breakers = config.get("profile", {}).get("deal_breakers", [])
+    blocked_companies = config.get("profile", {}).get("blocked_companies", [])
+    search_config = config.get("search", {})
+    new_count = 0
+    new_job_ids: set[str] = set()
+
+    try:
+        for page in range(1, max_pages + 1):
+            if _stop_requested(stop_event) or (limit is not None and new_count >= limit):
+                break
+
+            search_url = SEARCH_URL.format(keyword=quote(keyword), city_code=city_code)
+            if search_config.get("sort", "") == "newest":
+                search_url += "&sortType=2"
+            if page > 1:
+                search_url += f"&page={page}"
+
+            target_id = new_tab(search_url, background=True)
+            if not target_id:
+                break
+
+            time.sleep(3)
+            wait_for_load(target_id, timeout=10)
+            scroll(target_id, y=2000)
+            time.sleep(1.5)
+            scroll(target_id, y=4000)
+            time.sleep(1.5)
+
+            result = evaluate(target_id, JS_EXTRACT_LIST)
+            close_tab(target_id)
+            if not result:
+                break
+
+            try:
+                jobs_list = json.loads(result)
+            except (json.JSONDecodeError, TypeError):
+                break
+
+            if not jobs_list:
+                break
+
+            for job_data in jobs_list:
+                if _stop_requested(stop_event) or (limit is not None and new_count >= limit):
+                    break
+
+                job_url = job_data.get("url", "")
+                job_id = _generate_job_id(job_url)
+                if job_exists(db, job_id):
+                    continue
+                if matching_deal_breaker(job_data.get("title", ""), deal_breakers):
+                    continue
+                if matching_blocked_company(job_data.get("company", ""), blocked_companies):
+                    continue
+
+                throttle.wait()
+                if _stop_requested(stop_event):
+                    break
+                detail_url = f"https://www.zhipin.com{job_url}"
+                detail_target = new_tab(detail_url, background=True)
+                if not detail_target:
+                    continue
+
+                time.sleep(2)
+                wait_for_load(detail_target, timeout=10)
+                detail_result = evaluate(detail_target, JS_EXTRACT_DETAIL)
+                close_tab(detail_target)
+                if not detail_result:
+                    continue
+
+                try:
+                    detail = json.loads(detail_result)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                job_record = {
+                    "id": job_id,
+                    "title": detail.get("title", job_data.get("title", "")),
+                    "company": detail.get("company", job_data.get("company", "")),
+                    "salary": detail.get("salary", job_data.get("salary", "")),
+                    "city": city,
+                    "experience": detail.get("experience", job_data.get("experience", "")),
+                    "jd": detail.get("jd", ""),
+                    "hr_name": detail.get("hr_name", ""),
+                    "hr_title": detail.get("hr_title", ""),
+                    "hr_active": detail.get("hr_active", ""),
+                    "company_size": detail.get("company_size", ""),
+                    "company_industry": detail.get("company_industry", ""),
+                    "url": detail_url,
+                }
+                if matching_blocked_company(job_record["company"], blocked_companies):
+                    continue
+                insert_job(db, job_record)
+                new_job_ids.add(job_id)
+                new_count += 1
+
+            if page < max_pages and not _stop_requested(stop_event):
+                time.sleep(random.uniform(3.0, 6.0))
+    finally:
+        db.close()
+
+    return new_count, new_job_ids
+
+
+def _collect_concurrently(
+    config: dict,
+    search_combos: list[tuple[str, str, str]],
+    *,
+    max_pages: int,
+    workers: int,
+    stop_event,
+    new_job_ids: set[str] | None,
+) -> int:
+    """Run a bounded set of combination workers and merge their results."""
+    iterator = iter(search_combos)
+    in_flight = set()
+    new_count = 0
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        def submit_next() -> bool:
+            if _stop_requested(stop_event):
+                return False
+            try:
+                combo = next(iterator)
+            except StopIteration:
+                return False
+            in_flight.add(executor.submit(
+                _scrape_combo,
+                config,
+                combo,
+                max_pages=max_pages,
+                limit=None,
+                stop_event=stop_event,
+            ))
+            return True
+
+        while len(in_flight) < workers and submit_next():
+            pass
+
+        while in_flight:
+            completed, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            for future in completed:
+                in_flight.remove(future)
+                try:
+                    combo_count, combo_job_ids = future.result()
+                except Exception as exc:
+                    console.print(f"[yellow]采集组合失败，已继续其他组合: {exc}[/yellow]")
+                    continue
+                new_count += combo_count
+                if new_job_ids is not None:
+                    new_job_ids.update(combo_job_ids)
+            while len(in_flight) < workers and submit_next():
+                pass
+
+    return new_count
+
+
 def scrape_jobs(
     config: dict,
     keywords: list[str],
@@ -149,15 +320,14 @@ def scrape_jobs(
     When limit is None, collection is bounded only by city × keyword × max_pages.
     Returns the number of new jobs added.
     """
-    db = get_db()
-    throttle = PageThrottle(delay_min=2.0, delay_max=5.0)
-    deal_breakers = config.get("profile", {}).get("deal_breakers", [])
-    blocked_companies = config.get("profile", {}).get("blocked_companies", [])
-    new_count = 0
-
     # Pagination config
     search_config = config.get("search", {})
-    max_pages = min(search_config.get("max_pages", 3), 10)  # Hard cap: 10 pages
+    try:
+        max_pages = int(search_config.get("max_pages", 3))
+    except (TypeError, ValueError):
+        max_pages = 3
+    max_pages = max(1, min(max_pages, 10))  # Hard cap: 10 pages
+    stop_event = config.get("_workbench_stop_event")
 
     # Resolve cities: search.cities > profile.target_cities > ["北京"]
     cities = search_config.get("cities", [])
@@ -176,143 +346,36 @@ def scrape_jobs(
 
     if not search_combos:
         console.print("[red]没有有效的搜索组合（检查城市配置）[/red]")
-        db.close()
         return 0
 
     console.print(f"[dim]搜索组合: {len(search_combos)} 个 ({len(cities)}城市 × {len(keywords)}关键词 × {max_pages}页)[/dim]")
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        for city, city_code, keyword in search_combos:
-            if limit is not None and new_count >= limit:
-                break
+    workers = get_collection_concurrency(config)
+    if limit is not None:
+        workers = 1
+    if workers > 1:
+        return _collect_concurrently(
+            config,
+            search_combos,
+            max_pages=max_pages,
+            workers=workers,
+            stop_event=stop_event,
+            new_job_ids=new_job_ids,
+        )
 
-            label = f"{city}/{keyword}" if len(cities) > 1 else keyword
-            task = progress.add_task(f"搜索: {label}", total=None)
-            keyword_new = 0
+    new_count = 0
+    for combo in search_combos:
+        if _stop_requested(stop_event) or (limit is not None and new_count >= limit):
+            break
+        combo_count, combo_job_ids = _scrape_combo(
+            config,
+            combo,
+            max_pages=max_pages,
+            limit=None if limit is None else limit - new_count,
+            stop_event=stop_event,
+        )
+        new_count += combo_count
+        if new_job_ids is not None:
+            new_job_ids.update(combo_job_ids)
 
-            for page in range(1, max_pages + 1):
-                if limit is not None and new_count >= limit:
-                    break
-
-                # Build paginated URL
-                search_url = SEARCH_URL.format(keyword=quote(keyword), city_code=city_code)
-                sort_mode = search_config.get("sort", "")
-                if sort_mode == "newest":
-                    search_url += "&sortType=2"
-                if page > 1:
-                    search_url += f"&page={page}"
-
-                # Open search page
-                target_id = new_tab(search_url, background=True)
-                if not target_id:
-                    if page == 1:
-                        progress.update(task, description=f"[red]✗ 无法打开搜索页: {label}[/red]")
-                    break
-
-                time.sleep(3)
-                wait_for_load(target_id, timeout=10)
-
-                # Scroll to load all results on this page
-                scroll(target_id, y=2000)
-                time.sleep(1.5)
-                scroll(target_id, y=4000)
-                time.sleep(1.5)
-
-                # Extract job list
-                result = evaluate(target_id, JS_EXTRACT_LIST)
-                if not result:
-                    close_tab(target_id)
-                    break
-
-                try:
-                    jobs_list = json.loads(result)
-                except (json.JSONDecodeError, TypeError):
-                    close_tab(target_id)
-                    break
-
-                close_tab(target_id)
-
-                # No results on this page, stop pagination
-                if not jobs_list:
-                    break
-
-                progress.update(task, description=f"搜索: {label} 第{page}页 ({len(jobs_list)}条)")
-
-                # Process each job
-                for job_data in jobs_list:
-                    if limit is not None and new_count >= limit:
-                        break
-
-                    job_url = job_data.get("url", "")
-                    job_id = _generate_job_id(job_url)
-
-                    # Skip if already exists
-                    if job_exists(db, job_id):
-                        continue
-
-                    # Skip deal breakers
-                    if matching_deal_breaker(job_data.get("title", ""), deal_breakers):
-                        continue
-                    if matching_blocked_company(job_data.get("company", ""), blocked_companies):
-                        continue
-
-                    # Open detail page for full JD
-                    throttle.wait()
-                    detail_url = f"https://www.zhipin.com{job_url}"
-                    detail_target = new_tab(detail_url, background=True)
-                    if not detail_target:
-                        continue
-
-                    time.sleep(2)
-                    wait_for_load(detail_target, timeout=10)
-
-                    # Extract detail
-                    detail_result = evaluate(detail_target, JS_EXTRACT_DETAIL)
-                    close_tab(detail_target)
-
-                    if not detail_result:
-                        continue
-
-                    try:
-                        detail = json.loads(detail_result)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-
-                    # Build job record
-                    job_record = {
-                        "id": job_id,
-                        "title": detail.get("title", job_data.get("title", "")),
-                        "company": detail.get("company", job_data.get("company", "")),
-                        "salary": detail.get("salary", job_data.get("salary", "")),
-                        "city": city,
-                        "experience": detail.get("experience", job_data.get("experience", "")),
-                        "jd": detail.get("jd", ""),
-                        "hr_name": detail.get("hr_name", ""),
-                        "hr_title": detail.get("hr_title", ""),
-                        "hr_active": detail.get("hr_active", ""),
-                        "company_size": detail.get("company_size", ""),
-                        "company_industry": detail.get("company_industry", ""),
-                        "url": detail_url,
-                    }
-
-                    if matching_blocked_company(job_record["company"], blocked_companies):
-                        continue
-                    insert_job(db, job_record)
-                    if new_job_ids is not None:
-                        new_job_ids.add(job_id)
-                    new_count += 1
-                    keyword_new += 1
-                    progress.update(task, description=f"搜索: {label} 第{page}页 (新增 {keyword_new})")
-
-                # Anti-scraping: pause between pages
-                if page < max_pages:
-                    time.sleep(random.uniform(3.0, 6.0))
-
-            progress.update(task, description=f"搜索: {label} (新增 {keyword_new})")
-
-    db.close()
     return new_count

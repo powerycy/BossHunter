@@ -8,11 +8,6 @@ from bosshunter.scraper.jobs import scrape_jobs
 class ScraperBackgroundTests(unittest.TestCase):
     def test_search_and_detail_pages_open_in_background(self):
         db = Mock()
-        progress = Mock()
-        progress.add_task.return_value = "task-1"
-        progress_context = Mock()
-        progress_context.__enter__ = Mock(return_value=progress)
-        progress_context.__exit__ = Mock(return_value=False)
 
         jobs = [{
             "title": "AI Product Manager",
@@ -35,7 +30,6 @@ class ScraperBackgroundTests(unittest.TestCase):
         }
 
         with patch("bosshunter.scraper.jobs.get_db", return_value=db), \
-             patch("bosshunter.scraper.jobs.Progress", return_value=progress_context), \
              patch("bosshunter.scraper.jobs.PageThrottle") as throttle_cls, \
              patch(
                  "bosshunter.scraper.jobs.new_tab",

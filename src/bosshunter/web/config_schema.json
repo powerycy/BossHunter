@@ -22,7 +22,8 @@
         {"key": "keywords", "label": "搜索关键词", "type": "tags", "description": "BOSS 搜索框使用的关键词"},
         {"key": "cities", "label": "搜索城市", "type": "multi-select", "options_from": "cities", "description": "留空则使用目标城市"},
         {"key": "city_codes", "label": "自定义城市编码", "type": "object", "default": {}, "description": "自定义城市名称与 BOSS 城市编码的映射"},
-        {"key": "max_pages", "label": "每关键词翻页数", "type": "number", "min": 1, "max": 10, "default": 3}
+        {"key": "max_pages", "label": "每关键词翻页数", "type": "number", "min": 1, "max": 10, "default": 3},
+        {"key": "collection_concurrency", "label": "采集并发数", "type": "number", "min": 1, "max": 3, "default": 1, "description": "提高并发可能触发平台风控，甚至导致账号限制或封号。"}
       ]
     },
     {

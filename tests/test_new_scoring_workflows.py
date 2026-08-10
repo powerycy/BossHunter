@@ -65,6 +65,7 @@ class ScoringWorkflowTests(unittest.TestCase):
     def test_collect_scores_only_newly_inserted_jobs(self):
         task = WorkbenchTask(id="collect", mode="collect", label="collect")
         def fake_scrape(_config, _keywords, *, new_job_ids):
+            self.assertIs(_config["_workbench_stop_event"], task.stop_requested)
             new_job_ids.add("new-1")
             new_job_ids.add("new-2")
             return 2

@@ -78,6 +78,7 @@ DEFAULTS: dict[str, Any] = {
         "cities": [],  # Empty = fallback to profile.target_cities
         "city_codes": {},
         "max_pages": 3,
+        "collection_concurrency": 1,
     },
     "scoring": {
         "threshold": 71,
@@ -159,7 +160,19 @@ def normalize_scoring_config(config: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         delete_threshold = 50
     scoring["low_score_delete_threshold"] = max(0, min(delete_threshold, 100))
+    search = config.setdefault("search", {})
+    search["collection_concurrency"] = get_collection_concurrency(config)
     return config
+
+
+def get_collection_concurrency(config: dict[str, Any]) -> int:
+    """Return the bounded collection worker count."""
+    raw_value = config.get("search", {}).get("collection_concurrency", 1)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = 1
+    return max(1, min(value, 3))
 
 
 def find_unreadable_search_values(config: dict[str, Any]) -> dict[str, int]:

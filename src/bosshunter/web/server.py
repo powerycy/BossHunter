@@ -226,7 +226,9 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 	keywords = config.get("search", {}).get("keywords", [])
 	_log(task, "开始采集岗位")
 	new_job_ids: set[str] = set()
-	scrape_jobs(config, keywords, new_job_ids=new_job_ids)
+	collect_config = dict(config)
+	collect_config["_workbench_stop_event"] = task.stop_requested
+	scrape_jobs(collect_config, keywords, new_job_ids=new_job_ids)
 	if task.stop_requested.is_set():
 		return
 	_log(task, "开始 AI 评分")
