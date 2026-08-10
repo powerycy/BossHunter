@@ -76,6 +76,7 @@ DEFAULTS: dict[str, Any] = {
     "search": {
         "keywords": [],
         "cities": [],  # Empty = fallback to profile.target_cities
+        "city_codes": {},
         "max_pages": 3,
     },
     "scoring": {

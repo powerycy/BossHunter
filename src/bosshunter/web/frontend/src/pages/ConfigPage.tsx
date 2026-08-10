@@ -16,6 +16,8 @@ const CITIES = [
   '合肥', '厦门', '青岛', '大连'
 ]
 
+const BLOCKED_COMPANY_PRESETS = ['德科信息有限公司', '深德科', '中软国际科技服务有限公司']
+
 const AI_SERVICES = {
   anthropic: {
     label: 'Claude / Anthropic',
@@ -55,6 +57,7 @@ export default function ConfigPage() {
   const [resumeInfo, setResumeInfo] = useState<any>(null)
   const [resumeUploadError, setResumeUploadError] = useState('')
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
+  const [cityError, setCityError] = useState('')
 
   useEffect(() => {
     fetch('/api/resume').then(r => r.json()).then(setResumeInfo).catch(() => {})
@@ -133,6 +136,34 @@ export default function ConfigPage() {
     setAiTest({ testing: false })
   }
 
+  const updateCities = (cities: string[], cityCodes = config?.search?.city_codes || {}) => {
+    updateConfig('search.cities', cities)
+    const activeCityCodes = Object.fromEntries(
+      Object.entries(cityCodes).filter(([city]) => cities.includes(city))
+    )
+    updateConfig('search.city_codes', activeCityCodes)
+    updateConfig('profile.target_cities', cities)
+  }
+
+  const addCustomCity = async (city: string) => {
+    const currentCities = (config?.search?.cities?.length ? config.search.cities : config?.profile?.target_cities) || []
+    if (currentCities.includes(city)) return
+    setCityError('')
+    try {
+      const res = await fetch('/api/config/cities/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ city }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '城市查询失败')
+      const cityCodes = { ...(config?.search?.city_codes || {}), [data.name]: data.code }
+      updateCities([...currentCities, data.name], cityCodes)
+    } catch (error) {
+      setCityError(error instanceof Error ? error.message : '城市查询失败')
+    }
+  }
+
   if (loading) {
     return <div className="flex items-center justify-center h-full text-muted text-sm">加载中...</div>
   }
@@ -206,6 +237,25 @@ export default function ConfigPage() {
             <Field label="排除关键词">
               <TagsInput value={config.profile?.deal_breakers || []} onChange={v => updateConfig('profile.deal_breakers', v)} placeholder="如：外包、996" />
             </Field>
+            <Field label="公司屏蔽">
+              <TagsInput value={config.profile?.blocked_companies || []} onChange={v => updateConfig('profile.blocked_companies', v)} placeholder="输入公司名后按回车添加" />
+              <div className="mt-2 flex flex-wrap gap-2">
+                {BLOCKED_COMPANY_PRESETS.map(company => {
+                  const added = (config.profile?.blocked_companies || []).includes(company)
+                  return (
+                    <button
+                      key={company}
+                      type="button"
+                      disabled={added}
+                      onClick={() => updateConfig('profile.blocked_companies', [...(config.profile?.blocked_companies || []), company])}
+                      className={`rounded border px-2 py-1 text-xs transition-colors ${added ? 'border-card-border bg-[#FFFCFA] text-muted' : 'border-primary/40 bg-[#FFF0E5] text-primary hover:border-primary'}`}
+                    >
+                      {company}
+                    </button>
+                  )
+                })}
+              </div>
+            </Field>
             <div className="flex items-center justify-between">
               <label className="text-xs text-foreground">接受实习/管培岗位</label>
               <Switch checked={config.profile?.allow_internship ?? false} onChange={v => updateConfig('profile.allow_internship', v)} />
@@ -220,9 +270,11 @@ export default function ConfigPage() {
               <TagsInput value={config.search?.keywords || []} onChange={v => updateConfig('search.keywords', v)} />
             </Field>
             <Field label="城市">
+              {(() => {
+                const cities = (config.search?.cities?.length ? config.search.cities : config.profile?.target_cities) || []
+                return <>
               <div className="flex flex-wrap gap-2">
                 {CITIES.map(city => {
-                  const cities = (config.search?.cities?.length ? config.search.cities : config.profile?.target_cities) || []
                   const selected = cities.includes(city)
                   return (
                     <button
@@ -230,8 +282,7 @@ export default function ConfigPage() {
                       type="button"
                       onClick={() => {
                         const newCities = selected ? cities.filter((c: string) => c !== city) : [...cities, city]
-                        updateConfig('search.cities', newCities)
-                        updateConfig('profile.target_cities', newCities)
+                        updateCities(newCities)
                       }}
                       className={`px-2 py-1 text-xs rounded border transition-colors ${selected ? 'bg-primary/20 border-primary/50 text-primary' : 'border-card-border bg-[#FFFCFA] text-muted hover:border-primary/40 hover:text-foreground'}`}
                     >
@@ -240,6 +291,23 @@ export default function ConfigPage() {
                   )
                 })}
               </div>
+              <div className="mt-3">
+                <TagsInput
+                  value={cities.filter((city: string) => !CITIES.includes(city))}
+                  onChange={customCities => {
+                    const builtInCities = cities.filter((city: string) => CITIES.includes(city))
+                    const cityCodes = Object.fromEntries(
+                      Object.entries(config.search?.city_codes || {}).filter(([city]) => customCities.includes(city))
+                    )
+                    updateCities([...builtInCities, ...customCities], cityCodes)
+                  }}
+                  onAdd={addCustomCity}
+                  placeholder="输入城市后按回车添加"
+                />
+                {cityError && <p className="mt-2 text-xs text-red-500">{cityError}</p>}
+              </div>
+              </>
+              })()}
             </Field>
             <Field label="每关键词翻页数">
               <Input type="number" value={config.search?.max_pages || 3} onChange={e => updateConfig('search.max_pages', Number(e.target.value))} min={1} max={10} />
@@ -363,6 +431,11 @@ export default function ConfigPage() {
                 min={5}
                 max={600}
               />
+            </Field>
+            <Field label="AI 评分并发数">
+              <Select value={String(config.ai?.scoring_concurrency || 3)} onChange={e => updateConfig('ai.scoring_concurrency', Number(e.target.value))}>
+                {[1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value}</option>)}
+              </Select>
             </Field>
             <div className="rounded-2xl border border-card-border bg-[#FFFCFA] p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
