@@ -1,6 +1,7 @@
 """AI Scorer - Match jobs against resume using Claude API."""
 
 import json
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from rich.console import Console
@@ -179,7 +180,168 @@ def _record_score_failure(db, job: dict, detail: str) -> None:
     add_history(db, job["id"], "score_failed", safe_detail)
 
 
-def score_jobs(config: dict, *, rescore_filtered: bool = False) -> tuple[int, int]:
+_BATCH_STOP_ERROR_KINDS = {"token_quota", "rate_limit", "auth", "network", "request_failed"}
+
+
+def _score_deep_job(job: dict, resume: str, config: dict, max_attempts: int) -> dict:
+    """Run one job's AI evaluation without touching shared database state."""
+    ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
+    prompt = _build_scoring_prompt(job, resume)
+    try:
+        response = _call_claude(prompt, config)
+    except AIRequestError as exc:
+        if exc.kind in _BATCH_STOP_ERROR_KINDS:
+            return {"job": job, "pause_reason": exc.user_message}
+        if exc.kind == "output_truncated":
+            try:
+                tokens = min(max(int(ai_cfg.get("scoring_max_tokens", 8192) or 8192) * 2, 512), 65536)
+                response = _call_claude(prompt, config, tokens)
+            except AIRequestError as retry_exc:
+                if retry_exc.kind in _BATCH_STOP_ERROR_KINDS:
+                    return {"job": job, "pause_reason": retry_exc.user_message}
+                response = None
+        elif exc.kind == "output_limit":
+            try:
+                response = _call_claude(prompt, config, 128)
+            except AIRequestError as retry_exc:
+                if retry_exc.kind in _BATCH_STOP_ERROR_KINDS:
+                    return {"job": job, "pause_reason": retry_exc.user_message}
+                response = None
+        elif exc.kind == "context_limit":
+            try:
+                response = _call_claude(_build_scoring_prompt(job, resume, compact=True), config, 128)
+            except AIRequestError as retry_exc:
+                if retry_exc.kind in _BATCH_STOP_ERROR_KINDS:
+                    return {"job": job, "pause_reason": retry_exc.user_message}
+                response = None
+        else:
+            response = None
+
+    result = _validated_score_result(response) if response else None
+    for _attempt in range(2, max_attempts + 1):
+        if result is not None:
+            break
+        try:
+            response = _call_claude(prompt, config)
+        except AIRequestError as exc:
+            if exc.kind in _BATCH_STOP_ERROR_KINDS:
+                return {"job": job, "pause_reason": exc.user_message}
+            response = None
+        result = _validated_score_result(response) if response else None
+
+    if result is None:
+        return {"job": job, "failure": "AI did not return a complete score JSON"}
+    return {"job": job, "result": result}
+
+
+def _score_jobs_concurrently(
+    config: dict,
+    *,
+    rescore_filtered: bool = False,
+    job_ids: set[str] | None = None,
+) -> tuple[int, int]:
+    """Score pending jobs with bounded AI request concurrency."""
+    db = get_db()
+    try:
+        resume = _load_resume(config)
+        if not resume:
+            return 0, 0
+        if rescore_filtered:
+            reset_ai_filtered_jobs(db)
+
+        pending_jobs = get_jobs_by_status(db, "pending")
+        if job_ids is not None:
+            pending_jobs = [job for job in pending_jobs if str(job["id"]) in job_ids]
+        if not pending_jobs:
+            return 0, 0
+
+        threshold = config.get("scoring", {}).get("threshold", 60)
+        ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
+        try:
+            max_attempts = max(1, min(int(ai_cfg.get("scoring_max_attempts", 2) or 2), 3))
+        except (TypeError, ValueError):
+            max_attempts = 2
+
+        eligible_jobs = []
+        scored = filtered = failed = processed = prefiltered = 0
+        for job in pending_jobs:
+            quick, reason = quick_score(job, config)
+            update_job_quick_score(db, job["id"], quick)
+            if quick == 0:
+                update_job_score(db, job["id"], quick, f"Prefilter rejected: {reason}")
+                update_job_status(db, job["id"], "filtered")
+                filtered += 1
+                prefiltered += 1
+                processed += 1
+                _report_progress(config, processed, len(pending_jobs), scored, filtered, failed)
+            else:
+                eligible_jobs.append(job)
+
+        stop_event = config.get("_workbench_stop_event")
+        pause_reason = ""
+        job_iterator = iter(eligible_jobs)
+        in_flight = {}
+
+        def submit_next(executor) -> bool:
+            if pause_reason or (stop_event is not None and stop_event.is_set()):
+                return False
+            try:
+                job = next(job_iterator)
+            except StopIteration:
+                return False
+            future = executor.submit(_score_deep_job, job, resume, config, max_attempts)
+            in_flight[future] = job
+            return True
+
+        with ThreadPoolExecutor(max_workers=get_scoring_concurrency(config)) as executor:
+            for _ in range(min(get_scoring_concurrency(config), len(eligible_jobs))):
+                submit_next(executor)
+
+            while in_flight:
+                done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                for future in done:
+                    outcome = future.result()
+                    job = in_flight.pop(future)
+                    if outcome.get("pause_reason"):
+                        pause_reason = outcome["pause_reason"]
+                    elif outcome.get("result"):
+                        score, full_reason = outcome["result"]
+                        update_job_score(db, job["id"], score, full_reason)
+                        if score >= threshold:
+                            update_job_status(db, job["id"], "ready")
+                            scored += 1
+                        else:
+                            update_job_status(db, job["id"], "filtered")
+                            filtered += 1
+                    else:
+                        failed += 1
+                        _record_score_failure(db, job, outcome.get("failure", "AI scoring failed"))
+
+                    processed += 1
+                    _report_progress(config, processed, len(pending_jobs), scored, filtered, failed)
+                    submit_next(executor)
+
+        if pause_reason:
+            _notify(config, f"AI scoring paused safely: {pause_reason}", error=True)
+        return scored, filtered
+    finally:
+        db.close()
+
+
+def score_jobs(
+    config: dict,
+    *,
+    rescore_filtered: bool = False,
+    job_ids: set[str] | None = None,
+) -> tuple[int, int]:
+    """Score pending jobs, using configured concurrency when explicitly available."""
+    ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
+    if "scoring_concurrency" in ai_cfg or job_ids is not None:
+        return _score_jobs_concurrently(config, rescore_filtered=rescore_filtered, job_ids=job_ids)
+    return _score_jobs_sequential(config, rescore_filtered=rescore_filtered)
+
+
+def _score_jobs_sequential(config: dict, *, rescore_filtered: bool = False) -> tuple[int, int]:
     """Score all pending jobs. Returns (scored_count, filtered_count)."""
     db = get_db()
     try:
