@@ -181,7 +181,7 @@ def _sanitize_config_for_write(data):
 def _preflight_messages(mode: str, config: dict) -> list[str]:
 	"""Return user-actionable blockers before starting a dashboard task."""
 	messages: list[str] = []
-	if mode not in {"full", "collect", "rescore", "monitor"}:
+	if mode not in {"full", "collect", "rescore", "score", "monitor"}:
 		messages.append(f"不支持的任务模式：{mode}")
 
 	profile = config.get("profile", {})

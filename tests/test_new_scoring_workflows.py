@@ -1,6 +1,7 @@
 import io
 import json
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from bosshunter.web import server
@@ -73,6 +74,14 @@ class ScoringWorkflowTests(unittest.TestCase):
             server._execute_collect(task, {"search": {"keywords": ["AI"]}})
 
         self.assertEqual(score_jobs.call_args.kwargs["job_ids"], {"new-1", "new-2"})
+
+    def test_score_mode_is_not_rejected_by_task_start_preflight(self):
+        messages = server._preflight_messages(
+            "score",
+            {"profile": {"resume_path": str(Path(__file__))}, "ai": {"api_key": "test-key"}},
+        )
+
+        self.assertFalse(any("不支持的任务模式" in message for message in messages))
 
     def test_score_task_route_preserves_selected_job_ids(self):
         runner = _RecordingRunner()
