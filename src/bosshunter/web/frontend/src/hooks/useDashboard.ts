@@ -156,13 +156,22 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
     await fetchAll()
   }
 
+  const pauseTask = async (taskId: string) => {
+    const res = await fetch(`/api/workbench/task/${taskId}/pause`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || '暂停失败')
+    }
+    await fetchAll()
+  }
+
   useEffect(() => {
     fetchAll()
     const interval = setInterval(fetchAll, 5000)
     return () => clearInterval(interval)
   }, [])
 
-  return { workbench, jobs, history, loading, error, refresh: fetchAll, startTask, stopTask }
+  return { workbench, jobs, history, loading, error, refresh: fetchAll, startTask, stopTask, pauseTask }
 }
 
 export type { FunnelData, ActivityData, Job, TopCompany, WorkbenchData, WorkbenchTask, HistoryDetailPayload, HistoryItem }

@@ -11,6 +11,7 @@ import {
   ExternalLink,
   Eye,
   MessageCircle,
+  Pause,
   Play,
   RefreshCw,
   Square,
@@ -43,8 +44,8 @@ function currentTaskStage(logs: string[] = []) {
 function taskStatusText(status: string) {
   if (status === 'failed') return '运行失败'
   if (status === 'completed') return '已结束'
-  if (status === 'stopped') return '已停止'
-  if (status === 'stopping') return '停止中'
+  if (status === 'stopped') return '已暂停'
+  if (status === 'stopping') return '暂停中'
   return '运行中'
 }
 
@@ -245,13 +246,14 @@ function PreflightPanel({
 }
 
 export default function DashboardPage({ view = 'workbench' }: DashboardPageProps) {
-  const { workbench, jobs, history, loading, error, refresh, startTask, stopTask } = useDashboard(view)
+  const { workbench, jobs, history, loading, error, refresh, startTask, pauseTask } = useDashboard(view)
   const [selected, setSelected] = useState<string[]>([])
   const [notice, setNotice] = useState('')
   const [preflightChecks, setPreflightChecks] = useState<PreflightCheck[]>([])
   const [preflightMode, setPreflightMode] = useState<WorkbenchMode>('full')
   const [selectedJob, setSelectedJob] = useState<Job | null>(null)
   const [modePending, setModePending] = useState<WorkbenchMode | null>(null)
+  const [pausePending, setPausePending] = useState(false)
   const [confirmedDeliveryIds, setConfirmedDeliveryIds] = useState<Set<string>>(new Set())
 
   const todayJobs = useMemo(
@@ -283,15 +285,26 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     return true
   }
 
+  const handlePauseTask = async () => {
+    if (!activeTask || pausePending || activeTask.status === 'stopping') return
+    try {
+      setPausePending(true)
+      setNotice(`正在暂停${activeTask.label}，当前操作完成后会安全停止...`)
+      await pauseTask(activeTask.id)
+      setNotice(`${activeTask.label}已请求暂停；已入库和已评分岗位会保留。`)
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '暂停失败')
+    } finally {
+      setPausePending(false)
+    }
+  }
+
   const handleModeClick = async (mode: WorkbenchMode) => {
     if (modePending) return
     try {
       if (activeTask?.mode === mode) {
-        if (window.confirm(`是否停止当前${activeTask.label}任务？已入库岗位会保留。`)) {
-          setModePending(mode)
-          setNotice(`正在停止${activeTask.label}...`)
-          await stopTask(activeTask.id)
-          setNotice(`${activeTask.label}已请求停止。`)
+        if (window.confirm(`是否暂停当前${activeTask.label}任务？已入库和已评分岗位会保留。`)) {
+          await handlePauseTask()
         }
         return
       }
@@ -498,9 +511,22 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 <div className="text-sm font-black">任务运行状态</div>
                 <p className="mt-1 text-xs leading-5 text-muted">如果点击后浏览器没有反应，请先打开 BOSS 直聘并确认已登录；常见失败原因是 BOSS 未登录或 Chrome 调试连接不可用。</p>
               </div>
-              <span className="rounded-full bg-[#FFF0E5] px-3 py-1 text-xs font-black text-primary">
-                {visibleTask.label}
-              </span>
+              <div className="flex items-center gap-2">
+                {activeTask && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handlePauseTask}
+                    disabled={pausePending || activeTask.status === 'stopping'}
+                  >
+                    <Pause className="mr-2 h-4 w-4" />
+                    {pausePending || activeTask.status === 'stopping' ? '暂停中...' : '暂停任务'}
+                  </Button>
+                )}
+                <span className="rounded-full bg-[#FFF0E5] px-3 py-1 text-xs font-black text-primary">
+                  {visibleTask.label}
+                </span>
+              </div>
             </div>
             <div className={`mt-3 rounded-2xl border px-4 py-3 ${taskStatusClass(visibleTask.status)}`}>
               <div className="text-xs font-black text-primary">{taskStatusTitle(visibleTask.status)}</div>

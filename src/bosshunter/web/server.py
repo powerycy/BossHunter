@@ -649,6 +649,16 @@ def api_workbench_task_stop(task_id):
 		return _json_response({"error": str(e)}, 500)
 
 
+@app.route("/api/workbench/task/<task_id>/pause", method="POST")
+def api_workbench_task_pause(task_id):
+	try:
+		return _json_response(task_runner.stop(task_id, "用户已请求暂停，当前操作完成后安全停止"))
+	except KeyError:
+		return _json_response({"error": "任务不存在"}, 404)
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
 @app.route("/api/workbench/deliver", method="POST")
 def api_workbench_deliver():
 	try:

@@ -139,6 +139,14 @@ def _stop_requested(stop_event) -> bool:
     return bool(stop_event is not None and stop_event.is_set())
 
 
+def _wait_or_stop(stop_event, seconds: float) -> bool:
+    """Wait for a scraper delay while allowing the workbench to stop it."""
+    if stop_event is not None:
+        return stop_event.wait(seconds)
+    time.sleep(seconds)
+    return False
+
+
 def _scrape_combo(
     config: dict,
     combo: tuple[str, str, str],
@@ -172,12 +180,21 @@ def _scrape_combo(
             if not target_id:
                 break
 
-            time.sleep(3)
-            wait_for_load(target_id, timeout=10)
+            if _wait_or_stop(stop_event, 3):
+                close_tab(target_id)
+                break
+            wait_for_load(target_id, timeout=10, stop_event=stop_event)
+            if _stop_requested(stop_event):
+                close_tab(target_id)
+                break
             scroll(target_id, y=2000)
-            time.sleep(1.5)
+            if _wait_or_stop(stop_event, 1.5):
+                close_tab(target_id)
+                break
             scroll(target_id, y=4000)
-            time.sleep(1.5)
+            if _wait_or_stop(stop_event, 1.5):
+                close_tab(target_id)
+                break
 
             result = evaluate(target_id, JS_EXTRACT_LIST)
             close_tab(target_id)
@@ -205,16 +222,20 @@ def _scrape_combo(
                 if matching_blocked_company(job_data.get("company", ""), blocked_companies):
                     continue
 
-                throttle.wait()
-                if _stop_requested(stop_event):
+                if throttle.wait(stop_event) or _stop_requested(stop_event):
                     break
                 detail_url = f"https://www.zhipin.com{job_url}"
                 detail_target = new_tab(detail_url, background=True)
                 if not detail_target:
                     continue
 
-                time.sleep(2)
-                wait_for_load(detail_target, timeout=10)
+                if _wait_or_stop(stop_event, 2):
+                    close_tab(detail_target)
+                    break
+                wait_for_load(detail_target, timeout=10, stop_event=stop_event)
+                if _stop_requested(stop_event):
+                    close_tab(detail_target)
+                    break
                 detail_result = evaluate(detail_target, JS_EXTRACT_DETAIL)
                 close_tab(detail_target)
                 if not detail_result:
@@ -247,7 +268,7 @@ def _scrape_combo(
                 new_count += 1
 
             if page < max_pages and not _stop_requested(stop_event):
-                time.sleep(random.uniform(3.0, 6.0))
+                _wait_or_stop(stop_event, random.uniform(3.0, 6.0))
     finally:
         db.close()
 
