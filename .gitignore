@@ -12,6 +12,7 @@ build/
 .venv/
 venv/
 env/
+.worktrees/
 
 # IDE
 .vscode/
