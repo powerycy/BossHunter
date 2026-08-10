@@ -21,6 +21,17 @@ from bosshunter.ai.prefilter import quick_score
 
 console = Console()
 
+
+def get_scoring_concurrency(config: dict) -> int:
+    """Return a safe AI scoring worker count from configuration."""
+    raw_value = config.get("ai", {}).get("scoring_concurrency", 3)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = 3
+    return max(1, min(value, 5))
+
+
 SCORING_PROMPT = """你是一位专业的求职顾问。请根据以下简历和岗位JD，评估候选人与该岗位的匹配度。
 
 ## 候选人简历

@@ -15,7 +15,7 @@ from bosshunter.browser import (
 )
 from bosshunter.config import CITY_CODES
 from bosshunter.db import get_db, job_exists, insert_job
-from bosshunter.job_filters import matching_deal_breaker
+from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.throttle import PageThrottle
 
 console = Console()
@@ -139,6 +139,7 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
     db = get_db()
     throttle = PageThrottle(delay_min=2.0, delay_max=5.0)
     deal_breakers = config.get("profile", {}).get("deal_breakers", [])
+    blocked_companies = config.get("profile", {}).get("blocked_companies", [])
     new_count = 0
 
     # Pagination config
@@ -242,6 +243,8 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
 
                     # Skip deal breakers
                     if matching_deal_breaker(job_data.get("title", ""), deal_breakers):
+                        continue
+                    if matching_blocked_company(job_data.get("company", ""), blocked_companies):
                         continue
 
                     # Open detail page for full JD

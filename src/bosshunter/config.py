@@ -70,6 +70,7 @@ DEFAULTS: dict[str, Any] = {
         "salary_max": 0,
         "allow_internship": False,
         "deal_breakers": [],
+        "blocked_companies": [],
         "allow_internship": False,
     },
     "search": {
@@ -105,6 +106,7 @@ DEFAULTS: dict[str, Any] = {
         "greeting_max_attempts": 2,
         "greeting_review_threshold": 7.0,
         "greeting_max_iterations": 2,
+        "scoring_concurrency": 3,
     },
     "monitor": {
         "interval": 30,  # 分钟

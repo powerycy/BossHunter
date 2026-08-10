@@ -2,7 +2,7 @@
 
 import re
 
-from bosshunter.job_filters import matching_deal_breaker
+from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 
 
 _INTERNSHIP_KEYWORDS = ("实习", "intern", "internship", "管培")
@@ -15,8 +15,13 @@ def quick_score(job: dict, config: dict) -> tuple[int, str]:
     """Apply hard filters before LLM scoring."""
     profile = config.get("profile", {})
     deal_breakers = profile.get("deal_breakers", [])
+    blocked_companies = profile.get("blocked_companies", [])
     title = job.get("title") or ""
     company = str(job.get("company") or "").strip()
+
+    blocked_company = matching_blocked_company(company, blocked_companies)
+    if blocked_company:
+        return 0, f"触发公司屏蔽: {blocked_company}"
 
     if _ANONYMOUS_COMPANY_PATTERN.search(company):
         return 0, "匿名公司岗位"
