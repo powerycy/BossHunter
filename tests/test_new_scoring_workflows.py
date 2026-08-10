@@ -16,6 +16,9 @@ class _RecordingRunner:
         self.calls.append((mode, config))
         return {"id": "task-1", "mode": mode, "status": "running"}
 
+    def status(self):
+        return {"active": None}
+
 
 class ScoringWorkflowTests(unittest.TestCase):
     def setUp(self):
@@ -91,6 +94,7 @@ class ScoringWorkflowTests(unittest.TestCase):
 
         with patch.object(server, "load_config", return_value=config), \
              patch.object(server, "_preflight_messages", return_value=[]), \
+             patch.object(server, "get_boss_login_status", return_value={"ready": True}), \
              patch.object(server, "_task_config", side_effect=lambda extra=None: {**config, **(extra or {})}):
             status, payload = self._post_json(
                 "/api/workbench/task",
@@ -102,6 +106,37 @@ class ScoringWorkflowTests(unittest.TestCase):
         mode, task_config = runner.calls[0]
         self.assertEqual(mode, "score")
         self.assertEqual(task_config["_workbench_score_job_ids"], ["job-a", "job-b"])
+
+    def test_task_start_is_rejected_when_boss_is_not_logged_in(self):
+        runner = _RecordingRunner()
+        server.task_runner = runner
+        config = {"ai": {"api_key": "test"}, "search": {"keywords": ["AI"]}}
+
+        with patch.object(server, "load_config", return_value=config), \
+             patch.object(server, "_preflight_messages", return_value=[]), \
+             patch.object(server, "get_boss_login_status", return_value={
+                 "ready": False,
+                 "message": "Please log in to BOSS in Chrome",
+             }):
+            status, payload = self._post_json("/api/workbench/task", {"mode": "score"})
+
+        self.assertTrue(status.startswith("400"))
+        self.assertIn("log in to BOSS", payload["messages"][0])
+        self.assertEqual(runner.calls, [])
+
+    def test_delivery_is_rejected_before_it_changes_job_state_when_boss_is_logged_out(self):
+        runner = _RecordingRunner()
+        server.task_runner = runner
+
+        with patch.object(server, "get_boss_login_status", return_value={
+            "ready": False,
+            "message": "Please log in to BOSS in Chrome",
+        }):
+            status, payload = self._post_json("/api/workbench/deliver", {"job_ids": ["job-a"]})
+
+        self.assertTrue(status.startswith("400"))
+        self.assertIn("log in to BOSS", payload["error"])
+        self.assertEqual(runner.calls, [])
 
     def test_city_lookup_route_returns_safe_error(self):
         with patch("bosshunter.web.server.lookup_city", side_effect=server.CityLookupError("unknown")):

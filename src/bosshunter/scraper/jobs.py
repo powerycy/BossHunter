@@ -263,7 +263,8 @@ def _scrape_combo(
                 }
                 if matching_blocked_company(job_record["company"], blocked_companies):
                     continue
-                insert_job(db, job_record)
+                if not insert_job(db, job_record):
+                    continue
                 new_job_ids.add(job_id)
                 new_count += 1
 

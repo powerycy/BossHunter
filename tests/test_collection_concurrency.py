@@ -1,3 +1,4 @@
+import json
 import unittest
 from threading import Event, Thread
 from unittest.mock import Mock, patch
@@ -21,6 +22,15 @@ class CollectionConcurrencyConfigTests(unittest.TestCase):
         normalize_scoring_config(config)
 
         self.assertEqual(config["search"]["collection_concurrency"], 3)
+
+    def test_normalization_recovers_non_object_search_settings(self):
+        for malformed_search in (None, "invalid"):
+            with self.subTest(search=malformed_search):
+                config = {"search": malformed_search}
+
+                normalize_scoring_config(config)
+
+                self.assertEqual(config["search"], DEFAULTS["search"])
 
     def test_runs_city_keyword_combinations_in_parallel(self):
         started = []
@@ -107,6 +117,48 @@ class CollectionConcurrencyConfigTests(unittest.TestCase):
         self.assertEqual(get_db.call_count, 2)
         first_db.close.assert_called_once_with()
         second_db.close.assert_called_once_with()
+
+    def test_duplicate_insert_is_not_counted_or_scored_as_a_new_job(self):
+        db = Mock()
+        combo = ("北京", "101010100", "AI")
+        jobs = [{
+            "title": "AI Product Manager",
+            "company": "Example",
+            "salary": "20-30K",
+            "experience": "3-5 years",
+            "url": "/job_detail/duplicate-job.html",
+        }]
+        detail = {
+            "title": "AI Product Manager",
+            "company": "Example",
+            "salary": "20-30K",
+            "experience": "3-5 years",
+            "jd": "Build AI products",
+        }
+
+        with patch("bosshunter.scraper.jobs.get_db", return_value=db), \
+             patch("bosshunter.scraper.jobs.new_tab", side_effect=["search", "detail"]), \
+             patch("bosshunter.scraper.jobs.wait_for_load"), \
+             patch("bosshunter.scraper.jobs.scroll"), \
+             patch("bosshunter.scraper.jobs.evaluate", side_effect=[json.dumps(jobs), json.dumps(detail)]), \
+             patch("bosshunter.scraper.jobs.close_tab"), \
+             patch("bosshunter.scraper.jobs.job_exists", return_value=False), \
+             patch("bosshunter.scraper.jobs.matching_deal_breaker", return_value=False), \
+             patch("bosshunter.scraper.jobs.matching_blocked_company", return_value=False), \
+             patch("bosshunter.scraper.jobs.insert_job", return_value=False), \
+             patch("bosshunter.scraper.jobs.PageThrottle") as throttle_cls, \
+             patch("bosshunter.scraper.jobs.time.sleep"):
+            throttle_cls.return_value.wait.return_value = False
+            count, job_ids = _scrape_combo(
+                {"profile": {}, "search": {}},
+                combo,
+                max_pages=1,
+                limit=None,
+                stop_event=None,
+            )
+
+        self.assertEqual(count, 0)
+        self.assertEqual(job_ids, set())
 
 
 if __name__ == "__main__":

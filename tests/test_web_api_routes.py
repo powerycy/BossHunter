@@ -47,9 +47,16 @@ class WebApiRouteTests(unittest.TestCase):
     def setUp(self):
         # Arrange
         self.original_base_dir = server.BASE_DIR
+        self.login_status_patch = patch.object(
+            server,
+            "get_boss_login_status",
+            return_value={"ready": True, "status": "logged_in"},
+        )
+        self.login_status_patch.start()
 
     def tearDown(self):
         # Cleanup
+        self.login_status_patch.stop()
         server.set_base_dir(self.original_base_dir)
 
     def _request(self, path: str, method: str = "GET"):

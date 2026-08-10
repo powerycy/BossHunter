@@ -71,7 +71,6 @@ DEFAULTS: dict[str, Any] = {
         "allow_internship": False,
         "deal_breakers": [],
         "blocked_companies": [],
-        "allow_internship": False,
     },
     "search": {
         "keywords": [],
@@ -160,14 +159,18 @@ def normalize_scoring_config(config: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         delete_threshold = 50
     scoring["low_score_delete_threshold"] = max(0, min(delete_threshold, 100))
-    search = config.setdefault("search", {})
+    search = config.get("search")
+    if not isinstance(search, dict):
+        search = _deep_copy_dict(DEFAULTS["search"])
+        config["search"] = search
     search["collection_concurrency"] = get_collection_concurrency(config)
     return config
 
 
 def get_collection_concurrency(config: dict[str, Any]) -> int:
     """Return the bounded collection worker count."""
-    raw_value = config.get("search", {}).get("collection_concurrency", 1)
+    search = config.get("search", {})
+    raw_value = search.get("collection_concurrency", 1) if isinstance(search, dict) else 1
     try:
         value = int(raw_value)
     except (TypeError, ValueError):

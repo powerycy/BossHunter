@@ -40,6 +40,7 @@ from bosshunter.db import (
 	update_job_status,
 )
 from bosshunter.web.preflight import check_ai_connection, collect_preflight_checks, error_messages
+from bosshunter.browser.diagnostics import get_boss_login_status
 from bosshunter.web.resume_upload import ResumeUploadError, prepare_resume_content
 from bosshunter.web.city_lookup import CityLookupError, lookup_city
 from bosshunter.web.tasks import TaskAlreadyRunningError, WorkbenchTask, WorkbenchTaskRunner
@@ -206,6 +207,14 @@ def _preflight_messages(mode: str, config: dict) -> list[str]:
 		messages.append("请先在配置页填写当前 AI 服务的 API Key，或设置对应的标准环境变量。")
 
 	return messages
+
+
+def _boss_login_message(config: dict) -> str | None:
+	"""Return the shared task-start blocker when BOSS is unavailable."""
+	login_status = get_boss_login_status(config)
+	if login_status.get("ready"):
+		return None
+	return str(login_status.get("message") or "请先在 Chrome 中登录 BOSS 直聘。")
 
 
 def _task_config(extra: dict | None = None) -> dict:
@@ -620,12 +629,28 @@ def api_ai_diagnostics():
 		return _json_response({"ok": False, "messages": [str(e)]}, 500)
 
 
+@app.route("/api/browser/login-status")
+def api_boss_login_status():
+	try:
+		return _json_response(get_boss_login_status(load_config(CONFIG_PATH)))
+	except Exception as e:
+		return _json_response({
+			"ready": False,
+			"status": "unavailable",
+			"message": f"无法检查 BOSS 登录状态：{e}",
+		}, 500)
+
+
 @app.route("/api/workbench/task", method="POST")
 def api_workbench_task_start():
 	try:
 		body = request.json or {}
 		mode = body.get("mode", "")
-		messages = _preflight_messages(mode, load_config(CONFIG_PATH))
+		config = load_config(CONFIG_PATH)
+		messages = _preflight_messages(mode, config)
+		login_message = _boss_login_message(config)
+		if login_message:
+			messages.append(login_message)
 		if messages:
 			return _json_response({"error": "请先处理启动前检查", "messages": messages}, 400)
 		extra = {}
@@ -666,6 +691,9 @@ def api_workbench_deliver():
 		job_ids = [str(job_id) for job_id in body.get("job_ids", []) if str(job_id)]
 		if not job_ids:
 			return _json_response({"error": "请选择要投递的岗位"}, 400)
+		login_message = _boss_login_message(load_config(CONFIG_PATH))
+		if login_message:
+			return _json_response({"error": login_message}, 400)
 
 		direct_send = bool(body.get("direct_send"))
 		db = _get_web_db()

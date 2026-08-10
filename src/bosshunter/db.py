@@ -75,15 +75,16 @@ def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
     return row is not None
 
 
-def insert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
-    """Insert a new job record."""
-    conn.execute("""
+def insert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
+    """Insert a new job record and report whether it was stored."""
+    cursor = conn.execute("""
         INSERT OR IGNORE INTO jobs (id, title, company, salary, city, experience, jd,
             hr_name, hr_title, hr_active, company_size, company_industry, url)
         VALUES (:id, :title, :company, :salary, :city, :experience, :jd,
             :hr_name, :hr_title, :hr_active, :company_size, :company_industry, :url)
     """, job)
     conn.commit()
+    return cursor.rowcount == 1
 
 
 def update_job_score(conn: sqlite3.Connection, job_id: str, score: int, reason: str) -> None:

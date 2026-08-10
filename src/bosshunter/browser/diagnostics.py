@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from typing import Any
 
 import httpx
 from rich.console import Console
 
-from bosshunter.browser import find_boss_tab
+from bosshunter.browser import evaluate, find_boss_tab
 from bosshunter.browser.runtime import check_node_available, ensure_runtime, get_runtime_url, runtime_health, runtime_targets
 
 
@@ -47,6 +49,88 @@ def run_browser_diagnostics(config: dict[str, Any] | None = None) -> dict[str, A
         "health": health,
         "browser_product": browser_product,
         "browser_name": browser_name,
+    }
+
+
+def get_boss_login_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return a safe, user-facing BOSS login state for task guards."""
+    diagnostics = run_browser_diagnostics(config)
+    checked_at = datetime.now().isoformat(timespec="seconds")
+    if not diagnostics.get("runtime") or not diagnostics.get("chrome"):
+        return {
+            "ready": False,
+            "status": "unavailable",
+            "message": "BOSS 浏览器连接不可用，请先启动并连接 Google Chrome。",
+            "checked_at": checked_at,
+        }
+
+    boss_tab = diagnostics.get("boss_tab")
+    if not isinstance(boss_tab, dict):
+        return {
+            "ready": False,
+            "status": "logged_out",
+            "message": "请先在已连接的 Chrome 中打开 BOSS 直聘并登录。",
+            "checked_at": checked_at,
+        }
+
+    url = str(boss_tab.get("url") or "").lower()
+    if any(marker in url for marker in ("/login", "/web/user", "signin")):
+        return {
+            "ready": False,
+            "status": "logged_out",
+            "message": "BOSS 直聘当前未登录，请在 Chrome 中完成登录后重试。",
+            "checked_at": checked_at,
+        }
+
+    state = _boss_page_login_state(str(boss_tab.get("targetId") or ""))
+    if state.get("has_user_nav") and not state.get("has_login_dialog"):
+        return {
+            "ready": True,
+            "status": "logged_in",
+            "message": "BOSS 已登录。",
+            "checked_at": checked_at,
+        }
+    return {
+        "ready": False,
+        "status": "logged_out",
+        "message": "无法确认 BOSS 登录状态，请在 Chrome 中重新登录后重试。",
+        "checked_at": checked_at,
+    }
+
+
+def _boss_page_login_state(target_id: str) -> dict[str, bool]:
+    """Read non-sensitive visual login markers from the active BOSS page."""
+    if not target_id:
+        return {}
+    expression = """
+        (() => {
+            const isVisible = (element) => {
+                const style = window.getComputedStyle(element);
+                const bounds = element.getBoundingClientRect();
+                return style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && style.opacity !== '0'
+                    && bounds.width > 0
+                    && bounds.height > 0;
+            };
+            return JSON.stringify({
+                has_user_nav: Boolean(document.querySelector('.user-nav, .user-nav-avatar, .nav-figure')),
+                has_login_dialog: Array.from(document.querySelectorAll('.login-dialog, .login-panel, .sign-wrap')).some(isVisible)
+            });
+        })()
+    """
+    raw_state = evaluate(target_id, expression)
+    if not isinstance(raw_state, str):
+        return {}
+    try:
+        parsed = json.loads(raw_state)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        "has_user_nav": bool(parsed.get("has_user_nav")),
+        "has_login_dialog": bool(parsed.get("has_login_dialog")),
     }
 
 

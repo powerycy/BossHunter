@@ -281,16 +281,17 @@ export default function ConfigPage() {
             <Field label="城市">
               {(() => {
                 const cities = (config.search?.cities?.length ? config.search.cities : config.profile?.target_cities) || []
+                const visibleCities = cities.filter((city: string) => !isUnreadableSearchValue(city))
                 return <>
               <div className="flex flex-wrap gap-2">
                 {CITIES.map(city => {
-                  const selected = cities.includes(city)
+                  const selected = visibleCities.includes(city)
                   return (
                     <button
                       key={city}
                       type="button"
                       onClick={() => {
-                        const newCities = selected ? cities.filter((c: string) => c !== city) : [...cities, city]
+                        const newCities = selected ? visibleCities.filter((c: string) => c !== city) : [...visibleCities, city]
                         updateCities(newCities)
                       }}
                       className={`px-2 py-1 text-xs rounded border transition-colors ${selected ? 'bg-primary/20 border-primary/50 text-primary' : 'border-card-border bg-[#FFFCFA] text-muted hover:border-primary/40 hover:text-foreground'}`}
@@ -302,9 +303,9 @@ export default function ConfigPage() {
               </div>
               <div className="mt-3">
                 <TagsInput
-                  value={cities.filter((city: string) => !CITIES.includes(city))}
+                  value={visibleCities.filter((city: string) => !CITIES.includes(city))}
                   onChange={customCities => {
-                    const builtInCities = cities.filter((city: string) => CITIES.includes(city))
+                    const builtInCities = visibleCities.filter((city: string) => CITIES.includes(city))
                     const cityCodes = Object.fromEntries(
                       Object.entries(config.search?.city_codes || {}).filter(([city]) => customCities.includes(city))
                     )
@@ -313,6 +314,9 @@ export default function ConfigPage() {
                   onAdd={addCustomCity}
                   placeholder="输入城市后按回车添加"
                 />
+                {unreadableSearchValues.cities && (
+                  <p className="mt-1 text-xs text-amber-600">发现 {unreadableSearchValues.cities} 个无法读取的城市，已隐藏。请重新输入后保存。</p>
+                )}
                 {cityError && <p className="mt-2 text-xs text-red-500">{cityError}</p>}
               </div>
               </>
