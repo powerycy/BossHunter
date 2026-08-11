@@ -1,5 +1,6 @@
 """Database module - SQLite storage for jobs, history and state tracking."""
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -87,11 +88,19 @@ def insert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
     return cursor.rowcount == 1
 
 
-def update_job_score(conn: sqlite3.Connection, job_id: str, score: int, reason: str) -> None:
+def update_job_score(
+    conn: sqlite3.Connection,
+    job_id: str,
+    score: int,
+    reason: str,
+    *,
+    evidence: Any | None = None,
+) -> None:
     """Update job matching score."""
+    serialized_evidence = json.dumps(evidence, ensure_ascii=False) if evidence is not None else None
     conn.execute(
-        "UPDATE jobs SET score = ?, score_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (score, reason, job_id)
+        "UPDATE jobs SET score = ?, score_reason = ?, score_evidence = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (score, reason, serialized_evidence, job_id),
     )
     conn.commit()
 
@@ -197,6 +206,8 @@ def _migrate_v1_1(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN quick_score INTEGER DEFAULT 0")
     if "resume_path" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN resume_path TEXT DEFAULT NULL")
+    if "score_evidence" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN score_evidence TEXT DEFAULT NULL")
     conn.commit()
 
 
@@ -213,7 +224,7 @@ def reset_ai_filtered_jobs(conn: sqlite3.Connection) -> int:
     """Move only AI-scored low-match jobs back to the pending queue."""
     cursor = conn.execute("""
         UPDATE jobs
-        SET status = 'pending', score = 0, score_reason = NULL, updated_at = CURRENT_TIMESTAMP
+        SET status = 'pending', score = 0, score_reason = NULL, score_evidence = NULL, updated_at = CURRENT_TIMESTAMP
         WHERE status = 'filtered'
           AND COALESCE(score_reason, '') != ''
           AND score_reason NOT LIKE '预筛不通过:%'

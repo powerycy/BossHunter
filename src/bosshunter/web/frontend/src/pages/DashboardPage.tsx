@@ -804,6 +804,25 @@ function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void }) {
           <div className="text-sm font-black">评分理由</div>
           <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">{job.score_reason || '-'}</p>
         </div>
+        {job.score_evidence && (
+          <div className="mt-4 rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-black">深度评分证据</div>
+              <span className="text-xs text-muted">薪资判断：{job.score_evidence.salary_assessment || 'not_provided'}</span>
+            </div>
+            {job.score_evidence.evidence_mapping?.length ? (
+              <div className="mt-3 space-y-3 text-sm">
+                {job.score_evidence.evidence_mapping.map((item, index) => (
+                  <div key={`${item.requirement}-${index}`} className="border-t border-card-border pt-3 first:border-t-0 first:pt-0">
+                    <p className="font-bold text-foreground">{item.requirement}</p>
+                    <p className="mt-1 leading-6 text-muted">证据：{item.evidence || '未提供'}</p>
+                    <p className="leading-6 text-muted">匹配：{item.match || '未提供'}{item.gap ? `；缺口：${item.gap}` : ''}</p>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="mt-3 text-sm text-muted">本次深度评分未返回可核验证据。</p>}
+          </div>
+        )}
         <div className="mt-4 rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
           <div className="text-sm font-black">招呼语</div>
           <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">{job.greeting || '未生成'}</p>

@@ -350,6 +350,59 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertIn("application/json", headers["Content-Type"])
         self.assertEqual([job["id"] for job in payload["pending_confirmation"]], ["ready-job"])
 
+    def test_web_api_jobs_deserializes_score_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("evidence-job"))
+                update_job_score(
+                    db,
+                    "evidence-job",
+                    82,
+                    "good match",
+                    evidence={
+                        "salary_assessment": "pass",
+                        "evidence_mapping": [{"requirement": "Delivery", "match": "strong"}],
+                    },
+                )
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request("/api/jobs?limit=0")
+
+        self.assertTrue(status.startswith("200"))
+        payload = json.loads(body)
+        self.assertEqual(payload[0]["score_evidence"]["salary_assessment"], "pass")
+        self.assertEqual(payload[0]["score_evidence"]["evidence_mapping"][0]["match"], "strong")
+
+    def test_web_api_job_detail_and_workbench_serialize_score_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("evidence-ready"))
+                update_job_score(
+                    db,
+                    "evidence-ready",
+                    82,
+                    "good match",
+                    evidence={"evidence_mapping": [{"requirement": "Skills", "gap": "None"}]},
+                )
+                update_job_status(db, "evidence-ready", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            detail_status, _, detail_body = self._request("/api/jobs/evidence-ready")
+            workbench_status, _, workbench_body = self._request("/api/workbench")
+
+        self.assertTrue(detail_status.startswith("200"))
+        self.assertTrue(workbench_status.startswith("200"))
+        self.assertEqual(json.loads(detail_body)["score_evidence"]["evidence_mapping"][0]["requirement"], "Skills")
+        self.assertEqual(json.loads(workbench_body)["pending_confirmation"][0]["score_evidence"]["evidence_mapping"][0]["gap"], "None")
+
     def test_web_api_full_task_stays_running_while_waiting_for_frontend_confirmation(self):
         # Arrange
         confirmation_reached = False

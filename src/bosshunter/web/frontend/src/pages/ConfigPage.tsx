@@ -345,6 +345,13 @@ export default function ConfigPage() {
             <Field label={`通过阈值: ${config.scoring?.threshold || 60}`}>
               <Slider value={config.scoring?.threshold || 60} onChange={v => updateConfig('scoring.threshold', v)} min={0} max={100} />
             </Field>
+            <div className="flex items-center justify-between rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
+              <div>
+                <label className="text-sm font-black text-foreground">深度证据评分</label>
+                <p className="mt-1 text-xs text-muted">开启后按 JD 逐项核验简历证据，返回匹配理由、缺失项和证据映射；评分会更慢。</p>
+              </div>
+              <Switch checked={config.scoring?.deep_scoring ?? false} onChange={v => updateConfig('scoring.deep_scoring', v)} />
+            </div>
             <Field label="低分自动删除阈值">
               <Input
                 type="number"

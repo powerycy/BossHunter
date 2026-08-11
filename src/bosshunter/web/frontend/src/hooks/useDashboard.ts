@@ -31,6 +31,16 @@ interface Job {
   updated_at?: string
   resume_path?: string
   last_error?: string
+  score_evidence?: {
+    salary_assessment?: 'pass' | 'warning' | 'fail' | 'not_provided'
+    evidence_mapping?: Array<{
+      requirement: string
+      category?: string
+      evidence?: string
+      match?: string
+      gap?: string
+    }>
+  } | null
 }
 
 interface TopCompany {

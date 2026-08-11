@@ -83,6 +83,7 @@ DEFAULTS: dict[str, Any] = {
         "threshold": 71,
         "low_score_delete_threshold": 50,
         "max_candidates": 20,
+        "deep_scoring": False,
     },
     "throttle": {
         "daily_limit": 30,
@@ -159,6 +160,11 @@ def normalize_scoring_config(config: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         delete_threshold = 50
     scoring["low_score_delete_threshold"] = max(0, min(delete_threshold, 100))
+    raw_deep_scoring = scoring.get("deep_scoring", False)
+    if isinstance(raw_deep_scoring, str):
+        scoring["deep_scoring"] = raw_deep_scoring.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        scoring["deep_scoring"] = bool(raw_deep_scoring)
     search = config.get("search")
     if not isinstance(search, dict):
         search = _deep_copy_dict(DEFAULTS["search"])

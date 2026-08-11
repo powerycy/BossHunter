@@ -77,6 +77,19 @@ RESUME_DIR = DATA_DIR / "resumes"
 CONFIG_PATH = BASE_DIR / "config.yaml"
 
 
+def _serialize_job(job: dict) -> dict:
+	"""Expose persisted score evidence as structured JSON for the dashboard."""
+	data = dict(job)
+	raw_evidence = data.get("score_evidence")
+	if isinstance(raw_evidence, str) and raw_evidence.strip():
+		try:
+			parsed = json.loads(raw_evidence)
+			data["score_evidence"] = parsed if isinstance(parsed, dict) else None
+		except (TypeError, ValueError):
+			data["score_evidence"] = None
+	return data
+
+
 def set_base_dir(base_dir: Path | str) -> None:
 	"""Set the runtime directory used for config.yaml, data, and uploads."""
 	global BASE_DIR, DATA_DIR, RESUME_DIR, CONFIG_PATH
@@ -536,7 +549,7 @@ def api_jobs():
 			params.append(offset)
 
 		rows = db.execute(query, params).fetchall()
-		jobs = [dict(row) for row in rows]
+		jobs = [_serialize_job(dict(row)) for row in rows]
 		return _json_response(jobs)
 	finally:
 		db.close()
@@ -594,12 +607,12 @@ def api_workbench():
 		return _json_response({
 			"funnel": get_funnel_stats(db),
 			"pending_confirmation": [
-				job for job in get_jobs_pending_confirmation(db)
+				_serialize_job(job) for job in get_jobs_pending_confirmation(db)
 				if int(job.get("score") or 0) >= threshold
 			],
-			"pending_greetings": get_jobs_ready_to_send(db),
-			"send_errors": get_jobs_with_send_errors(db),
-			"needs_resume": get_jobs_needing_resume(db),
+			"pending_greetings": [_serialize_job(job) for job in get_jobs_ready_to_send(db)],
+			"send_errors": [_serialize_job(job) for job in get_jobs_with_send_errors(db)],
+			"needs_resume": [_serialize_job(job) for job in get_jobs_needing_resume(db)],
 			"task": status["active"],
 			"last_task": status["last_task"],
 		})
@@ -812,7 +825,7 @@ def api_job_detail(job_id):
 		row = db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
 		if not row:
 			return _json_response({"error": "岗位不存在"}, 404)
-		return _json_response(dict(row))
+		return _json_response(_serialize_job(dict(row)))
 	finally:
 		db.close()
 
