@@ -41,6 +41,7 @@ class WorkbenchTask:
     deadline_at: str | None = None
     stop_reason: str | None = None
     stop_requested: Event = field(default_factory=Event, repr=False)
+    metrics: dict[str, int] = field(default_factory=dict)
     context: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def snapshot(self) -> dict:
@@ -56,6 +57,7 @@ class WorkbenchTask:
             "deadline_at": self.deadline_at,
             "stop_reason": self.stop_reason,
             "stop_requested": self.stop_requested.is_set(),
+            "metrics": dict(self.metrics),
         }
 
 
@@ -132,6 +134,9 @@ class WorkbenchTaskRunner:
             confirmation_event = task.context.get("confirmation_event")
             if isinstance(confirmation_event, Event):
                 confirmation_event.set()
+            monitor_wakeup_event = task.context.get("monitor_wakeup_event")
+            if isinstance(monitor_wakeup_event, Event):
+                monitor_wakeup_event.set()
             return task.snapshot()
 
     def wait(self, timeout: float | None = None) -> None:

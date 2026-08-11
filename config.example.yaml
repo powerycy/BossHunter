@@ -10,6 +10,7 @@ profile:
   salary_max: 25  # K
   allow_internship: false
   deal_breakers: ["外包", "996"]
+  jd_deal_breakers: ["SQL", "Linux", "服务器部署"]
   allow_internship: false
   # 可选：个人亮点（用于招呼语生成）
   extra_highlights:
@@ -26,6 +27,8 @@ search:
 scoring:
   threshold: 70
   max_candidates: 20
+  require_recent_hr_activity: true
+  allow_unknown_hr_activity: true
 
 throttle:
   daily_limit: 30
@@ -47,6 +50,8 @@ ai:
   timeout_seconds: 180
   scoring_max_tokens: 8192
   scoring_max_attempts: 2
+  scoring_concurrency: 3          # AI评分并发数，范围1-5；数据库仍串行写入
+  scoring_second_review: true     # 对68-79分临界岗位进行一次独立复核
   greeting_max_tokens: 8192
   greeting_review_max_tokens: 4096
   greeting_max_attempts: 2

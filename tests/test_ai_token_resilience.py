@@ -1,4 +1,7 @@
+import json
 import unittest
+from threading import Event, Lock, Thread, get_ident
+from time import sleep
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -16,6 +19,25 @@ def _job(job_id: str) -> dict:
         "jd": "负责 AI 产品规划、用户研究和项目落地。" * 120,
         "score_reason": "产品经验匹配",
     }
+
+
+def _score_response(score: int = 82) -> str:
+    components = {
+        82: (34, 21, 12, 7, 8),
+        78: (32, 20, 11, 7, 8),
+    }[score]
+    return json.dumps({
+        "role_summary": "客户交付",
+        "core_duties": {"score": components[0], "evidence": "匹配"},
+        "transferable_evidence": {"score": components[1], "evidence": "匹配"},
+        "hard_requirements": {"score": components[2], "evidence": "匹配"},
+        "tools_industry": {"score": components[3], "evidence": "匹配"},
+        "practical_fit": {"score": components[4], "evidence": "匹配"},
+        "caps": [],
+        "hard_gaps": [],
+        "reason": "匹配",
+        "missing": "",
+    }, ensure_ascii=False)
 
 
 class AiCredentialErrorTests(unittest.TestCase):
@@ -84,6 +106,199 @@ class AiCredentialErrorTests(unittest.TestCase):
 
 
 class ScorerTokenResilienceTests(unittest.TestCase):
+    def test_structured_score_is_summed_and_hard_technical_gap_caps_at_55(self):
+        response = """{
+          "role_summary": "负责客户交付和上线支持",
+          "core_duties": {"score": 36, "evidence": "有实施交付经验"},
+          "transferable_evidence": {"score": 22, "evidence": "有培训和需求梳理经验"},
+          "hard_requirements": {"score": 12, "evidence": "多数要求符合"},
+          "tools_industry": {"score": 8, "evidence": "熟悉SaaS业务"},
+          "practical_fit": {"score": 9, "evidence": "地点薪资符合"},
+          "caps": ["technical_required"],
+          "hard_gaps": ["必须熟练使用Linux并独立部署"],
+          "reason": "交付经验匹配，但存在硬技术缺口",
+          "missing": "Linux部署"
+        }"""
+
+        result = scorer._validated_score_result(response)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.score, 55)
+        self.assertEqual(result.raw_score, 87)
+        self.assertIn("职责36/40", result.reason)
+        self.assertIn("硬技术缺口封顶55", result.reason)
+
+    def test_structured_score_rejects_component_above_its_limit(self):
+        response = """{
+          "role_summary": "客户成功",
+          "core_duties": {"score": 41, "evidence": "不合法"},
+          "transferable_evidence": {"score": 20, "evidence": "匹配"},
+          "hard_requirements": {"score": 12, "evidence": "匹配"},
+          "tools_industry": {"score": 8, "evidence": "匹配"},
+          "practical_fit": {"score": 8, "evidence": "匹配"},
+          "caps": [], "hard_gaps": [], "reason": "匹配", "missing": ""
+        }"""
+
+        self.assertIsNone(scorer._validated_score_result(response))
+
+    def test_legacy_total_score_json_is_rejected(self):
+        self.assertIsNone(
+            scorer._validated_score_result('{"score": 82, "reason": "匹配", "missing": ""}')
+        )
+
+    def test_borderline_structured_score_is_reviewed_and_averaged(self):
+        db = MagicMock()
+        job = _job("review")
+        first = """{
+          "role_summary": "客户成功",
+          "core_duties": {"score": 30, "evidence": "较匹配"},
+          "transferable_evidence": {"score": 19, "evidence": "可迁移"},
+          "hard_requirements": {"score": 10, "evidence": "基本符合"},
+          "tools_industry": {"score": 7, "evidence": "相关"},
+          "practical_fit": {"score": 8, "evidence": "符合"},
+          "caps": [], "hard_gaps": [], "reason": "整体较匹配", "missing": "行业经验"
+        }"""
+        review = """{
+          "role_summary": "客户成功",
+          "core_duties": {"score": 28, "evidence": "部分匹配"},
+          "transferable_evidence": {"score": 17, "evidence": "可以迁移"},
+          "hard_requirements": {"score": 9, "evidence": "多数符合"},
+          "tools_industry": {"score": 6, "evidence": "一般"},
+          "practical_fit": {"score": 8, "evidence": "符合"},
+          "caps": [], "hard_gaps": [], "reason": "匹配但有差距", "missing": "行业经验"
+        }"""
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=[job]),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch("bosshunter.ai.scorer._call_claude", side_effect=[first, review]) as call_ai,
+            patch("bosshunter.ai.scorer.update_job_quick_score"),
+            patch("bosshunter.ai.scorer.update_job_score") as update_score,
+            patch("bosshunter.ai.scorer.update_job_status"),
+        ):
+            scored, filtered = scorer.score_jobs(
+                {"ai": {"scoring_concurrency": 1}, "scoring": {"threshold": 71}}
+            )
+
+        self.assertEqual((scored, filtered), (1, 0))
+        self.assertEqual(call_ai.call_count, 2)
+        self.assertEqual(update_score.call_args.args[2], 71)
+        self.assertIn("二次复核", update_score.call_args.args[3])
+
+    def test_ai_calls_run_with_configured_concurrency_but_db_writes_stay_on_main_thread(self):
+        db = MagicMock()
+        jobs = [_job(str(index)) for index in range(5)]
+        lock = Lock()
+        active = 0
+        peak = 0
+        main_thread = get_ident()
+        write_threads: list[int] = []
+
+        def call_ai(*_args, **_kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            sleep(0.03)
+            with lock:
+                active -= 1
+            return _score_response(82)
+
+        def record_write(*_args, **_kwargs):
+            write_threads.append(get_ident())
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch("bosshunter.ai.scorer._call_claude", side_effect=call_ai),
+            patch("bosshunter.ai.scorer.update_job_quick_score", side_effect=record_write),
+            patch("bosshunter.ai.scorer.update_job_score", side_effect=record_write),
+            patch("bosshunter.ai.scorer.update_job_status", side_effect=record_write),
+        ):
+            scored, filtered = scorer.score_jobs(
+                {"ai": {"scoring_concurrency": 3}, "scoring": {"threshold": 71}}
+            )
+
+        self.assertEqual((scored, filtered), (5, 0))
+        self.assertEqual(peak, 3)
+        self.assertTrue(write_threads)
+        self.assertEqual(set(write_threads), {main_thread})
+
+    def test_stop_returns_without_waiting_for_inflight_concurrent_ai_calls(self):
+        db = MagicMock()
+        stop_event = Event()
+        ai_started = Event()
+        release_ai = Event()
+        finished = Event()
+
+        def blocking_ai(*_args, **_kwargs):
+            ai_started.set()
+            release_ai.wait(2)
+            return _score_response(82)
+
+        def run_scoring():
+            try:
+                scorer.score_jobs(
+                    {
+                        "ai": {"scoring_concurrency": 3},
+                        "scoring": {"threshold": 71},
+                        "_workbench_stop_event": stop_event,
+                    }
+                )
+            finally:
+                finished.set()
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=[_job("1"), _job("2")]),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch("bosshunter.ai.scorer._call_claude", side_effect=blocking_ai),
+            patch("bosshunter.ai.scorer.update_job_quick_score"),
+            patch("bosshunter.ai.scorer.update_job_score"),
+            patch("bosshunter.ai.scorer.update_job_status"),
+        ):
+            thread = Thread(target=run_scoring)
+            thread.start()
+            self.assertTrue(ai_started.wait(0.5))
+            stop_event.set()
+            self.assertTrue(finished.wait(0.5))
+            release_ai.set()
+            thread.join(1)
+
+        db.close.assert_called_once()
+
+    def test_scoring_can_be_limited_to_current_run_job_ids(self):
+        db = MagicMock()
+        old_job = _job("old")
+        new_job = _job("new")
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=[old_job, new_job]),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch(
+                "bosshunter.ai.scorer._call_claude",
+                return_value=_score_response(82),
+            ) as call_ai,
+            patch("bosshunter.ai.scorer.update_job_quick_score") as update_quick_score,
+            patch("bosshunter.ai.scorer.update_job_score"),
+            patch("bosshunter.ai.scorer.update_job_status"),
+        ):
+            scored, filtered = scorer.score_jobs(
+                {"scoring": {"threshold": 70}},
+                job_ids=["new"],
+            )
+
+        self.assertEqual((scored, filtered), (1, 0))
+        self.assertEqual(call_ai.call_count, 1)
+        update_quick_score.assert_called_once_with(db, "new", 80)
+
     def test_invalid_score_json_retries_and_reports_progress(self):
         db = MagicMock()
         job = _job("invalid-json")
@@ -98,7 +313,7 @@ class ScorerTokenResilienceTests(unittest.TestCase):
                 "bosshunter.ai.scorer._call_claude",
                 side_effect=[
                     "这不是完整 JSON",
-                    '{"score": 82, "reason": "匹配", "missing": ""}',
+                    _score_response(82),
                 ],
             ) as call_ai,
             patch("bosshunter.ai.scorer.update_job_quick_score"),
@@ -131,14 +346,17 @@ class ScorerTokenResilienceTests(unittest.TestCase):
                 "bosshunter.ai.scorer._call_claude",
                 side_effect=[
                     credentials.AIRequestError("context_limit", "请求内容超过当前模型的上下文限制"),
-                    '{"score": 78, "reason": "匹配", "missing": ""}',
+                    _score_response(78),
                 ],
             ) as call_ai,
             patch("bosshunter.ai.scorer.update_job_quick_score"),
             patch("bosshunter.ai.scorer.update_job_score"),
             patch("bosshunter.ai.scorer.update_job_status"),
         ):
-            scored, _ = scorer.score_jobs({"scoring": {"threshold": 70}})
+            scored, _ = scorer.score_jobs({
+                "ai": {"scoring_second_review": False},
+                "scoring": {"threshold": 70},
+            })
 
         self.assertEqual(scored, 1)
         self.assertEqual(call_ai.call_count, 2)
@@ -162,7 +380,7 @@ class ScorerTokenResilienceTests(unittest.TestCase):
                 "bosshunter.ai.scorer._call_claude",
                 side_effect=[
                     credentials.AIRequestError("output_limit", "当前模型不接受设置的输出 Token 上限"),
-                    '{"score": 82, "reason": "匹配", "missing": ""}',
+                    _score_response(82),
                 ],
             ) as call_ai,
             patch("bosshunter.ai.scorer.update_job_quick_score"),
@@ -195,7 +413,7 @@ class ScorerTokenResilienceTests(unittest.TestCase):
                 "bosshunter.ai.scorer._call_claude",
                 side_effect=[
                     credentials.AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断"),
-                    '{"score": 82, "reason": "匹配", "missing": ""}',
+                    _score_response(82),
                 ],
             ) as call_ai,
             patch("bosshunter.ai.scorer.update_job_quick_score"),

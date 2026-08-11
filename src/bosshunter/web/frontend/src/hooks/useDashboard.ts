@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 interface FunnelData {
   [key: string]: number
@@ -24,6 +24,7 @@ interface Job {
   status: string
   hr_name: string
   hr_title: string
+  hr_active: string
   company_size: string
   company_industry: string
   url: string
@@ -49,10 +50,12 @@ interface WorkbenchTask {
   deadline_at?: string
   stop_reason?: string
   stop_requested: boolean
+  metrics?: Record<string, number>
 }
 
 interface WorkbenchData {
   funnel: FunnelData
+  funnel_today: FunnelData
   pending_confirmation: Job[]
   pending_greetings: Job[]
   send_errors: Job[]
@@ -87,6 +90,7 @@ interface HistoryItem {
 
 const emptyWorkbench: WorkbenchData = {
   funnel: {},
+  funnel_today: {},
   pending_confirmation: [],
   pending_greetings: [],
   send_errors: [],
@@ -99,36 +103,40 @@ type DashboardDataScope = 'workbench' | 'jobs' | 'monitor' | 'all'
 
 export function useDashboard(scope: DashboardDataScope = 'all') {
   const [workbench, setWorkbench] = useState<WorkbenchData>(emptyWorkbench)
-  const [jobs, setJobs] = useState<Job[]>([])
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null)
+  const refreshingRef = useRef(false)
 
   const fetchAll = async () => {
+    if (refreshingRef.current) return
+    refreshingRef.current = true
+    setRefreshing(true)
     try {
       const needsWorkbench = scope === 'all' || scope === 'workbench'
-      const needsJobs = scope === 'all' || scope === 'jobs'
       const needsHistory = scope === 'all' || scope === 'monitor'
       const fetchOptions = { cache: 'no-store' as const }
-      const [workbenchRes, jobsRes, historyRes] = await Promise.all([
+      const [workbenchRes, historyRes] = await Promise.all([
         needsWorkbench ? fetch('/api/workbench', fetchOptions) : Promise.resolve(null),
-        needsJobs ? fetch('/api/jobs?limit=100', fetchOptions) : Promise.resolve(null),
         needsHistory ? fetch('/api/history?limit=50&include_unresolved=1', fetchOptions) : Promise.resolve(null),
       ])
-      const [workbenchData, jobsData, historyData] = await Promise.all([
+      const [workbenchData, historyData] = await Promise.all([
         workbenchRes ? workbenchRes.json() : Promise.resolve(undefined),
-        jobsRes ? jobsRes.json() : Promise.resolve(undefined),
         historyRes ? historyRes.json() : Promise.resolve(undefined),
       ])
 
       if (workbenchData !== undefined) setWorkbench(workbenchData)
-      if (jobsData !== undefined) setJobs(jobsData)
       if (historyData !== undefined) setHistory(historyData)
+      setLastRefreshedAt(new Date())
       setError('')
     } catch (err) {
       console.error('Failed to fetch dashboard data:', err)
       setError('无法读取本地控制台数据')
     } finally {
+      refreshingRef.current = false
+      setRefreshing(false)
       setLoading(false)
     }
   }
@@ -144,7 +152,10 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
       const details = Array.isArray(data.messages) ? data.messages.map(String).filter(Boolean).join('；') : ''
       throw new Error([data.error || '启动失败', details].filter(Boolean).join('：'))
     }
-    await fetchAll()
+    const task = await res.json() as WorkbenchTask
+    setWorkbench(prev => ({ ...prev, task, last_task: task }))
+    void fetchAll()
+    return task
   }
 
   const stopTask = async (taskId: string) => {
@@ -153,7 +164,10 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
       const data = await res.json().catch(() => ({}))
       throw new Error(data.error || '停止失败')
     }
-    await fetchAll()
+    const task = await res.json() as WorkbenchTask
+    setWorkbench(prev => ({ ...prev, task, last_task: task }))
+    void fetchAll()
+    return task
   }
 
   useEffect(() => {
@@ -162,7 +176,17 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
     return () => clearInterval(interval)
   }, [])
 
-  return { workbench, jobs, history, loading, error, refresh: fetchAll, startTask, stopTask }
+  return {
+    workbench,
+    history,
+    loading,
+    error,
+    refreshing,
+    lastRefreshedAt,
+    refresh: fetchAll,
+    startTask,
+    stopTask,
+  }
 }
 
 export type { FunnelData, ActivityData, Job, TopCompany, WorkbenchData, WorkbenchTask, HistoryDetailPayload, HistoryItem }

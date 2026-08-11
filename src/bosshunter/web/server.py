@@ -6,11 +6,14 @@ Serves:
 """
 
 import json
+import math
 import mimetypes
 import time
 from copy import deepcopy
 from pathlib import Path
+from socketserver import ThreadingMixIn
 from threading import Event, Lock
+from wsgiref.simple_server import WSGIServer
 
 from bottle import Bottle, request, response, static_file, abort
 
@@ -33,6 +36,7 @@ from bosshunter.db import (
 	get_top_companies,
 	update_job_status,
 )
+from bosshunter.job_filters import HR_ACTIVITY_CATEGORIES, classify_hr_activity, parse_monthly_salary_k
 from bosshunter.web.preflight import check_ai_connection, collect_preflight_checks, error_messages
 from bosshunter.web.resume_upload import ResumeUploadError, prepare_resume_content
 from bosshunter.web.tasks import TaskAlreadyRunningError, WorkbenchTask, WorkbenchTaskRunner
@@ -44,6 +48,13 @@ mimetypes.add_type("text/css", ".css", strict=True)
 
 app = Bottle()
 task_runner = WorkbenchTaskRunner()
+
+
+class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+	"""Handle Chrome preconnect sockets without blocking other requests."""
+
+	daemon_threads = True
+	allow_reuse_address = True
 
 # Paths
 FRONTEND_DIR = Path(__file__).parent / "frontend" / "dist"
@@ -208,24 +219,51 @@ def _log(task: WorkbenchTask, message: str) -> None:
 	task.logs.append(message)
 
 
+def _record_collect_progress(task: WorkbenchTask, state: dict) -> None:
+	task.metrics.update({
+		"collect_seen": int(state.get("seen") or 0),
+		"collect_new": int(state.get("new") or 0),
+		"collect_duplicate": int(state.get("duplicate") or 0),
+	})
+
+
+def _record_score_progress(task: WorkbenchTask, state: dict) -> None:
+	task.metrics.update({
+		"ai_completed": int(state.get("completed") or 0),
+		"ai_total": int(state.get("total") or 0),
+		"ai_passed": int(state.get("scored") or 0),
+		"ai_filtered": int(state.get("filtered") or 0),
+		"ai_failed": int(state.get("failed") or 0),
+	})
+	_log(
+		task,
+		f"AI 评分进度 {state['completed']}/{state['total']}：通过 {state['scored']}，过滤 {state['filtered']}，失败 {state['failed']}",
+	)
+
+
 def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 	from bosshunter.ai.scorer import score_jobs
 	from bosshunter.scraper.jobs import scrape_jobs
 
 	keywords = config.get("search", {}).get("keywords", [])
 	_log(task, "开始采集岗位")
-	scrape_jobs(config, keywords)
+	collect_config = dict(config)
+	collect_config["_workbench_stop_event"] = task.stop_requested
+	collect_config["_workbench_collect_progress"] = lambda state: _record_collect_progress(task, state)
+	collected_job_ids: list[str] = []
+	scrape_jobs(collect_config, keywords, collected_job_ids=collected_job_ids)
 	if task.stop_requested.is_set():
 		return
-	_log(task, "开始 AI 评分")
+	_log(
+		task,
+		f"本轮采集完成：扫描 {task.metrics.get('collect_seen', 0)}，新增 {task.metrics.get('collect_new', 0)}，重复 {task.metrics.get('collect_duplicate', 0)}",
+	)
+	_log(task, f"开始 AI 评分：仅处理本轮新增 {len(collected_job_ids)} 个岗位")
 	score_config = dict(config)
 	score_config["_workbench_stop_event"] = task.stop_requested
 	score_config["_workbench_log"] = lambda message: _log(task, message)
-	score_config["_workbench_score_progress"] = lambda state: _log(
-		task,
-		f"AI 评分进度 {state['completed']}/{state['total']}：通过 {state['scored']}，过滤 {state['filtered']}，失败 {state['failed']}",
-	)
-	score_jobs(score_config)
+	score_config["_workbench_score_progress"] = lambda state: _record_score_progress(task, state)
+	score_jobs(score_config, job_ids=collected_job_ids)
 
 
 def _execute_rescore(task: WorkbenchTask, config: dict) -> None:
@@ -234,10 +272,7 @@ def _execute_rescore(task: WorkbenchTask, config: dict) -> None:
 	score_config = dict(config)
 	score_config["_workbench_stop_event"] = task.stop_requested
 	score_config["_workbench_log"] = lambda message: _log(task, message)
-	score_config["_workbench_score_progress"] = lambda state: _log(
-		task,
-		f"AI 评分进度 {state['completed']}/{state['total']}：通过 {state['scored']}，过滤 {state['filtered']}，失败 {state['failed']}",
-	)
+	score_config["_workbench_score_progress"] = lambda state: _record_score_progress(task, state)
 	_log(task, "开始重新评分")
 	score_jobs(score_config, rescore_filtered=True)
 
@@ -373,7 +408,81 @@ def _execute_full(task: WorkbenchTask, config: dict) -> None:
 	_execute_monitor(task, load_config(CONFIG_PATH))
 
 
+def _queue_active_delivery(
+	task: WorkbenchTask,
+	job_ids: list[str],
+	*,
+	direct_send: bool,
+) -> tuple[dict, list[str]]:
+	"""Append jobs to the currently running single delivery worker."""
+	queue_lock = task.context.setdefault("delivery_queue_lock", Lock())
+	with queue_lock:
+		if not task.context.get("delivering"):
+			raise TaskAlreadyRunningError("当前发送任务即将结束，请稍后重试")
+		scheduled_ids = task.context.setdefault("delivery_scheduled_ids", set())
+		new_ids = [job_id for job_id in job_ids if job_id not in scheduled_ids]
+		already_queued_count = len(job_ids) - len(new_ids)
+		if new_ids:
+			task.context.setdefault("pending_deliveries", []).append({
+				"job_ids": new_ids,
+				"direct_send": direct_send,
+			})
+			scheduled_ids.update(new_ids)
+			_log(task, f"新增 {len(new_ids)} 个岗位，已加入当前发送队列")
+		elif already_queued_count:
+			_log(task, f"所选 {already_queued_count} 个岗位已在当前发送队列中")
+	payload = task.snapshot()
+	payload["queued_count"] = len(new_ids)
+	payload["already_queued_count"] = already_queued_count
+	return payload, new_ids
+
+
+def _take_active_delivery(task: WorkbenchTask) -> dict | None:
+	queue_lock = task.context.get("delivery_queue_lock")
+	if queue_lock is None:
+		return None
+	with queue_lock:
+		pending = task.context.setdefault("pending_deliveries", [])
+		if pending:
+			return pending.pop(0)
+		task.context["delivering"] = False
+		return None
+
+
 def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
+	"""Run one delivery worker and drain batches queued while it is active."""
+	queue_lock = task.context.setdefault("delivery_queue_lock", Lock())
+	with queue_lock:
+		task.context["delivering"] = True
+		task.context.setdefault("pending_deliveries", [])
+		task.context.setdefault("delivery_scheduled_ids", set()).update(
+			str(job_id) for job_id in config.get("_workbench_job_ids", []) if str(job_id)
+		)
+
+	current_config = config
+	try:
+		while not task.stop_requested.is_set():
+			_execute_deliver_batch(task, current_config)
+			if task.stop_requested.is_set():
+				return
+			batch = _take_active_delivery(task)
+			if not batch:
+				return
+			current_config = dict(config)
+			current_config["_workbench_job_ids"] = batch.get("job_ids", [])
+			if batch.get("direct_send"):
+				current_config["_workbench_skip_greeting"] = True
+			else:
+				current_config.pop("_workbench_skip_greeting", None)
+			_log(task, f"继续处理队列中的 {len(current_config['_workbench_job_ids'])} 个岗位")
+	finally:
+		with queue_lock:
+			task.context["delivering"] = False
+			task.context.pop("delivery_scheduled_ids", None)
+			task.context.pop("pending_deliveries", None)
+
+
+def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
 	from bosshunter.ai.greeter import generate_greetings
 	from bosshunter.executor.sender import send_greetings
 
@@ -496,6 +605,108 @@ def api_jobs():
 		db.close()
 
 
+def _optional_float_param(name: str, *, minimum: float = 0, maximum: float | None = None):
+	raw_value = request.params.get(name)
+	if raw_value in (None, ""):
+		return None
+	try:
+		value = float(raw_value)
+	except (TypeError, ValueError) as exc:
+		raise ValueError(f"{name} 必须是数字") from exc
+	if not math.isfinite(value):
+		raise ValueError(f"{name} 必须是有限数字")
+	if value < minimum or (maximum is not None and value > maximum):
+		raise ValueError(f"{name} 超出允许范围")
+	return value
+
+
+def _integer_param(name: str, default: int, *, minimum: int, maximum: int | None = None):
+	raw_value = request.params.get(name, str(default))
+	try:
+		value = int(raw_value)
+	except (TypeError, ValueError) as exc:
+		raise ValueError(f"{name} 必须是整数") from exc
+	if value < minimum or (maximum is not None and value > maximum):
+		raise ValueError(f"{name} 超出允许范围")
+	return value
+
+
+@app.route("/api/jobs/search")
+def api_job_search():
+	try:
+		minimum_score = _optional_float_param("min_score", maximum=100)
+		salary_min = _optional_float_param("salary_min")
+		salary_max = _optional_float_param("salary_max")
+		limit = _integer_param("limit", 15, minimum=1, maximum=100)
+		offset = _integer_param("offset", 0, minimum=0)
+		if salary_min is not None and salary_max is not None and salary_min > salary_max:
+			raise ValueError("最低薪资不能高于最高薪资")
+		activity_filter = request.params.get("hr_activity", "").strip()
+		if activity_filter and activity_filter not in HR_ACTIVITY_CATEGORIES:
+			raise ValueError("hr_activity 参数无效")
+		created_within = request.params.get("created_within", "").strip()
+		if created_within and created_within not in {"today", "3d", "7d"}:
+			raise ValueError("created_within 参数无效")
+	except ValueError as exc:
+		return _json_response({"error": str(exc)}, 400)
+
+	query = "SELECT * FROM jobs"
+	conditions = []
+	params = []
+	keyword = (request.query.getunicode("q") or "").strip()
+	status_filter = request.params.get("status", "").strip()
+	if keyword:
+		conditions.append("(title LIKE ? OR company LIKE ? OR jd LIKE ? OR score_reason LIKE ?)")
+		keyword_param = f"%{keyword}%"
+		params.extend([keyword_param] * 4)
+	if minimum_score is not None:
+		conditions.append("score >= ?")
+		params.append(minimum_score)
+	if status_filter:
+		conditions.append("status = ?")
+		params.append(status_filter)
+	if created_within == "today":
+		conditions.append("created_at >= datetime('now', 'localtime', 'start of day', 'utc')")
+	elif created_within == "3d":
+		conditions.append("created_at >= datetime('now', '-3 days')")
+	elif created_within == "7d":
+		conditions.append("created_at >= datetime('now', '-7 days')")
+	if conditions:
+		query += " WHERE " + " AND ".join(conditions)
+	query += " ORDER BY created_at DESC, score DESC"
+
+	db = _get_web_db()
+	try:
+		all_total = db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+		rows = [dict(row) for row in db.execute(query, params).fetchall()]
+		if salary_min is not None or salary_max is not None:
+			filtered_rows = []
+			for row in rows:
+				salary_range = parse_monthly_salary_k(row.get("salary", ""))
+				if salary_range is None:
+					continue
+				job_min, job_max = salary_range
+				if salary_min is not None and job_max < salary_min:
+					continue
+				if salary_max is not None and job_min > salary_max:
+					continue
+				filtered_rows.append(row)
+			rows = filtered_rows
+		if activity_filter:
+			rows = [row for row in rows if classify_hr_activity(row.get("hr_active", "")) == activity_filter]
+
+		total = len(rows)
+		return _json_response({
+			"items": rows[offset:offset + limit],
+			"total": total,
+			"all_total": all_total,
+			"limit": limit,
+			"offset": offset,
+		})
+	finally:
+		db.close()
+
+
 @app.route("/api/top-companies")
 def api_top_companies():
 	limit = int(request.params.get("limit", 5))
@@ -547,6 +758,7 @@ def api_workbench():
 		status = task_runner.status()
 		return _json_response({
 			"funnel": get_funnel_stats(db),
+			"funnel_today": get_funnel_stats(db, today=True),
 			"pending_confirmation": [
 				job for job in get_jobs_pending_confirmation(db)
 				if int(job.get("score") or 0) >= threshold
@@ -618,39 +830,66 @@ def api_workbench_deliver():
 			return _json_response({"error": "请选择要投递的岗位"}, 400)
 
 		direct_send = bool(body.get("direct_send"))
+		status = task_runner.status()
+		active_task = status.get("active") or {}
+		active_runtime_task = task_runner._tasks.get(active_task.get("id"))
+		waiting_task = None
+		if (
+			not direct_send
+			and active_runtime_task
+			and active_runtime_task.mode == "full"
+			and active_runtime_task.status == "running"
+			and active_runtime_task.context.get("waiting_confirmation")
+		):
+			waiting_task = active_runtime_task
+		monitoring_task = None
+		if (
+			active_runtime_task
+			and active_runtime_task.status == "running"
+			and active_runtime_task.context.get("monitoring")
+		):
+			monitoring_task = active_runtime_task
+		delivery_task = None
+		if (
+			active_runtime_task
+			and active_runtime_task.status == "running"
+			and active_runtime_task.context.get("delivering")
+		):
+			delivery_task = active_runtime_task
+		if active_task and not waiting_task and not monitoring_task and not delivery_task:
+			raise TaskAlreadyRunningError(
+				f"当前已有后台任务「{active_task.get('label', '未知任务')}」正在运行或停止中，请等待其完全结束"
+			)
+
+		queued_payload = None
+		status_job_ids = job_ids
+		if delivery_task:
+			queued_payload, status_job_ids = _queue_active_delivery(
+				delivery_task,
+				job_ids,
+				direct_send=direct_send,
+			)
+
 		db = _get_web_db()
 		try:
-			for job_id in job_ids:
+			for job_id in status_job_ids:
 				update_job_status(db, job_id, "approved")
 				if not direct_send:
 					add_history(db, job_id, "approved", "Web Dashboard 确认投递")
 		finally:
 			db.close()
 
-		if not direct_send:
-			status = task_runner.status()
-			active_task = status.get("active") or {}
-			waiting_task = task_runner._tasks.get(active_task.get("id"))
-			if (
-				waiting_task
-				and waiting_task.mode == "full"
-				and waiting_task.status == "running"
-				and waiting_task.context.get("waiting_confirmation")
-			):
-				waiting_task.context["confirmed_job_ids"] = job_ids
-				confirmation_event = waiting_task.context.get("confirmation_event")
-				if isinstance(confirmation_event, Event):
-					confirmation_event.set()
-				return _json_response(waiting_task.snapshot())
+		if queued_payload is not None:
+			return _json_response(queued_payload)
 
-		status = task_runner.status()
-		active_task = status.get("active") or {}
-		monitoring_task = task_runner._tasks.get(active_task.get("id"))
-		if (
-			monitoring_task
-			and monitoring_task.status == "running"
-			and monitoring_task.context.get("monitoring")
-		):
+		if waiting_task:
+			waiting_task.context["confirmed_job_ids"] = job_ids
+			confirmation_event = waiting_task.context.get("confirmation_event")
+			if isinstance(confirmation_event, Event):
+				confirmation_event.set()
+			return _json_response(waiting_task.snapshot())
+
+		if monitoring_task:
 			return _json_response(
 				_queue_monitor_delivery(
 					monitoring_task,
@@ -1003,4 +1242,10 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 			webbrowser.open(f"http://{host}:{port}")
 		threading.Thread(target=_open, daemon=True).start()
 
-	app.run(host=host, port=port, quiet=False, reloader=False)
+	app.run(
+		host=host,
+		port=port,
+		quiet=False,
+		reloader=False,
+		server_class=ThreadingWSGIServer,
+	)

@@ -9,7 +9,8 @@
         {"key": "target_cities", "label": "目标城市", "type": "multi-select", "options_from": "cities", "description": "支持多城市"},
         {"key": "salary_min", "label": "最低薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
         {"key": "salary_max", "label": "最高薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
-        {"key": "deal_breakers", "label": "排除关键词", "type": "tags", "description": "含这些词的岗位自动跳过"},
+        {"key": "deal_breakers", "label": "职位名排除词", "type": "tags", "description": "职位名含这些词时自动跳过"},
+        {"key": "jd_deal_breakers", "label": "JD 排除词", "type": "tags", "description": "完整 JD 含这些词时自动跳过"},
         {"key": "allow_internship", "label": "接受实习/管培岗位", "type": "switch", "default": false, "description": "关闭时自动过滤实习、intern、管培岗位"}
       ]
     },
@@ -29,7 +30,9 @@
       "icon": "Star",
       "fields": [
         {"key": "threshold", "label": "通过阈值", "type": "slider", "min": 0, "max": 100, "default": 71, "description": "低于此分自动过滤"},
-        {"key": "max_candidates", "label": "每轮最大候选数", "type": "number", "min": 1, "max": 100, "default": 20}
+        {"key": "max_candidates", "label": "每轮最大候选数", "type": "number", "min": 1, "max": 100, "default": 20},
+        {"key": "require_recent_hr_activity", "label": "仅评分近3日活跃招聘者", "type": "switch", "default": true},
+        {"key": "allow_unknown_hr_activity", "label": "活跃度未知时保留", "type": "switch", "default": true}
       ]
     },
     {
@@ -59,7 +62,9 @@
         {"key": "base_url", "label": "Base URL", "type": "text", "placeholder": "留空使用默认", "default": ""},
         {"key": "thinking", "label": "Thinking 模式", "type": "select", "options": ["auto", "disabled", "enabled", "off"], "default": "auto", "description": "auto 优先关闭推理输出，不兼容时安全回退；off 不发送 thinking 参数"},
         {"key": "thinking_budget", "label": "Thinking 预算", "type": "number", "min": 1024, "max": 32768, "default": 2048, "description": "仅 enabled 模式使用"},
-        {"key": "timeout_seconds", "label": "AI 请求超时 (秒)", "type": "number", "min": 5, "max": 600, "default": 180}
+        {"key": "timeout_seconds", "label": "AI 请求超时 (秒)", "type": "number", "min": 5, "max": 600, "default": 180},
+        {"key": "scoring_concurrency", "label": "AI 评分并发数", "type": "number", "min": 1, "max": 5, "default": 3, "description": "仅并发调用 AI，岗位数据仍按顺序安全写入"},
+        {"key": "scoring_second_review", "label": "临界评分二次复核", "type": "switch", "default": true, "description": "对首次68-79分的岗位再独立核对一次，降低误判"}
       ]
     },
     {

@@ -206,6 +206,10 @@ export default function ConfigPage() {
             <Field label="排除关键词">
               <TagsInput value={config.profile?.deal_breakers || []} onChange={v => updateConfig('profile.deal_breakers', v)} placeholder="如：外包、996" />
             </Field>
+            <Field label="JD 排除关键词">
+              <TagsInput value={config.profile?.jd_deal_breakers || []} onChange={v => updateConfig('profile.jd_deal_breakers', v)} placeholder="如：SQL、Linux" />
+              <p className="mt-1 text-xs text-muted">完整 JD 含这些词时会在 AI 评分前跳过。</p>
+            </Field>
             <div className="flex items-center justify-between">
               <label className="text-xs text-foreground">接受实习/管培岗位</label>
               <Switch checked={config.profile?.allow_internship ?? false} onChange={v => updateConfig('profile.allow_internship', v)} />
@@ -256,6 +260,14 @@ export default function ConfigPage() {
             <Field label="每轮最大候选数">
               <Input type="number" value={config.scoring?.max_candidates || 20} onChange={e => updateConfig('scoring.max_candidates', Number(e.target.value))} min={1} max={100} />
             </Field>
+            <div className="flex items-center justify-between rounded-lg border border-card-border bg-[#FFFCFA] p-3">
+              <label className="text-xs text-foreground">仅评分近3日活跃招聘者</label>
+              <Switch checked={config.scoring?.require_recent_hr_activity ?? true} onChange={v => updateConfig('scoring.require_recent_hr_activity', v)} />
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-card-border bg-[#FFFCFA] p-3">
+              <label className="text-xs text-foreground">活跃度未知时保留</label>
+              <Switch checked={config.scoring?.allow_unknown_hr_activity ?? true} onChange={v => updateConfig('scoring.allow_unknown_hr_activity', v)} />
+            </div>
           </div>
         </SectionCard>
 

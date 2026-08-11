@@ -70,6 +70,7 @@ DEFAULTS: dict[str, Any] = {
         "salary_max": 0,
         "allow_internship": False,
         "deal_breakers": [],
+        "jd_deal_breakers": [],
         "allow_internship": False,
     },
     "search": {
@@ -80,6 +81,8 @@ DEFAULTS: dict[str, Any] = {
     "scoring": {
         "threshold": 71,
         "max_candidates": 20,
+        "require_recent_hr_activity": True,
+        "allow_unknown_hr_activity": True,
     },
     "throttle": {
         "daily_limit": 30,
@@ -100,6 +103,8 @@ DEFAULTS: dict[str, Any] = {
         "timeout_seconds": 180,
         "scoring_max_tokens": 8192,
         "scoring_max_attempts": 2,
+        "scoring_concurrency": 3,
+        "scoring_second_review": True,
         "greeting_max_tokens": 8192,
         "greeting_review_max_tokens": 4096,
         "greeting_max_attempts": 2,

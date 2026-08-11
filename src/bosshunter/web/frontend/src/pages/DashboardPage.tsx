@@ -1,9 +1,19 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useDashboard, type HistoryItem, type Job, type WorkbenchTask } from '@/hooks/useDashboard'
+import { useJobSearch } from '@/hooks/useJobSearch'
 import { Button } from '@/components/ui/button'
 import { JobsTable } from '@/components/dashboard/JobsTable'
+import { JobFilterBar } from '@/components/jobs/JobFilterBar'
 import { parseHistoryDetail } from '@/lib/historyDetail'
+import {
+  EMPTY_JOB_FILTERS,
+  filterJobs,
+  hasInvalidSalaryRange,
+  useDebouncedValue,
+  type JobFilters,
+} from '@/lib/jobFilters'
 import { getActionLabel, getStatusLabel } from '@/lib/status'
+import { cn } from '@/lib/utils'
 import {
   AlertTriangle,
   BriefcaseBusiness,
@@ -19,6 +29,7 @@ import {
 
 type WorkbenchMode = 'full' | 'collect' | 'rescore' | 'monitor'
 type DashboardView = 'workbench' | 'jobs' | 'monitor'
+type StatsScope = 'today' | 'total'
 
 const TASK_STAGE_LABELS = [
   '开始采集岗位',
@@ -129,15 +140,24 @@ const modes: Array<{ mode: WorkbenchMode; title: string; description: string }> 
 ]
 
 const statItems = [
-  { label: '采集总数', key: '采集总数' },
-  { label: '初筛通过', key: '初筛通过', highlight: true },
-  { label: 'AI评分', key: 'AI评分' },
-  { label: '人工确认', key: '人工确认', highlight: true },
-  { label: '简历生成', key: '简历生成', highlight: true },
+  { key: '采集总数', todayLabel: '今日新增岗位', totalLabel: '累计采集岗位' },
+  { key: '初筛通过', todayLabel: '今日初筛通过', totalLabel: '累计初筛通过', highlight: true },
+  { key: 'AI评分', todayLabel: '今日 AI 评分', totalLabel: '累计 AI 评分' },
+  { key: 'pending', todayLabel: '当前待确认', totalLabel: '当前待确认', highlight: true, current: true },
+  { key: '发送', todayLabel: '今日已投递', totalLabel: '累计已投递', highlight: true },
+]
+
+const taskMetricItems = [
+  { key: 'collect_seen', label: '本轮扫描' },
+  { key: 'collect_new', label: '本轮新增' },
+  { key: 'collect_duplicate', label: '重复岗位' },
+  { key: 'ai_passed', label: 'AI通过' },
+  { key: 'ai_filtered', label: 'AI过滤' },
+  { key: 'ai_failed', label: 'AI失败' },
 ]
 
 function jobSubtitle(job: Job) {
-  return [job.score ? `匹配 ${job.score}` : '', job.salary, getStatusLabel(job.status)].filter(Boolean).join(' · ')
+  return [job.score ? `匹配 ${job.score}` : '', job.salary, job.hr_active || '活跃度未知', getStatusLabel(job.status)].filter(Boolean).join(' · ')
 }
 
 async function parsePreflightResponse(res: Response) {
@@ -245,7 +265,17 @@ function PreflightPanel({
 }
 
 export default function DashboardPage({ view = 'workbench' }: DashboardPageProps) {
-  const { workbench, jobs, history, loading, error, refresh, startTask, stopTask } = useDashboard(view)
+  const {
+    workbench,
+    history,
+    loading,
+    error,
+    refreshing,
+    lastRefreshedAt,
+    refresh,
+    startTask,
+    stopTask,
+  } = useDashboard(view)
   const [selected, setSelected] = useState<string[]>([])
   const [notice, setNotice] = useState('')
   const [preflightChecks, setPreflightChecks] = useState<PreflightCheck[]>([])
@@ -253,15 +283,32 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const [selectedJob, setSelectedJob] = useState<Job | null>(null)
   const [modePending, setModePending] = useState<WorkbenchMode | null>(null)
   const [confirmedDeliveryIds, setConfirmedDeliveryIds] = useState<Set<string>>(new Set())
+  const [todayFilters, setTodayFilters] = useState<JobFilters>({ ...EMPTY_JOB_FILTERS })
+  const [statsScope, setStatsScope] = useState<StatsScope>('today')
 
   const todayJobs = useMemo(
     () => workbench.pending_confirmation.filter(job => !confirmedDeliveryIds.has(job.id)),
     [workbench.pending_confirmation, confirmedDeliveryIds]
   )
-  const pendingGreetingJobs = useMemo(
-    () => workbench.pending_greetings.filter(job => !confirmedDeliveryIds.has(job.id)),
-    [workbench.pending_greetings, confirmedDeliveryIds]
+  const debouncedTodayQuery = useDebouncedValue(todayFilters.query, 250)
+  const effectiveTodayFilters = useMemo(
+    () => ({ ...todayFilters, query: debouncedTodayQuery }),
+    [todayFilters, debouncedTodayQuery]
   )
+  const filteredTodayJobs = useMemo(
+    () => filterJobs(todayJobs, effectiveTodayFilters),
+    [todayJobs, effectiveTodayFilters]
+  )
+  const visibleJobIds = useMemo(() => new Set(filteredTodayJobs.map(job => job.id)), [filteredTodayJobs])
+  const actionableSelected = useMemo(() => selected.filter(id => visibleJobIds.has(id)), [selected, visibleJobIds])
+
+  useEffect(() => {
+    setSelected(previous => {
+      const next = previous.filter(id => visibleJobIds.has(id))
+      return next.length === previous.length ? previous : next
+    })
+  }, [visibleJobIds])
+  const pendingGreetingJobs = workbench.pending_greetings
   const activeTask = workbench.task
   const visibleTask = activeTask || workbench.last_task
   const visibleTaskError = visibleTask?.error ? taskErrorFeedback(visibleTask.error) : null
@@ -284,7 +331,6 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   }
 
   const handleModeClick = async (mode: WorkbenchMode) => {
-    if (modePending) return
     try {
       if (activeTask?.mode === mode) {
         if (window.confirm(`是否停止当前${activeTask.label}任务？已入库岗位会保留。`)) {
@@ -295,6 +341,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         }
         return
       }
+      if (modePending) return
       if (activeTask) {
         setNotice(
           activeTask.status === 'stopping'
@@ -345,11 +392,18 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || '投递失败')
       }
+      const data = await res.json().catch(() => ({}))
       if (!ids.some(id => workbench.send_errors.some(job => job.id === id))) {
         setConfirmedDeliveryIds(prev => new Set([...prev, ...ids]))
       }
       await refresh()
-      setNotice(`已确认投递 ${count} 个岗位，后端会按队列推进。`)
+      setNotice(
+        data.already_queued_count === count
+          ? `所选 ${count} 个岗位已在当前发送队列中。`
+          : data.queued_count
+            ? `已将 ${data.queued_count} 个岗位追加到当前发送队列。`
+            : `已确认投递 ${count} 个岗位，后端会按队列推进。`
+      )
       setSelected(prev => prev.filter(id => !new Set(ids).has(id)))
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '投递失败')
@@ -393,8 +447,15 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || '发送失败')
       }
+      const data = await res.json().catch(() => ({}))
       await refresh()
-      setNotice(`已直接进入发送流程 ${count} 个岗位。`)
+      setNotice(
+        data.already_queued_count === count
+          ? `所选 ${count} 个岗位已在当前发送队列中，请等待依次发送。`
+          : data.queued_count
+            ? `已将 ${data.queued_count} 个岗位追加到当前发送队列。`
+            : `已直接进入发送流程 ${count} 个岗位。`
+      )
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '发送失败')
     }
@@ -433,7 +494,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   }
 
   if (view === 'jobs') {
-    return <JobsPoolView jobs={jobs} />
+    return <JobsPoolView />
   }
 
   if (view === 'monitor') {
@@ -449,10 +510,17 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             <h2 className="mt-1 text-3xl font-black tracking-tight">今日求职行动</h2>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={refresh}>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              刷新
-            </Button>
+            <div className="text-right">
+              <Button variant="secondary" size="sm" onClick={refresh} disabled={refreshing}>
+                <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
+                {refreshing ? '刷新中' : '刷新'}
+              </Button>
+              {lastRefreshedAt && (
+                <div className="mt-1 text-[10px] text-muted">
+                  最后刷新：{lastRefreshedAt.toLocaleTimeString('zh-CN', { hour12: false })}
+                </div>
+              )}
+            </div>
             <span className="rounded-full bg-[#FFF0E5] px-3 py-2 text-xs font-black text-primary">
               {activeTask ? `${activeTask.label}中` : '当前空闲'}
             </span>
@@ -478,7 +546,11 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 }`}
               >
                 <div className="mb-3 flex items-center justify-between gap-3">
-                  <div className="text-lg font-black">{modePending === item.mode ? '任务启动中' : isActive ? `${item.title}中` : item.title}</div>
+                  <div className="text-lg font-black">
+                    {modePending === item.mode
+                      ? isActive ? '任务停止中' : '任务启动中'
+                      : isActive ? `${item.title}中` : item.title}
+                  </div>
                   {isActive ? <Square className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5" />}
                 </div>
                 <p className={`text-xs leading-6 ${isActive ? 'text-white/85' : 'text-muted'}`}>{item.description}</p>
@@ -511,6 +583,16 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                   自动截止：{new Date(visibleTask.deadline_at).toLocaleString('zh-CN', { hour12: false })}
                 </div>
               )}
+              {visibleTask.metrics && taskMetricItems.some(item => item.key in visibleTask.metrics!) && (
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                  {taskMetricItems.map(item => (
+                    <div key={item.key} className="rounded-xl border border-card-border bg-white px-3 py-2">
+                      <div className="text-[10px] font-bold text-muted">{item.label}</div>
+                      <div className="mt-0.5 text-lg font-black text-foreground">{visibleTask.metrics?.[item.key] ?? 0}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             {visibleTask.error && visibleTaskError && (
               <div className="mt-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-danger">
@@ -527,15 +609,50 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         )}
       </section>
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        {statItems.map(item => (
-          <div key={item.label} className="rounded-2xl border border-card-border bg-white p-4">
-            <div className="text-xs text-muted">{item.label}</div>
-            <div className={`mt-1 text-2xl font-black ${item.highlight ? 'text-primary' : 'text-foreground'}`}>
-              {workbench.funnel[item.key] || 0}
-            </div>
+      <section>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-black">求职数据</h3>
+            <p className="mt-0.5 text-xs text-muted">今日看行动节奏，累计看岗位池沉淀。</p>
           </div>
-        ))}
+          <div className="inline-flex rounded-full border border-card-border bg-white p-1">
+            {([
+              { value: 'today' as const, label: '今日数据' },
+              { value: 'total' as const, label: '累计数据' },
+            ]).map(option => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setStatsScope(option.value)}
+                className={`rounded-full px-3 py-1.5 text-xs font-black transition ${
+                  statsScope === option.value ? 'bg-primary text-white shadow-sm' : 'text-muted hover:text-primary'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          {statItems.map(item => {
+            const currentValue = workbench.pending_confirmation.length
+            const selectedFunnel = statsScope === 'today' ? workbench.funnel_today : workbench.funnel
+            const alternateFunnel = statsScope === 'today' ? workbench.funnel : workbench.funnel_today
+            const value = item.current ? currentValue : (selectedFunnel[item.key] || 0)
+            const supportingText = item.current
+              ? '实时待处理数量'
+              : `${statsScope === 'today' ? '累计' : '今日'} ${alternateFunnel[item.key] || 0}`
+            return (
+              <div key={item.key} className="rounded-2xl border border-card-border bg-white p-4">
+                <div className="text-xs text-muted">{statsScope === 'today' ? item.todayLabel : item.totalLabel}</div>
+                <div className={`mt-1 text-2xl font-black ${item.highlight ? 'text-primary' : 'text-foreground'}`}>
+                  {value}
+                </div>
+                <div className="mt-1 text-[10px] font-bold text-muted">{supportingText}</div>
+              </div>
+            )
+          })}
+        </div>
       </section>
 
       <section className="rounded-3xl border border-card-border bg-white p-5">
@@ -644,23 +761,37 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             <p className="mt-1 text-xs text-muted">展示需要你人工确认是否推进投递的岗位，支持全选、部分选择、一键投递。</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setSelected(todayJobs.map(job => job.id))}>全选</Button>
+            <Button variant="secondary" size="sm" onClick={() => setSelected(filteredTodayJobs.map(job => job.id))}>全选</Button>
             <Button variant="secondary" size="sm" onClick={() => setSelected([])}>清空</Button>
-            <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(selected)}>放弃已选 {selected.length} 个</Button>
-            <Button size="sm" onClick={() => confirmDeliver(selected)}>一键投递已选 {selected.length} 个</Button>
+            <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(actionableSelected)}>放弃已选 {actionableSelected.length} 个</Button>
+            <Button size="sm" onClick={() => confirmDeliver(actionableSelected)}>一键投递已选 {actionableSelected.length} 个</Button>
           </div>
         </div>
-        {todayJobs.length ? (
+        <JobFilterBar
+          filters={todayFilters}
+          onChange={setTodayFilters}
+          onReset={() => setTodayFilters({ ...EMPTY_JOB_FILTERS })}
+          resultCount={filteredTodayJobs.length}
+          totalCount={todayJobs.length}
+          invalidSalary={hasInvalidSalaryRange(todayFilters)}
+        />
+        {filteredTodayJobs.length ? (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            {todayJobs.map(job => (
+            {filteredTodayJobs.map(job => (
               <JobActionCard
                 key={job.id}
                 job={job}
                 selected={selected.includes(job.id)}
                 onToggle={() => toggleJob(job.id)}
                 onDetail={() => openJobDetail(job)}
+                onReject={() => rejectSelectedJobs([job.id])}
               />
             ))}
+          </div>
+        ) : todayJobs.length ? (
+          <div className="rounded-2xl border border-dashed border-card-border bg-[#FFFCFA] p-5 text-center text-sm text-muted">
+            <p>没有符合当前条件的岗位</p>
+            <Button className="mt-3" variant="secondary" size="sm" onClick={() => setTodayFilters({ ...EMPTY_JOB_FILTERS })}>重置筛选</Button>
           </div>
         ) : (
           <div className="rounded-2xl border border-dashed border-card-border bg-[#FFFCFA] p-5 text-sm text-muted">今天暂时没有待确认岗位。</div>
@@ -672,7 +803,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   )
 }
 
-function JobActionCard({ job, selected, onToggle, onDetail }: { job: Job; selected: boolean; onToggle: () => void; onDetail: () => void }) {
+function JobActionCard({ job, selected, onToggle, onDetail, onReject }: { job: Job; selected: boolean; onToggle: () => void; onDetail: () => void; onReject: () => void }) {
   return (
     <div className={`rounded-2xl border p-4 ${selected ? 'border-primary bg-[#FFFCFA]' : 'border-card-border bg-[#FFFCFA]'}`}>
       <div className="flex items-start justify-between gap-3">
@@ -683,9 +814,10 @@ function JobActionCard({ job, selected, onToggle, onDetail }: { job: Job; select
         <input type="checkbox" checked={selected} onChange={onToggle} className="mt-1 h-4 w-4 accent-primary" />
       </div>
       <p className="mt-3 line-clamp-2 text-sm leading-6 text-muted">{job.score_reason || job.greeting || '等待继续推进。'}</p>
-      <div className="mt-3 flex gap-2">
+      <div className="mt-3 flex flex-wrap gap-2">
         <Button variant="secondary" size="sm" onClick={onDetail}><Eye className="mr-2 h-4 w-4" />查看详情</Button>
         <Button variant="secondary" size="sm" disabled={!job.url} onClick={() => window.open(job.url, '_blank', 'noopener,noreferrer')}><ExternalLink className="mr-2 h-4 w-4" />跳转岗位链接</Button>
+        <Button variant="secondary" size="sm" onClick={onReject}><XCircle className="mr-2 h-4 w-4" />放弃岗位</Button>
       </div>
     </div>
   )
@@ -705,6 +837,7 @@ function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void }) {
         </div>
         <div className="grid gap-3 text-sm lg:grid-cols-2">
           <InfoBlock label="HR" value={[job.hr_name, job.hr_title].filter(Boolean).join(' · ') || '-'} />
+          <InfoBlock label="招聘者活跃" value={job.hr_active || '活跃度未知'} />
           <InfoBlock label="公司" value={[job.company_size, job.company_industry].filter(Boolean).join(' · ') || '-'} />
           <InfoBlock label="匹配分" value={String(job.score || '-')} />
           <InfoBlock label="定制简历" value={job.resume_path || '未生成'} />
@@ -735,7 +868,16 @@ function InfoBlock({ label, value }: { label: string; value: string }) {
   )
 }
 
-function JobsPoolView({ jobs }: { jobs: Job[] }) {
+function JobsPoolView() {
+  const pageSize = 15
+  const [page, setPage] = useState(0)
+  const [filters, setFilters] = useState<JobFilters>({ ...EMPTY_JOB_FILTERS })
+  const { items, total, allTotal, loading, error } = useJobSearch(filters, page, pageSize)
+
+  useEffect(() => {
+    setPage(0)
+  }, [filters.query, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.hrActivity, filters.createdWithin])
+
   return (
     <div className="rounded-3xl border border-card-border bg-white p-5">
       <div className="mb-4 flex items-center justify-between">
@@ -745,7 +887,24 @@ function JobsPoolView({ jobs }: { jobs: Job[] }) {
         </div>
         <BriefcaseBusiness className="h-6 w-6 text-primary" />
       </div>
-      <JobsTable jobs={jobs} />
+      <JobFilterBar
+        filters={filters}
+        onChange={setFilters}
+        onReset={() => setFilters({ ...EMPTY_JOB_FILTERS })}
+        resultCount={total}
+        totalCount={allTotal}
+        invalidSalary={hasInvalidSalaryRange(filters)}
+        showStatus
+      />
+      {error && <div className="mb-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-danger">{error}</div>}
+      <JobsTable
+        jobs={items}
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPageChange={setPage}
+        loading={loading}
+      />
     </div>
   )
 }

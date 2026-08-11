@@ -7,6 +7,11 @@ import type { Job } from '@/hooks/useDashboard'
 
 interface JobsTableProps {
   jobs: Job[]
+  page: number
+  pageSize: number
+  total: number
+  onPageChange: (page: number) => void
+  loading?: boolean
 }
 
 function statusVariant(status: string) {
@@ -28,12 +33,9 @@ function statusVariant(status: string) {
   return variants.has(status) ? status : 'default'
 }
 
-export function JobsTable({ jobs }: JobsTableProps) {
-  const [page, setPage] = useState(0)
+export function JobsTable({ jobs, page, pageSize, total, onPageChange, loading = false }: JobsTableProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
-  const pageSize = 15
-  const totalPages = Math.ceil(jobs.length / pageSize)
-  const displayed = jobs.slice(page * pageSize, (page + 1) * pageSize)
+  const totalPages = Math.ceil(total / pageSize)
 
   const getScoreColor = (score: number) => {
     if (score >= 80) return 'text-success'
@@ -43,7 +45,12 @@ export function JobsTable({ jobs }: JobsTableProps) {
 
   const timeAgo = (dateStr: string) => {
     if (!dateStr) return ''
-    const diff = Date.now() - new Date(dateStr).getTime()
+    const normalizedDate = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(dateStr)
+      ? `${dateStr.replace(' ', 'T')}Z`
+      : dateStr
+    const timestamp = new Date(normalizedDate).getTime()
+    if (Number.isNaN(timestamp)) return ''
+    const diff = Date.now() - timestamp
     const hours = Math.floor(diff / 3600000)
     if (hours < 1) return '刚刚'
     if (hours < 24) return `${hours}h 前`
@@ -54,7 +61,7 @@ export function JobsTable({ jobs }: JobsTableProps) {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>岗位列表</CardTitle>
-        <span className="text-xs text-muted">{jobs.length} 条记录</span>
+        <span className="text-xs text-muted">{total} 条记录</span>
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto">
@@ -66,11 +73,12 @@ export function JobsTable({ jobs }: JobsTableProps) {
                 <th className="px-4 py-3 text-left font-bold">薪资</th>
                 <th className="px-4 py-3 text-left font-bold">评分</th>
                 <th className="px-4 py-3 text-left font-bold">状态</th>
+                <th className="px-4 py-3 text-left font-bold">招聘者活跃</th>
                 <th className="px-4 py-3 text-left font-bold">时间</th>
               </tr>
             </thead>
             <tbody>
-              {displayed.map(job => {
+              {jobs.map(job => {
                 const isExpanded = expanded === job.id
                 return (
                   <Fragment key={job.id}>
@@ -94,6 +102,7 @@ export function JobsTable({ jobs }: JobsTableProps) {
                       <td className="px-4 py-3">
                         <Badge variant={statusVariant(job.status) as any}>{getStatusLabel(job.status)}</Badge>
                       </td>
+                      <td className="px-4 py-3 text-xs text-muted">{job.hr_active || '活跃度未知'}</td>
                       <td className="px-4 py-3 text-xs text-muted">
                         <div className="flex items-center gap-2">
                           {timeAgo(job.created_at)}
@@ -103,7 +112,7 @@ export function JobsTable({ jobs }: JobsTableProps) {
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-card-border bg-[#FFFCFA]">
-                        <td colSpan={6} className="px-6 py-4">
+                        <td colSpan={7} className="px-6 py-4">
                           <div className="grid grid-cols-1 gap-4 text-sm lg:grid-cols-3">
                             <div className="rounded-2xl border border-card-border bg-white p-4">
                               <p className="mb-2 text-xs font-black text-primary">JD摘要</p>
@@ -124,6 +133,13 @@ export function JobsTable({ jobs }: JobsTableProps) {
                   </Fragment>
                 )
               })}
+              {!jobs.length && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-muted">
+                    {loading ? '正在读取岗位…' : '没有符合当前条件的岗位'}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -131,7 +147,7 @@ export function JobsTable({ jobs }: JobsTableProps) {
         {totalPages > 1 && (
           <div className="flex items-center justify-between border-t border-card-border px-4 py-3">
             <button
-              onClick={() => setPage(p => Math.max(0, p - 1))}
+              onClick={() => onPageChange(Math.max(0, page - 1))}
               disabled={page === 0}
               className="text-xs font-bold text-muted transition hover:text-foreground disabled:opacity-30"
             >
@@ -139,7 +155,7 @@ export function JobsTable({ jobs }: JobsTableProps) {
             </button>
             <span className="text-xs text-muted">{page + 1} / {totalPages}</span>
             <button
-              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+              onClick={() => onPageChange(Math.min(totalPages - 1, page + 1))}
               disabled={page >= totalPages - 1}
               className="text-xs font-bold text-muted transition hover:text-foreground disabled:opacity-30"
             >

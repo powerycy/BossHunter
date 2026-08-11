@@ -5,9 +5,20 @@ from threading import Event, Thread
 from unittest.mock import Mock, patch
 
 from bosshunter.cancellation import OperationCancelled, run_cancellable
+from bosshunter.throttle import PageThrottle
 
 
 class CancellationTests(unittest.TestCase):
+    def test_page_throttle_returns_immediately_when_stop_is_requested(self):
+        stop_event = Event()
+        stop_event.set()
+
+        with patch("bosshunter.throttle.time.sleep") as sleep:
+            stopped = PageThrottle(delay_min=30, delay_max=30).wait(stop_event)
+
+        self.assertTrue(stopped)
+        sleep.assert_not_called()
+
     def test_blocking_operation_returns_control_promptly_after_stop(self):
         stop_event = Event()
         operation_started = Event()
