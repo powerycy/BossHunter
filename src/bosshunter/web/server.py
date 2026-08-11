@@ -478,6 +478,13 @@ def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
 		_log(task, f"招呼语生成完成：{generated_count}/{len(selected_job_ids) or generated_count}")
 		if task.stop_requested.is_set():
 			return
+		pause_reason = str(config.get("_workbench_pause_reason") or "").strip()
+		if pause_reason:
+			task.stop_reason = pause_reason
+			if not task.logs or task.logs[-1] != pause_reason:
+				_log(task, pause_reason)
+			task.stop_requested.set()
+			return
 		if selected_job_ids and generated_count != len(selected_job_ids):
 			failed_count = max(len(selected_job_ids) - generated_count, 0)
 			_log(

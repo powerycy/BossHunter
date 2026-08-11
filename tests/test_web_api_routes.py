@@ -923,6 +923,26 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(send_config_seen["_workbench_job_ids"], ["job-a", "job-b"])
         self.assertTrue(any("招呼语生成部分完成：成功 1，失败 1" in log for log in task.logs))
 
+    def test_deliver_marks_ai_greeting_pause_as_resumable_without_sending(self):
+        # Arrange
+        task = WorkbenchTask(id="ai-greeting-pause", mode="deliver", label="确认投递")
+        config = {"_workbench_job_ids": ["job-a", "job-b"]}
+
+        def fake_generate(greeting_config):
+            greeting_config["_workbench_pause_reason"] = "AI 服务请求失败，请检查配置或服务状态"
+            return 0
+
+        # Act
+        with patch("bosshunter.ai.greeter.generate_greetings", side_effect=fake_generate), \
+             patch("bosshunter.executor.sender.send_greetings") as send_greetings:
+            server._execute_deliver(task, config)
+
+        # Assert
+        self.assertTrue(task.stop_requested.is_set())
+        self.assertEqual(task.stop_reason, "AI 服务请求失败，请检查配置或服务状态")
+        self.assertIn("AI 服务请求失败，请检查配置或服务状态", task.logs)
+        send_greetings.assert_not_called()
+
     def test_deliver_still_stops_on_account_risk_signal(self):
         # Arrange
         task = WorkbenchTask(id="risk-delivery", mode="full", label="运行全流程")

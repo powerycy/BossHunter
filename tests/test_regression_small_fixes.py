@@ -536,6 +536,8 @@ class HeaderTests(unittest.TestCase):
         self.assertIn("deleteTask", hook_source)
         self.assertIn("/resume", hook_source)
         self.assertIn("method: 'DELETE'", hook_source)
+        self.assertIn("重新启动", source)
+        self.assertIn("删除任务", source)
 
 
 class ConfigPageTests(unittest.TestCase):

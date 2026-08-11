@@ -567,25 +567,23 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 {!activeTask && visibleTask.can_resume && (
                   <Button
                     variant="secondary"
-                    size="icon"
+                    size="sm"
                     onClick={handleResumeTask}
                     disabled={taskActionPending}
-                    title="继续任务"
-                    aria-label="继续任务"
                   >
-                    <Play className="h-4 w-4" />
+                    <Play className="mr-2 h-4 w-4" />
+                    重新启动
                   </Button>
                 )}
                 {!activeTask && ['completed', 'failed', 'stopped'].includes(visibleTask.status) && (
                   <Button
                     variant="secondary"
-                    size="icon"
+                    size="sm"
                     onClick={handleDeleteTask}
                     disabled={taskActionPending}
-                    title="删除任务卡"
-                    aria-label="删除任务卡"
                   >
-                    <Trash2 className="h-4 w-4" />
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    删除任务
                   </Button>
                 )}
                 <span className="rounded-full bg-[#FFF0E5] px-3 py-1 text-xs font-black text-primary">
@@ -613,7 +611,12 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 </details>
               </div>
             )}
-            {visibleTask.stop_reason && <div className="mt-3 rounded-2xl bg-[#FFF0E5] px-3 py-2 text-sm text-primary">{visibleTask.stop_reason}</div>}
+            {visibleTask.stop_reason && (
+              <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <div className="font-black">任务暂停原因</div>
+                <p className="mt-1 text-xs leading-5">{visibleTask.stop_reason}</p>
+              </div>
+            )}
           </div>
         )}
       </section>

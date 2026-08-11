@@ -498,6 +498,7 @@ def generate_greetings(config: dict) -> int:
 
     db.close()
     if pause_reason:
+        config["_workbench_pause_reason"] = pause_reason
         remaining = max(len(jobs) - count, 0)
         _notify(
             config,
