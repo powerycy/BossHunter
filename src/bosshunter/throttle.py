@@ -63,9 +63,24 @@ class PageThrottle:
         self._delay_min = delay_min
         self._delay_max = delay_max
 
-    def wait(self) -> None:
+    def wait(self, stop_event: Event | None = None, pause_event: Event | None = None) -> bool:
         delay = random.uniform(self._delay_min, self._delay_max)
+        if stop_event or pause_event:
+            remaining = delay
+            while remaining > 0:
+                if stop_event and stop_event.is_set():
+                    return True
+                if pause_event and pause_event.is_set():
+                    return True
+                chunk = min(remaining, 0.25)
+                if stop_event and stop_event.wait(chunk):
+                    return True
+                elif pause_event and pause_event.wait(0):
+                    return True
+                remaining -= chunk
+            return False
         time.sleep(delay)
+        return False
 
 
 class SendWindowChecker:

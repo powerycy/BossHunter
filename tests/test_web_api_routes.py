@@ -1,4 +1,5 @@
 import io
+import csv
 import json
 import tempfile
 import time
@@ -85,6 +86,36 @@ class WebApiRouteTests(unittest.TestCase):
         ).decode("utf-8")
         return status_headers["status"], status_headers["headers"], body
 
+    def _json_request(self, path: str, payload: dict, method: str = "POST"):
+        body = json.dumps(payload).encode("utf-8")
+        status_headers = {}
+
+        def start_response(status, headers, exc_info=None):
+            status_headers["status"] = status
+            status_headers["headers"] = dict(headers)
+
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(body)),
+            "CONTENT_TYPE": "application/json",
+            "SERVER_NAME": "127.0.0.1",
+            "SERVER_PORT": "8686",
+            "wsgi.version": (1, 0),
+            "wsgi.url_scheme": "http",
+            "wsgi.input": io.BytesIO(body),
+            "wsgi.errors": io.StringIO(),
+            "wsgi.multithread": False,
+            "wsgi.multiprocess": False,
+            "wsgi.run_once": False,
+        }
+        response_body = b"".join(
+            chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+            for chunk in server.app(environ, start_response)
+        )
+        return status_headers["status"], status_headers["headers"], response_body
+
     def _upload_resume(self, filename: str, content: bytes, content_type: str):
         boundary = "----BossHunterResumeUpload"
         body = (
@@ -138,6 +169,125 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertIn("application/json", headers["Content-Type"])
         self.assertEqual(json.loads(body), {"error": "Not found"})
         self.assertNotIn("<!doctype html", body.lower())
+
+    def test_web_api_jobs_and_filtered_export_share_structured_filter_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                for index in range(8):
+                    job = _job(f"api-filter-{index}")
+                    job["city"] = "北京" if index < 4 else "上海"
+                    job["title"] = "Python 后端" if index in {0, 1, 2} else "Java 后端"
+                    insert_job(db, job)
+                    if index in {0, 1, 2}:
+                        update_job_status(db, job["id"], "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            list_status, list_headers, list_body = self._request(
+                "/api/jobs?deleted=active&q=Python&status=ready&limit=2&offset=0"
+            )
+            export_status, export_headers, export_body = self._json_request(
+                "/api/jobs/export",
+                {
+                    "format": "csv",
+                    "scope": "filtered",
+                    "job_ids": ["api-filter-0"],
+                    "filters": {"q": "Python", "city": "北京", "status": "ready"},
+                },
+            )
+
+        self.assertTrue(list_status.startswith("200"))
+        self.assertEqual(list_headers["X-Total-Count"], "3")
+        self.assertEqual({item["id"] for item in json.loads(list_body)}, {"api-filter-0", "api-filter-1"})
+        self.assertTrue(export_status.startswith("200"), export_body.decode("utf-8", errors="replace"))
+        self.assertEqual(export_headers["X-Exported-Count"], "3")
+        rows = list(csv.reader(io.StringIO(export_body.decode("utf-8-sig"))))
+        id_column = rows[0].index("岗位 ID")
+        self.assertEqual({row[id_column] for row in rows[1:]}, {"api-filter-0", "api-filter-1", "api-filter-2"})
+
+    def test_web_api_selected_export_rejects_missing_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("selected-valid"))
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._json_request(
+                "/api/jobs/export",
+                {"format": "csv", "scope": "selected", "job_ids": ["selected-valid", "missing"]},
+            )
+
+        self.assertTrue(status.startswith("400"))
+        payload = json.loads(body)
+        self.assertEqual(payload["code"], "invalid_job_ids")
+        self.assertEqual(payload["invalid_ids"], ["missing"])
+
+    def test_web_api_recycle_bin_actions_require_confirmation_and_preserve_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("api-delete"))
+                insert_job(db, _job("api-sent"))
+                update_job_status(db, "api-delete", "ready")
+                update_job_status(db, "api-sent", "sent")
+                add_history(db, "api-sent", "sent", "发送证据")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            unconfirmed_status, _, unconfirmed_body = self._json_request(
+                "/api/jobs/soft-delete", {"job_ids": ["api-delete"]}
+            )
+            soft_status, _, soft_body = self._json_request(
+                "/api/jobs/soft-delete",
+                {"job_ids": ["api-delete", "api-sent"], "confirmed": True},
+            )
+            active_status, _, active_body = self._request("/api/jobs?deleted=active")
+            recycle_status, _, recycle_body = self._request("/api/jobs?deleted=only")
+            restore_status, _, restore_body = self._json_request(
+                "/api/jobs/restore", {"job_ids": ["api-delete"], "confirmed": True}
+            )
+            permanent_status, _, permanent_body = self._json_request(
+                "/api/jobs/permanent-delete",
+                {"job_ids": ["api-sent"], "confirmed": True, "confirmation": "PERMANENT_DELETE"},
+            )
+            permanent_unconfirmed_status, _, _ = self._json_request(
+                "/api/jobs/permanent-delete", {"job_ids": ["api-sent"], "confirmed": True}
+            )
+
+        self.assertTrue(unconfirmed_status.startswith("400"))
+        self.assertEqual(json.loads(unconfirmed_body)["code"], "confirmation_required")
+        self.assertTrue(soft_status.startswith("200"), soft_body.decode())
+        self.assertEqual(json.loads(soft_body)["affected_count"], 2)
+        self.assertTrue(active_status.startswith("200"))
+        self.assertEqual({job["id"] for job in json.loads(active_body)}, set())
+        self.assertTrue(recycle_status.startswith("200"))
+        self.assertEqual({job["id"] for job in json.loads(recycle_body)}, {"api-delete", "api-sent"})
+        recycle_jobs = {job["id"]: job for job in json.loads(recycle_body)}
+        self.assertTrue(recycle_jobs["api-delete"]["permanent_delete_allowed"])
+        self.assertFalse(recycle_jobs["api-sent"]["permanent_delete_allowed"])
+        self.assertTrue(restore_status.startswith("200"), restore_body.decode())
+        self.assertEqual(json.loads(restore_body)["affected_count"], 1)
+        self.assertTrue(permanent_status.startswith("409"))
+        permanent_payload = json.loads(permanent_body)
+        self.assertEqual(permanent_payload["code"], "deletion_conflict")
+        self.assertTrue(permanent_payload["blocked"])
+        self.assertTrue(permanent_unconfirmed_status.startswith("400"))
+
+    def test_web_api_jobs_rejects_invalid_deleted_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server.set_base_dir(Path(tmp))
+            status, _, body = self._request("/api/jobs?deleted=trash")
+
+        self.assertTrue(status.startswith("400"))
+        self.assertIn("无效", json.loads(body)["error"])
 
     def test_web_assets_serve_javascript_with_windows_safe_mime_type(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -291,7 +441,20 @@ class WebApiRouteTests(unittest.TestCase):
             ]
 
             # Act
-            with patch.object(server, "check_ai_connection", return_value=checks):
+            with patch.object(
+                server,
+                "diagnose_ai",
+                return_value={
+                    "ok": False,
+                    "billable": False,
+                    "stages": [{
+                        "id": "ai_credentials",
+                        "status": "fail",
+                        "message": checks[0]["message"],
+                        "detail": checks[0]["detail"],
+                    }],
+                },
+            ):
                 status, headers, body = self._request("/api/diagnostics/ai")
 
         # Assert
@@ -461,6 +624,28 @@ class WebApiRouteTests(unittest.TestCase):
         deadline = checker.latest_end_datetime(datetime(2026, 7, 28, 10, 15, 45))
 
         self.assertEqual(deadline, datetime(2026, 7, 28, 17, 30))
+
+    def test_full_flow_chains_score_after_collection_when_configured(self):
+        calls = []
+        task = WorkbenchTask(id="full-chain", mode="full", label="运行全流程")
+
+        def fake_collect(_task, _config):
+            calls.append("collect")
+
+        def fake_score(_task, _config):
+            calls.append("score")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            server.set_base_dir(Path(tmp))
+            config = {
+                "search": {"keywords": ["AI 产品经理"]},
+                "profile": {"resume_path": str(Path(tmp) / "resume.md")},
+            }
+            with patch.object(server, "_execute_collect", side_effect=fake_collect), \
+                patch.object(server, "_execute_score", side_effect=fake_score):
+                server._execute_full(task, config)
+
+        self.assertEqual(calls, ["collect", "score"])
 
     def test_web_api_full_task_completes_when_no_jobs_need_confirmation(self):
         # Arrange

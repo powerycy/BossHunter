@@ -20,7 +20,8 @@
       "fields": [
         {"key": "keywords", "label": "搜索关键词", "type": "tags", "description": "BOSS 搜索框使用的关键词"},
         {"key": "cities", "label": "搜索城市", "type": "multi-select", "options_from": "cities", "description": "留空则使用目标城市"},
-        {"key": "max_pages", "label": "每关键词翻页数", "type": "number", "min": 1, "max": 10, "default": 3}
+        {"key": "target_per_combo", "label": "每个关键词和城市组合采集数", "type": "number", "min": 1, "max": 200, "default": 10, "description": "每个关键词 × 城市组合分别计算新增唯一岗位"},
+        {"key": "max_pages", "label": "最大翻页数（安全上限）", "type": "number", "min": 1, "max": 10, "default": 3}
       ]
     },
     {
@@ -52,7 +53,7 @@
       "label": "AI 设置",
       "icon": "Brain",
       "fields": [
-        {"key": "service", "label": "AI 服务商", "type": "select", "options": ["anthropic", "deepseek", "doubao", "custom"], "default": "anthropic", "description": "支持 Claude、DeepSeek、豆包和其他 OpenAI 兼容接口"},
+        {"key": "service", "label": "AI 服务商", "type": "select", "options": ["anthropic", "deepseek", "doubao", "lulucoding", "custom"], "default": "anthropic", "description": "支持 Claude、DeepSeek、豆包、LuluCoding 和其他 OpenAI 兼容接口"},
         {"key": "provider", "label": "接口协议", "type": "select", "options": ["anthropic", "openai_compatible"], "default": "anthropic", "description": "由服务商预设自动选择"},
         {"key": "model", "label": "模型名称", "type": "text", "default": "claude-sonnet-4-6"},
         {"key": "api_key", "label": "API Key", "type": "password", "description": "也可通过环境变量设置"},

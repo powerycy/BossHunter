@@ -435,20 +435,12 @@ class AnthropicCredentialTests(unittest.TestCase):
             patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
             patch("bosshunter.ai.credentials.httpx.post", return_value=CompletionResponse()),
         ):
-            result = credentials.call_openai_compatible_text("prompt", config, 123)
+            with self.assertRaises(credentials.AIRequestError) as raised:
+                credentials.call_openai_compatible_text("prompt", config, 123)
 
-        self.assertIsNone(result)
+        self.assertEqual(raised.exception.kind, "empty_response")
 
-    def test_openai_compatible_auto_thinking_falls_back_only_for_compatibility_error(self):
-        class UnsupportedThinkingResponse:
-            status_code = 400
-
-            def raise_for_status(self):
-                raise RuntimeError("unsupported parameter: thinking")
-
-            def json(self):
-                return {"error": {"message": "unsupported parameter: thinking"}}
-
+    def test_openai_compatible_auto_thinking_is_not_sent_by_default(self):
         class CompletionResponse:
             status_code = 200
 
@@ -471,16 +463,15 @@ class AnthropicCredentialTests(unittest.TestCase):
             patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
             patch(
                 "bosshunter.ai.credentials.httpx.post",
-                side_effect=[UnsupportedThinkingResponse(), CompletionResponse()],
+                return_value=CompletionResponse(),
             ) as post,
         ):
             result = credentials.call_openai_compatible_text("prompt", config, 256)
 
         self.assertEqual(result, "fallback ok")
-        self.assertEqual(post.call_count, 2)
-        self.assertEqual(post.call_args_list[0].kwargs["json"]["thinking"], {"type": "disabled"})
-        self.assertNotIn("thinking", post.call_args_list[1].kwargs["json"])
-        self.assertEqual(post.call_args_list[1].kwargs["json"]["max_tokens"], 3072)
+        self.assertEqual(post.call_count, 1)
+        self.assertNotIn("thinking", post.call_args.kwargs["json"])
+        self.assertEqual(post.call_args.kwargs["json"]["max_tokens"], 256)
 
     def test_openai_enabled_thinking_uses_provider_default_reasoning_mode(self):
         class CompletionResponse:

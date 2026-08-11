@@ -27,6 +27,8 @@ resume.md
 
 # Data (contains personal info, resumes, DB)
 data/
+!src/bosshunter/data/
+!src/bosshunter/data/boss_cities.json
 *.db
 *.db-shm
 *.db-wal

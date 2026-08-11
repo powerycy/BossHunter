@@ -1,0 +1,2245 @@
+{
+  "schema": "bosshunter.cities.v1",
+  "source_url": "https://www.zhipin.com/wapi/zpCommon/data/cityGroup.json",
+  "fetched_at": "2026-08-10T20:00:26+08:00",
+  "cities": [
+    {
+      "name": "北京",
+      "code": "101010100",
+      "first_char": "B",
+      "hot": true
+    },
+    {
+      "name": "成都",
+      "code": "101270100",
+      "first_char": "C",
+      "hot": true
+    },
+    {
+      "name": "重庆",
+      "code": "101040100",
+      "first_char": "C",
+      "hot": true
+    },
+    {
+      "name": "长沙",
+      "code": "101250100",
+      "first_char": "C",
+      "hot": true
+    },
+    {
+      "name": "东莞",
+      "code": "101281600",
+      "first_char": "D",
+      "hot": true
+    },
+    {
+      "name": "大连",
+      "code": "101070200",
+      "first_char": "D",
+      "hot": true
+    },
+    {
+      "name": "佛山",
+      "code": "101280800",
+      "first_char": "F",
+      "hot": true
+    },
+    {
+      "name": "广州",
+      "code": "101280100",
+      "first_char": "G",
+      "hot": true
+    },
+    {
+      "name": "合肥",
+      "code": "101220100",
+      "first_char": "H",
+      "hot": true
+    },
+    {
+      "name": "杭州",
+      "code": "101210100",
+      "first_char": "H",
+      "hot": true
+    },
+    {
+      "name": "南京",
+      "code": "101190100",
+      "first_char": "N",
+      "hot": true
+    },
+    {
+      "name": "青岛",
+      "code": "101120200",
+      "first_char": "Q",
+      "hot": true
+    },
+    {
+      "name": "上海",
+      "code": "101020100",
+      "first_char": "S",
+      "hot": true
+    },
+    {
+      "name": "深圳",
+      "code": "101280600",
+      "first_char": "S",
+      "hot": true
+    },
+    {
+      "name": "苏州",
+      "code": "101190400",
+      "first_char": "S",
+      "hot": true
+    },
+    {
+      "name": "天津",
+      "code": "101030100",
+      "first_char": "T",
+      "hot": true
+    },
+    {
+      "name": "武汉",
+      "code": "101200100",
+      "first_char": "W",
+      "hot": true
+    },
+    {
+      "name": "厦门",
+      "code": "101230200",
+      "first_char": "X",
+      "hot": true
+    },
+    {
+      "name": "西安",
+      "code": "101110100",
+      "first_char": "X",
+      "hot": true
+    },
+    {
+      "name": "郑州",
+      "code": "101180100",
+      "first_char": "Z",
+      "hot": true
+    },
+    {
+      "name": "安庆",
+      "code": "101220600",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "安康",
+      "code": "101110700",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "安阳",
+      "code": "101180200",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "安顺",
+      "code": "101260300",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "澳门",
+      "code": "101330100",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "阿克苏地区",
+      "code": "101131000",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "阿勒泰地区",
+      "code": "101131500",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "阿坝藏族羌族自治州",
+      "code": "101271900",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "阿拉善盟",
+      "code": "101081200",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "阿拉尔",
+      "code": "101131700",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "阿里地区",
+      "code": "101140700",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "鞍山",
+      "code": "101070300",
+      "first_char": "A",
+      "hot": false
+    },
+    {
+      "name": "亳州",
+      "code": "101220900",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "保亭黎族苗族自治县",
+      "code": "101311800",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "保定",
+      "code": "101090200",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "保山",
+      "code": "101290300",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "包头",
+      "code": "101080200",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "北屯市",
+      "code": "101132100",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "北海",
+      "code": "101301300",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "博尔塔拉蒙古自治州",
+      "code": "101130500",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "宝鸡",
+      "code": "101110900",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "巴中",
+      "code": "101270900",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "巴彦淖尔",
+      "code": "101080800",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "巴音郭楞蒙古自治州",
+      "code": "101130400",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "本溪",
+      "code": "101070500",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "毕节",
+      "code": "101260500",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "滨州",
+      "code": "101121100",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "白城",
+      "code": "101060500",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "白山",
+      "code": "101060800",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "白杨市",
+      "code": "101132700",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "白沙黎族自治县",
+      "code": "101311400",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "白银",
+      "code": "101161000",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "百色",
+      "code": "101301000",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "蚌埠",
+      "code": "101220200",
+      "first_char": "B",
+      "hot": false
+    },
+    {
+      "name": "崇左",
+      "code": "101300200",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "常州",
+      "code": "101191100",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "常德",
+      "code": "101250600",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "承德",
+      "code": "101090400",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "昌吉回族自治州",
+      "code": "101130300",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "昌江黎族自治县",
+      "code": "101311500",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "昌都",
+      "code": "101140300",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "朝阳",
+      "code": "101071200",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "楚雄彝族自治州",
+      "code": "101291700",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "池州",
+      "code": "101221500",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "沧州",
+      "code": "101090700",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "滁州",
+      "code": "101221000",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "潮州",
+      "code": "101281500",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "澄迈",
+      "code": "101311200",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "赤峰",
+      "code": "101080500",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "郴州",
+      "code": "101250500",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "长春",
+      "code": "101060100",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "长治",
+      "code": "101100500",
+      "first_char": "C",
+      "hot": false
+    },
+    {
+      "name": "东方",
+      "code": "101310900",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "东沙群岛",
+      "code": "101282200",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "东营",
+      "code": "101121200",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "丹东",
+      "code": "101070600",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "儋州",
+      "code": "101310400",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "大兴安岭地区",
+      "code": "101051300",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "大同",
+      "code": "101100200",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "大庆",
+      "code": "101050800",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "大理白族自治州",
+      "code": "101291600",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "定安",
+      "code": "101311000",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "定西",
+      "code": "101160200",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "德宏傣族景颇族自治州",
+      "code": "101291300",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "德州",
+      "code": "101120400",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "德阳",
+      "code": "101271700",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "达州",
+      "code": "101270600",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "迪庆藏族自治州",
+      "code": "101291500",
+      "first_char": "D",
+      "hot": false
+    },
+    {
+      "name": "恩施土家族苗族自治州",
+      "code": "101201300",
+      "first_char": "E",
+      "hot": false
+    },
+    {
+      "name": "鄂尔多斯",
+      "code": "101080600",
+      "first_char": "E",
+      "hot": false
+    },
+    {
+      "name": "鄂州",
+      "code": "101200300",
+      "first_char": "E",
+      "hot": false
+    },
+    {
+      "name": "抚州",
+      "code": "101240400",
+      "first_char": "F",
+      "hot": false
+    },
+    {
+      "name": "抚顺",
+      "code": "101070400",
+      "first_char": "F",
+      "hot": false
+    },
+    {
+      "name": "福州",
+      "code": "101230100",
+      "first_char": "F",
+      "hot": false
+    },
+    {
+      "name": "阜新",
+      "code": "101070900",
+      "first_char": "F",
+      "hot": false
+    },
+    {
+      "name": "阜阳",
+      "code": "101220800",
+      "first_char": "F",
+      "hot": false
+    },
+    {
+      "name": "防城港",
+      "code": "101301400",
+      "first_char": "F",
+      "hot": false
+    },
+    {
+      "name": "固原",
+      "code": "101170400",
+      "first_char": "G",
+      "hot": false
+    },
+    {
+      "name": "广元",
+      "code": "101271800",
+      "first_char": "G",
+      "hot": false
+    },
+    {
+      "name": "广安",
+      "code": "101270800",
+      "first_char": "G",
+      "hot": false
+    },
+    {
+      "name": "果洛藏族自治州",
+      "code": "101150600",
+      "first_char": "G",
+      "hot": false
+    },
+    {
+      "name": "桂林",
+      "code": "101300500",
+      "first_char": "G",
+      "hot": false
+    },
+    {
+      "name": "甘南藏族自治州",
+      "code": "101161400",
+      "first_char": "G",
+      "hot": false
+    },
+    {
+      "name": "甘孜藏族自治州",
+      "code": "101272100",
+      "first_char": "G",
+      "hot": false
+    },
+    {
+      "name": "贵港",
+      "code": "101300800",
+      "first_char": "G",
+      "hot": false
+    },
+    {
+      "name": "贵阳",
+      "code": "101260100",
+      "first_char": "G",
+      "hot": false
+    },
+    {
+      "name": "赣州",
+      "code": "101240700",
+      "first_char": "G",
+      "hot": false
+    },
+    {
+      "name": "呼伦贝尔",
+      "code": "101080700",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "呼和浩特",
+      "code": "101080100",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "和田地区",
+      "code": "101131300",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "哈密",
+      "code": "101130900",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "哈尔滨",
+      "code": "101050100",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "怀化",
+      "code": "101251200",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "惠州",
+      "code": "101280300",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "汉中",
+      "code": "101110800",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "河池",
+      "code": "101301200",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "河源",
+      "code": "101281200",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "海东",
+      "code": "101150200",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "海北藏族自治州",
+      "code": "101150300",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "海南藏族自治州",
+      "code": "101150500",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "海口",
+      "code": "101310100",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "海西蒙古族藏族自治州",
+      "code": "101150800",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "淮北",
+      "code": "101221100",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "淮南",
+      "code": "101220400",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "淮安",
+      "code": "101190900",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "湖州",
+      "code": "101210200",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "红河哈尼族彝族自治州",
+      "code": "101291200",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "胡杨河市",
+      "code": "101132600",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "菏泽",
+      "code": "101121000",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "葫芦岛",
+      "code": "101071400",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "衡水",
+      "code": "101090800",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "衡阳",
+      "code": "101250400",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "贺州",
+      "code": "101300700",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "邯郸",
+      "code": "101091000",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "鹤壁",
+      "code": "101181200",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "鹤岗",
+      "code": "101051100",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "黄冈",
+      "code": "101200500",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "黄南藏族自治州",
+      "code": "101150400",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "黄山",
+      "code": "101221600",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "黄石",
+      "code": "101200600",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "黑河",
+      "code": "101050600",
+      "first_char": "H",
+      "hot": false
+    },
+    {
+      "name": "九江",
+      "code": "101240200",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "佳木斯",
+      "code": "101050400",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "吉安",
+      "code": "101240600",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "吉林",
+      "code": "101060200",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "嘉兴",
+      "code": "101210300",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "嘉峪关",
+      "code": "101161200",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "揭阳",
+      "code": "101281900",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "晋中",
+      "code": "101100400",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "晋城",
+      "code": "101100600",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "景德镇",
+      "code": "101240800",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "江门",
+      "code": "101281100",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "济南",
+      "code": "101120100",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "济宁",
+      "code": "101120700",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "济源",
+      "code": "101181800",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "焦作",
+      "code": "101181100",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "荆州",
+      "code": "101200800",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "荆门",
+      "code": "101201200",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "酒泉",
+      "code": "101160800",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "金华",
+      "code": "101210900",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "金昌",
+      "code": "101160600",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "锦州",
+      "code": "101070700",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "鸡西",
+      "code": "101051000",
+      "first_char": "J",
+      "hot": false
+    },
+    {
+      "name": "克孜勒苏柯尔克孜自治州",
+      "code": "101131100",
+      "first_char": "K",
+      "hot": false
+    },
+    {
+      "name": "克拉玛依",
+      "code": "101130200",
+      "first_char": "K",
+      "hot": false
+    },
+    {
+      "name": "可克达拉市",
+      "code": "101132200",
+      "first_char": "K",
+      "hot": false
+    },
+    {
+      "name": "喀什地区",
+      "code": "101131200",
+      "first_char": "K",
+      "hot": false
+    },
+    {
+      "name": "开封",
+      "code": "101180800",
+      "first_char": "K",
+      "hot": false
+    },
+    {
+      "name": "昆明",
+      "code": "101290100",
+      "first_char": "K",
+      "hot": false
+    },
+    {
+      "name": "昆玉市",
+      "code": "101132300",
+      "first_char": "K",
+      "hot": false
+    },
+    {
+      "name": "临夏回族自治州",
+      "code": "101161300",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "临汾",
+      "code": "101100700",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "临沂",
+      "code": "101120900",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "临沧",
+      "code": "101290800",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "临高",
+      "code": "101311300",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "丽水",
+      "code": "101210800",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "丽江",
+      "code": "101290900",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "乐东黎族自治县",
+      "code": "101311600",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "乐山",
+      "code": "101271400",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "六安",
+      "code": "101221400",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "六盘水",
+      "code": "101260600",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "兰州",
+      "code": "101160100",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "凉山彝族自治州",
+      "code": "101272000",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "吕梁",
+      "code": "101101100",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "娄底",
+      "code": "101250800",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "廊坊",
+      "code": "101090600",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "拉萨",
+      "code": "101140100",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "来宾",
+      "code": "101300400",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "林芝",
+      "code": "101140400",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "柳州",
+      "code": "101300300",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "泸州",
+      "code": "101271000",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "洛阳",
+      "code": "101180900",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "漯河",
+      "code": "101181500",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "聊城",
+      "code": "101121700",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "辽源",
+      "code": "101060600",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "辽阳",
+      "code": "101071000",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "连云港",
+      "code": "101191000",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "陇南",
+      "code": "101161100",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "陵水黎族自治县",
+      "code": "101311700",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "龙岩",
+      "code": "101230700",
+      "first_char": "L",
+      "hot": false
+    },
+    {
+      "name": "梅州",
+      "code": "101280400",
+      "first_char": "M",
+      "hot": false
+    },
+    {
+      "name": "牡丹江",
+      "code": "101050300",
+      "first_char": "M",
+      "hot": false
+    },
+    {
+      "name": "眉山",
+      "code": "101271500",
+      "first_char": "M",
+      "hot": false
+    },
+    {
+      "name": "绵阳",
+      "code": "101270400",
+      "first_char": "M",
+      "hot": false
+    },
+    {
+      "name": "茂名",
+      "code": "101282000",
+      "first_char": "M",
+      "hot": false
+    },
+    {
+      "name": "马鞍山",
+      "code": "101220500",
+      "first_char": "M",
+      "hot": false
+    },
+    {
+      "name": "内江",
+      "code": "101271200",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "南充",
+      "code": "101270500",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "南宁",
+      "code": "101300100",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "南平",
+      "code": "101230900",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "南昌",
+      "code": "101240100",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "南通",
+      "code": "101190500",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "南阳",
+      "code": "101180700",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "宁德",
+      "code": "101230300",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "宁波",
+      "code": "101210400",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "怒江傈僳族自治州",
+      "code": "101291400",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "那曲",
+      "code": "101140600",
+      "first_char": "N",
+      "hot": false
+    },
+    {
+      "name": "平凉",
+      "code": "101160300",
+      "first_char": "P",
+      "hot": false
+    },
+    {
+      "name": "平顶山",
+      "code": "101180500",
+      "first_char": "P",
+      "hot": false
+    },
+    {
+      "name": "攀枝花",
+      "code": "101270200",
+      "first_char": "P",
+      "hot": false
+    },
+    {
+      "name": "普洱",
+      "code": "101290500",
+      "first_char": "P",
+      "hot": false
+    },
+    {
+      "name": "濮阳",
+      "code": "101181300",
+      "first_char": "P",
+      "hot": false
+    },
+    {
+      "name": "盘锦",
+      "code": "101071300",
+      "first_char": "P",
+      "hot": false
+    },
+    {
+      "name": "莆田",
+      "code": "101230400",
+      "first_char": "P",
+      "hot": false
+    },
+    {
+      "name": "萍乡",
+      "code": "101240900",
+      "first_char": "P",
+      "hot": false
+    },
+    {
+      "name": "七台河",
+      "code": "101050900",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "庆阳",
+      "code": "101160400",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "曲靖",
+      "code": "101290200",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "泉州",
+      "code": "101230500",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "清远",
+      "code": "101281300",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "潜江",
+      "code": "101201500",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "琼中黎族苗族自治县",
+      "code": "101311900",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "琼海",
+      "code": "101310600",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "秦皇岛",
+      "code": "101091100",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "衢州",
+      "code": "101211000",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "钦州",
+      "code": "101301100",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "黔东南苗族侗族自治州",
+      "code": "101260700",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "黔南布依族苗族自治州",
+      "code": "101260800",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "黔西南布依族苗族自治州",
+      "code": "101260900",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "齐齐哈尔",
+      "code": "101050200",
+      "first_char": "Q",
+      "hot": false
+    },
+    {
+      "name": "日喀则",
+      "code": "101140200",
+      "first_char": "R",
+      "hot": false
+    },
+    {
+      "name": "日照",
+      "code": "101121500",
+      "first_char": "R",
+      "hot": false
+    },
+    {
+      "name": "三亚",
+      "code": "101310200",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "三明",
+      "code": "101230800",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "三沙",
+      "code": "101310300",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "三门峡",
+      "code": "101181700",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "上饶",
+      "code": "101240300",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "十堰",
+      "code": "101201000",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "双河市",
+      "code": "101132400",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "双鸭山",
+      "code": "101051200",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "商丘",
+      "code": "101181000",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "商洛",
+      "code": "101110600",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "四平",
+      "code": "101060300",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "宿州",
+      "code": "101220700",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "宿迁",
+      "code": "101191300",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "山南",
+      "code": "101140500",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "朔州",
+      "code": "101100900",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "松原",
+      "code": "101060700",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "汕头",
+      "code": "101280500",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "汕尾",
+      "code": "101282100",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "沈阳",
+      "code": "101070100",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "石嘴山",
+      "code": "101170200",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "石家庄",
+      "code": "101090100",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "石河子",
+      "code": "101131600",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "神农架",
+      "code": "101201700",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "绍兴",
+      "code": "101210500",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "绥化",
+      "code": "101050500",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "遂宁",
+      "code": "101270700",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "邵阳",
+      "code": "101250900",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "随州",
+      "code": "101201100",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "韶关",
+      "code": "101280200",
+      "first_char": "S",
+      "hot": false
+    },
+    {
+      "name": "台州",
+      "code": "101210600",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "台湾",
+      "code": "101341100",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "吐鲁番",
+      "code": "101130800",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "唐山",
+      "code": "101090500",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "图木舒克",
+      "code": "101131800",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "塔城地区",
+      "code": "101131400",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "天水",
+      "code": "101160900",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "天门",
+      "code": "101201600",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "太原",
+      "code": "101100100",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "屯昌",
+      "code": "101311100",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "泰安",
+      "code": "101120800",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "泰州",
+      "code": "101191200",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "通化",
+      "code": "101060400",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "通辽",
+      "code": "101080400",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "铁岭",
+      "code": "101071100",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "铁门关",
+      "code": "101132000",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "铜仁",
+      "code": "101260400",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "铜川",
+      "code": "101111000",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "铜陵",
+      "code": "101221200",
+      "first_char": "T",
+      "hot": false
+    },
+    {
+      "name": "万宁",
+      "code": "101310800",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "乌兰察布",
+      "code": "101080900",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "乌海",
+      "code": "101080300",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "乌鲁木齐",
+      "code": "101130100",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "五家渠",
+      "code": "101131900",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "五指山",
+      "code": "101310500",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "吴忠",
+      "code": "101170300",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "威海",
+      "code": "101121300",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "文山壮族苗族自治州",
+      "code": "101291100",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "文昌",
+      "code": "101310700",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "无锡",
+      "code": "101190200",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "梧州",
+      "code": "101300600",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "武威",
+      "code": "101160500",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "温州",
+      "code": "101210700",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "渭南",
+      "code": "101110500",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "潍坊",
+      "code": "101120600",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "芜湖",
+      "code": "101220300",
+      "first_char": "W",
+      "hot": false
+    },
+    {
+      "name": "仙桃",
+      "code": "101201400",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "信阳",
+      "code": "101180600",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "兴安盟",
+      "code": "101081100",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "咸宁",
+      "code": "101200700",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "咸阳",
+      "code": "101110200",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "孝感",
+      "code": "101200400",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "宣城",
+      "code": "101221300",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "徐州",
+      "code": "101190800",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "忻州",
+      "code": "101101000",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "新乡",
+      "code": "101180300",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "新余",
+      "code": "101241000",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "新星市",
+      "code": "101132500",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "湘潭",
+      "code": "101250200",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "湘西土家族苗族自治州",
+      "code": "101251400",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "襄阳",
+      "code": "101200200",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "西双版纳傣族自治州",
+      "code": "101291000",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "西宁",
+      "code": "101150100",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "许昌",
+      "code": "101180400",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "邢台",
+      "code": "101090900",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "锡林郭勒盟",
+      "code": "101081000",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "香港",
+      "code": "101320300",
+      "first_char": "X",
+      "hot": false
+    },
+    {
+      "name": "云浮",
+      "code": "101281400",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "伊春",
+      "code": "101050700",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "伊犁哈萨克自治州",
+      "code": "101130600",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "宜宾",
+      "code": "101271100",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "宜昌",
+      "code": "101200900",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "宜春",
+      "code": "101240500",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "岳阳",
+      "code": "101251000",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "延安",
+      "code": "101110300",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "延边朝鲜族自治州",
+      "code": "101060900",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "扬州",
+      "code": "101190600",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "榆林",
+      "code": "101110400",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "永州",
+      "code": "101251300",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "烟台",
+      "code": "101120500",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "玉林",
+      "code": "101300900",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "玉树藏族自治州",
+      "code": "101150700",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "玉溪",
+      "code": "101290400",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "益阳",
+      "code": "101250700",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "盐城",
+      "code": "101190700",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "营口",
+      "code": "101070800",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "运城",
+      "code": "101100800",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "银川",
+      "code": "101170100",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "阳江",
+      "code": "101281800",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "阳泉",
+      "code": "101100300",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "雅安",
+      "code": "101271600",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "鹰潭",
+      "code": "101241100",
+      "first_char": "Y",
+      "hot": false
+    },
+    {
+      "name": "中卫",
+      "code": "101170500",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "中山",
+      "code": "101281700",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "周口",
+      "code": "101181400",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "张家口",
+      "code": "101090300",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "张家界",
+      "code": "101251100",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "张掖",
+      "code": "101160700",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "昭通",
+      "code": "101290700",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "枣庄",
+      "code": "101121400",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "株洲",
+      "code": "101250300",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "淄博",
+      "code": "101120300",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "湛江",
+      "code": "101281000",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "漳州",
+      "code": "101230600",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "珠海",
+      "code": "101280700",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "肇庆",
+      "code": "101280900",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "自贡",
+      "code": "101270300",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "舟山",
+      "code": "101211100",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "资阳",
+      "code": "101271300",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "遵义",
+      "code": "101260200",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "镇江",
+      "code": "101190300",
+      "first_char": "Z",
+      "hot": false
+    },
+    {
+      "name": "驻马店",
+      "code": "101181600",
+      "first_char": "Z",
+      "hot": false
+    }
+  ]
+}

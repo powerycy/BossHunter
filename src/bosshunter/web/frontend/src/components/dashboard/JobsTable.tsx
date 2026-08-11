@@ -1,12 +1,19 @@
 import { Fragment, useState } from 'react'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 import { getStatusLabel } from '@/lib/status'
 import type { Job } from '@/hooks/useDashboard'
 
 interface JobsTableProps {
   jobs: Job[]
+  selectedIds?: string[]
+  onToggleSelected?: (id: string) => void
+  onOverrideFilter?: (job: Job) => void
+  showDeleted?: boolean
+  onSoftDelete?: (job: Job) => void
+  onRestore?: (job: Job) => void
+  onPermanentDelete?: (job: Job) => void
 }
 
 function statusVariant(status: string) {
@@ -28,12 +35,23 @@ function statusVariant(status: string) {
   return variants.has(status) ? status : 'default'
 }
 
-export function JobsTable({ jobs }: JobsTableProps) {
+export function JobsTable({
+  jobs,
+  selectedIds = [],
+  onToggleSelected,
+  onOverrideFilter,
+  showDeleted = false,
+  onSoftDelete,
+  onRestore,
+  onPermanentDelete,
+}: JobsTableProps) {
   const [page, setPage] = useState(0)
   const [expanded, setExpanded] = useState<string | null>(null)
   const pageSize = 15
   const totalPages = Math.ceil(jobs.length / pageSize)
   const displayed = jobs.slice(page * pageSize, (page + 1) * pageSize)
+  const hasActions = Boolean(onSoftDelete || onRestore || onPermanentDelete)
+  const columnCount = (onToggleSelected ? 1 : 0) + 7 + (hasActions ? 1 : 0)
 
   const getScoreColor = (score: number) => {
     if (score >= 80) return 'text-success'
@@ -61,12 +79,15 @@ export function JobsTable({ jobs }: JobsTableProps) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-card-border bg-[#FFF0E5] text-xs text-muted">
+                {onToggleSelected && <th className="px-4 py-3 text-left font-bold">选</th>}
                 <th className="px-4 py-3 text-left font-bold">公司</th>
                 <th className="px-4 py-3 text-left font-bold">职位</th>
                 <th className="px-4 py-3 text-left font-bold">薪资</th>
                 <th className="px-4 py-3 text-left font-bold">评分</th>
                 <th className="px-4 py-3 text-left font-bold">状态</th>
+                <th className="px-4 py-3 text-left font-bold">原岗位</th>
                 <th className="px-4 py-3 text-left font-bold">时间</th>
+                {hasActions && <th className="px-4 py-3 text-left font-bold">操作</th>}
               </tr>
             </thead>
             <tbody>
@@ -78,6 +99,11 @@ export function JobsTable({ jobs }: JobsTableProps) {
                       className="cursor-pointer border-b border-card-border bg-white transition-colors hover:bg-[#FFFCFA]"
                       onClick={() => setExpanded(isExpanded ? null : job.id)}
                     >
+                      {onToggleSelected && (
+                        <td className="px-4 py-3" onClick={event => event.stopPropagation()}>
+                          <input type="checkbox" checked={selectedIds.includes(job.id)} onChange={() => onToggleSelected(job.id)} className="h-4 w-4 accent-primary" aria-label={`选择 ${job.company} ${job.title}`} />
+                        </td>
+                      )}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <span className="max-w-[160px] truncate font-black text-foreground">{job.company}</span>
@@ -94,16 +120,48 @@ export function JobsTable({ jobs }: JobsTableProps) {
                       <td className="px-4 py-3">
                         <Badge variant={statusVariant(job.status) as any}>{getStatusLabel(job.status)}</Badge>
                       </td>
+                      <td className="px-4 py-3" onClick={event => event.stopPropagation()}>
+                        <div className="flex flex-wrap gap-2">
+                          {job.url ? <a href={job.url} target="_blank" rel="noopener,noreferrer" className="inline-flex items-center gap-1 text-xs font-black text-primary hover:underline"><ExternalLink className="h-3 w-3" />打开原岗位</a> : <span className="text-xs text-muted">链接不可用</span>}
+                          {job.status === 'filtered' && job.filter_source && onOverrideFilter && <button type="button" onClick={() => onOverrideFilter(job)} className="text-xs font-black text-amber-700 hover:underline">仍要推进</button>}
+                        </div>
+                      </td>
                       <td className="px-4 py-3 text-xs text-muted">
                         <div className="flex items-center gap-2">
                           {timeAgo(job.created_at)}
                           {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                         </div>
                       </td>
+                      {hasActions && (
+                        <td className="px-4 py-3" onClick={event => event.stopPropagation()}>
+                          <div className="flex flex-wrap gap-2">
+                            {!showDeleted && onSoftDelete && (
+                              <button type="button" onClick={() => onSoftDelete(job)} className="text-xs font-black text-danger hover:underline">
+                                移入回收站
+                              </button>
+                            )}
+                            {showDeleted && onRestore && (
+                              <button type="button" onClick={() => onRestore(job)} className="text-xs font-black text-primary hover:underline">
+                                恢复
+                              </button>
+                            )}
+                            {showDeleted && onPermanentDelete && job.permanent_delete_allowed !== false && (
+                              <button type="button" onClick={() => onPermanentDelete(job)} className="text-xs font-black text-danger hover:underline">
+                                永久删除
+                              </button>
+                            )}
+                            {showDeleted && job.permanent_delete_allowed === false && (
+                              <span className="text-xs font-bold text-muted" title={(job.permanent_delete_reasons || []).join('；')}>
+                                仅保留历史
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      )}
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-card-border bg-[#FFFCFA]">
-                        <td colSpan={6} className="px-6 py-4">
+                        <td colSpan={columnCount} className="px-6 py-4">
                           <div className="grid grid-cols-1 gap-4 text-sm lg:grid-cols-3">
                             <div className="rounded-2xl border border-card-border bg-white p-4">
                               <p className="mb-2 text-xs font-black text-primary">JD摘要</p>
@@ -116,6 +174,7 @@ export function JobsTable({ jobs }: JobsTableProps) {
                             <div className="rounded-2xl border border-card-border bg-white p-4">
                               <p className="mb-2 text-xs font-black text-primary">评分理由</p>
                               <p className="line-clamp-6 whitespace-pre-wrap leading-6 text-muted">{job.score_reason || '无'}</p>
+                              {job.score_failure_json && <p className="mt-2 text-xs text-danger">最近评分失败：{job.score_failure_json}</p>}
                             </div>
                           </div>
                         </td>

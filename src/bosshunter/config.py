@@ -5,34 +5,15 @@ from typing import Any
 
 import yaml
 
+from bosshunter.cities import get_city_map
 
-# BOSS直聘城市编码映射
-CITY_CODES: dict[str, str] = {
-    "北京": "101010100",
-    "上海": "101020100",
-    "深圳": "101280600",
-    "广州": "101280100",
-    "杭州": "101210100",
-    "成都": "101270100",
-    "武汉": "101200100",
-    "南京": "101190100",
-    "西安": "101110100",
-    "苏州": "101190400",
-    "天津": "101030100",
-    "重庆": "101040100",
-    "郑州": "101180100",
-    "长沙": "101250100",
-    "东莞": "101281600",
-    "佛山": "101280800",
-    "合肥": "101220100",
-    "厦门": "101230200",
-    "青岛": "101120200",
-    "大连": "101070200",
-}
+# Backward-compatible mapping name. The source of truth is the offline city
+# snapshot; importing this module never performs a network refresh.
+CITY_CODES: dict[str, str] = get_city_map()
 
 
 SUPPORTED_AI_PROVIDERS = {"anthropic", "openai_compatible"}
-SUPPORTED_AI_SERVICES = {"anthropic", "deepseek", "doubao", "custom"}
+SUPPORTED_AI_SERVICES = {"anthropic", "deepseek", "doubao", "lulucoding", "custom"}
 AI_SERVICE_PRESETS: dict[str, dict[str, str]] = {
     "anthropic": {
         "provider": "anthropic",
@@ -51,6 +32,13 @@ AI_SERVICE_PRESETS: dict[str, dict[str, str]] = {
         "label": "豆包 / 火山方舟",
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "key_env": "ARK_API_KEY",
+    },
+    "lulucoding": {
+        "provider": "openai_compatible",
+        "label": "LuluCoding",
+        "base_url": "https://api.lulucoding.com/v1",
+        "site_root": "https://api.lulucoding.com",
+        "key_env": "LULUCODING_API_KEY",
     },
     "custom": {
         "provider": "openai_compatible",
@@ -75,6 +63,7 @@ DEFAULTS: dict[str, Any] = {
     "search": {
         "keywords": [],
         "cities": [],  # Empty = fallback to profile.target_cities
+        "target_per_combo": 10,
         "max_pages": 3,
     },
     "scoring": {
@@ -157,7 +146,7 @@ def _validate_ai_provider(config: dict[str, Any]) -> None:
         ai_cfg["service"] = "custom"
         service = "custom"
     if service not in SUPPORTED_AI_SERVICES:
-        raise ValueError("当前版本支持 Claude、DeepSeek、豆包或自定义 OpenAI 兼容接口。")
+        raise ValueError("当前版本支持 Claude、DeepSeek、豆包、LuluCoding 或自定义 OpenAI 兼容接口。")
     expected_provider = AI_SERVICE_PRESETS[service]["provider"]
     if provider != expected_provider:
         ai_cfg["provider"] = expected_provider

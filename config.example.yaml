@@ -20,6 +20,7 @@ profile:
 search:
   keywords: ["关键词1", "关键词2"]
   cities: ["北京"]
+  target_per_combo: 10
   max_pages: 5
   sort: newest
 
@@ -40,7 +41,7 @@ throttle:
 
 ai:
   provider: "anthropic"
-  service: "anthropic"           # anthropic / deepseek / doubao / custom
+  service: "anthropic"           # anthropic / deepseek / doubao / lulucoding / custom
   model: "claude-sonnet-4-6"
   thinking: "auto"               # auto / disabled / enabled / off
   thinking_budget: 2048           # thinking=enabled 时使用，至少 1024
@@ -58,7 +59,7 @@ ai:
   greeting_review_threshold: 7
   greeting_max_iterations: 2
   resume_max_pages: 3
-  # api_key 可通过对应环境变量设置（ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / ARK_API_KEY / OPENAI_API_KEY）
+  # api_key 可通过对应环境变量设置（ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / ARK_API_KEY / LULUCODING_API_KEY / OPENAI_API_KEY）
   # api_key: "your-api-key"
   # base_url: "https://api.anthropic.com"
 

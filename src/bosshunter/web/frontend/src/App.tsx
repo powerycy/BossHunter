@@ -3,6 +3,7 @@ import { Sidebar } from './components/layout/Sidebar'
 import { Header } from './components/layout/Header'
 import DashboardPage from './pages/DashboardPage'
 import ConfigPage from './pages/ConfigPage'
+import AiSettingsPage from './pages/AiSettingsPage'
 
 function JobsPage() {
   return <DashboardPage view="jobs" />
@@ -25,6 +26,7 @@ export default function App() {
               <Route path="/jobs" element={<JobsPage />} />
               <Route path="/monitor" element={<MonitorPage />} />
               <Route path="/config" element={<ConfigPage />} />
+              <Route path="/ai-settings" element={<AiSettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </main>

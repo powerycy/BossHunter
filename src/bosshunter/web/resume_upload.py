@@ -11,7 +11,7 @@ from zipfile import BadZipFile, ZipFile
 
 
 MAX_DOCX_XML_SIZE = 20 * 1024 * 1024
-SUPPORTED_RESUME_EXTENSIONS = {".md", ".docx"}
+SUPPORTED_RESUME_EXTENSIONS = {".md", ".txt", ".pdf", ".docx"}
 _WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _W = f"{{{_WORD_NAMESPACE}}}"
 
@@ -34,7 +34,9 @@ def safe_resume_filename(raw_filename: str) -> str:
 
 	suffix = Path(name).suffix.lower()
 	if suffix not in SUPPORTED_RESUME_EXTENSIONS:
-		raise ResumeUploadError("仅支持 .md 或 .docx 格式")
+		if suffix == ".doc":
+			raise ResumeUploadError("仅支持 .md 或 .docx 格式")
+		raise ResumeUploadError("仅支持 .md、.txt、.pdf 或 .docx 格式")
 
 	stem = name[: -len(Path(name).suffix)].strip().strip(".")
 	if not stem:
@@ -47,8 +49,17 @@ def safe_resume_filename(raw_filename: str) -> str:
 def prepare_resume_content(filename: str, content: bytes) -> tuple[str, bytes]:
 	"""Return the Markdown storage filename and UTF-8 content for an upload."""
 	safe_name = safe_resume_filename(filename)
-	if Path(safe_name).suffix.lower() == ".md":
-		return safe_name, content
+	suffix = Path(safe_name).suffix.lower()
+	if suffix in {".md", ".txt"}:
+		try:
+			text = content.decode("utf-8-sig")
+		except UnicodeDecodeError as exc:
+			raise ResumeUploadError("文本简历必须使用 UTF-8 编码") from exc
+		if not text.strip():
+			raise ResumeUploadError("文件中未识别到可用文字")
+		return f"{Path(safe_name).stem}.md", text.encode("utf-8")
+	if suffix == ".pdf":
+		return f"{Path(safe_name).stem}.md", pdf_to_markdown(content).encode("utf-8")
 
 	markdown = docx_to_markdown(content)
 	output_name = f"{Path(safe_name).stem}.md"
@@ -91,6 +102,24 @@ def docx_to_markdown(content: bytes) -> str:
 	if not markdown:
 		raise ResumeUploadError("Word 文件中未识别到可用文字")
 	return f"{markdown}\n"
+
+
+def pdf_to_markdown(content: bytes) -> str:
+	"""Extract text-layer PDF content; scanning/OCR is intentionally unsupported."""
+	try:
+		import fitz
+		document = fitz.open(stream=content, filetype="pdf")
+		try:
+			text = "\n\n".join(page.get_text("text") for page in document).strip()
+		finally:
+			document.close()
+	except ImportError as exc:
+		raise ResumeUploadError("PDF 文本解析依赖 PyMuPDF，当前环境未安装") from exc
+	except Exception as exc:
+		raise ResumeUploadError("PDF 文件无效或无法解析") from exc
+	if not text:
+		raise ResumeUploadError("未识别到 PDF 文本，本版不支持扫描件 OCR")
+	return f"{text}\n"
 
 
 def _paragraph_to_markdown(paragraph: ElementTree.Element) -> str:

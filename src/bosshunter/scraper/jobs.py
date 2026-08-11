@@ -13,8 +13,9 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from bosshunter.browser import (
     new_tab, close_tab, evaluate, scroll, wait_for_load
 )
-from bosshunter.config import CITY_CODES
-from bosshunter.db import get_db, job_exists, insert_job
+from bosshunter.cities import get_city_code
+from bosshunter.cancellation import OperationCancelled, OperationPaused, get_pause_event, get_stop_event
+from bosshunter.db import get_db, insert_job, job_exists, job_url_exists, mark_job_filtered
 from bosshunter.job_filters import matching_deal_breaker
 from bosshunter.throttle import PageThrottle
 
@@ -143,7 +144,22 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
 
     # Pagination config
     search_config = config.get("search", {})
-    max_pages = min(search_config.get("max_pages", 3), 10)  # Hard cap: 10 pages
+    try:
+        max_pages = int(search_config.get("max_pages", 3) or 3)
+    except (TypeError, ValueError) as exc:
+        db.close()
+        raise ValueError("最大翻页数必须是 1 到 10 的整数") from exc
+    if not 1 <= max_pages <= 10:
+        db.close()
+        raise ValueError("最大翻页数必须是 1 到 10 的整数")
+    try:
+        target_per_combo = int(search_config.get("target_per_combo", 10) or 10)
+    except (TypeError, ValueError) as exc:
+        db.close()
+        raise ValueError("每组合采集数必须是 1 到 200 的整数") from exc
+    if not 1 <= target_per_combo <= 200:
+        db.close()
+        raise ValueError("每组合采集数必须是 1 到 200 的整数")
 
     # Resolve cities: search.cities > profile.target_cities > ["北京"]
     cities = search_config.get("cities", [])
@@ -153,9 +169,16 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
     # Build search combinations: city × keyword
     search_combos = []
     for city in cities:
-        city_code = CITY_CODES.get(city)
+        city_code = get_city_code(city)
         if not city_code:
             console.print(f"[yellow]⚠ 未识别的城市: {city}，已跳过[/yellow]")
+            for keyword in keywords:
+                invalid_report = {"keyword": keyword, "city": city, "city_code": "", "target": target_per_combo, "inserted": 0, "pages_scanned": 0, "shortfall_reason": "城市无效"}
+                combo_reports = config.setdefault("_workbench_collect_report", [])
+                combo_reports.append(invalid_report)
+                callback = config.get("_workbench_collect_progress")
+                if callable(callback):
+                    callback({"combo_index": len(combo_reports), "combo_total": len(cities) * len(keywords), **invalid_report})
             continue
         for keyword in keywords:
             search_combos.append((city, city_code, keyword))
@@ -165,24 +188,34 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
         db.close()
         return 0
 
-    console.print(f"[dim]搜索组合: {len(search_combos)} 个 ({len(cities)}城市 × {len(keywords)}关键词 × {max_pages}页)[/dim]")
+    console.print(f"[dim]搜索组合: {len(search_combos)} 个 ({len(cities)}城市 × {len(keywords)}关键词 × 每组合{target_per_combo}条 × 最多{max_pages}页)[/dim]")
+    combo_reports: list[dict] = config.setdefault("_workbench_collect_report", [])
+    stop_event = get_stop_event(config)
+    pause_event = get_pause_event(config)
 
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console
     ) as progress:
-        for city, city_code, keyword in search_combos:
+        for combo_index, (city, city_code, keyword) in enumerate(search_combos):
             if limit is not None and new_count >= limit:
                 break
+            _check_control(stop_event, pause_event)
 
             label = f"{city}/{keyword}" if len(cities) > 1 else keyword
             task = progress.add_task(f"搜索: {label}", total=None)
-            keyword_new = 0
+            combo_new_count = 0
+            pages_scanned = 0
+            shortfall_reason = ""
 
             for page in range(1, max_pages + 1):
                 if limit is not None and new_count >= limit:
+                    shortfall_reason = "达到全局安全上限"
                     break
+                if combo_new_count >= target_per_combo:
+                    break
+                _check_control(stop_event, pause_event)
 
                 # Build paginated URL
                 search_url = SEARCH_URL.format(keyword=quote(keyword), city_code=city_code)
@@ -197,33 +230,39 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                 if not target_id:
                     if page == 1:
                         progress.update(task, description=f"[red]✗ 无法打开搜索页: {label}[/red]")
-                    break
-
-                time.sleep(3)
-                wait_for_load(target_id, timeout=10)
-
-                # Scroll to load all results on this page
-                scroll(target_id, y=2000)
-                time.sleep(1.5)
-                scroll(target_id, y=4000)
-                time.sleep(1.5)
-
-                # Extract job list
-                result = evaluate(target_id, JS_EXTRACT_LIST)
-                if not result:
-                    close_tab(target_id)
+                    shortfall_reason = "无法打开搜索页"
                     break
 
                 try:
-                    jobs_list = json.loads(result)
-                except (json.JSONDecodeError, TypeError):
-                    close_tab(target_id)
-                    break
+                    _controlled_wait(config, 3)
+                    _check_control(stop_event, pause_event)
+                    wait_for_load(target_id, timeout=10)
 
-                close_tab(target_id)
+                    # Scroll to load all results on this page
+                    scroll(target_id, y=2000)
+                    _controlled_wait(config, 1.5)
+                    scroll(target_id, y=4000)
+                    _controlled_wait(config, 1.5)
+
+                    _check_control(stop_event, pause_event)
+                    result = evaluate(target_id, JS_EXTRACT_LIST)
+                    if not result:
+                        shortfall_reason = "页面没有返回岗位列表"
+                        break
+
+                    try:
+                        jobs_list = json.loads(result)
+                    except (json.JSONDecodeError, TypeError):
+                        shortfall_reason = "岗位列表响应无法解析"
+                        break
+                finally:
+                    close_tab(target_id)
+
+                pages_scanned = page
 
                 # No results on this page, stop pagination
                 if not jobs_list:
+                    shortfall_reason = "页面为空"
                     break
 
                 progress.update(task, description=f"搜索: {label} 第{page}页 ({len(jobs_list)}条)")
@@ -231,22 +270,52 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                 # Process each job
                 for job_data in jobs_list:
                     if limit is not None and new_count >= limit:
+                        shortfall_reason = "达到全局安全上限"
+                        break
+                    if combo_new_count >= target_per_combo:
                         break
 
                     job_url = job_data.get("url", "")
+                    if job_url and not str(job_url).startswith("http"):
+                        job_url = f"https://www.zhipin.com{job_url}"
                     job_id = _generate_job_id(job_url)
 
                     # Skip if already exists
-                    if job_exists(db, job_id):
+                    if job_exists(db, job_id) or _safe_job_url_exists(db, job_url):
                         continue
 
                     # Skip deal breakers
-                    if matching_deal_breaker(job_data.get("title", ""), deal_breakers):
+                    deal_breaker = matching_deal_breaker(job_data.get("title", ""), deal_breakers)
+                    if deal_breaker:
+                        filtered_id = job_id
+                        inserted = insert_job(db, {
+                            "id": filtered_id,
+                            "title": job_data.get("title", ""),
+                            "company": job_data.get("company", ""),
+                            "salary": job_data.get("salary", ""),
+                            "city": city,
+                            "city_code": str(city_code),
+                            "experience": job_data.get("experience", ""),
+                            "jd": "",
+                            "hr_name": "",
+                            "hr_title": "",
+                            "hr_active": "",
+                            "company_size": "",
+                            "company_industry": "",
+                            "url": job_url,
+                        })
+                        if inserted is None:
+                            inserted = True
+                        if inserted:
+                            mark_job_filtered(db, filtered_id, "deal_breaker", f"职位命中排除关键词：{deal_breaker}")
+                            new_count += 1
+                            combo_new_count += 1
                         continue
 
                     # Open detail page for full JD
-                    throttle.wait()
-                    detail_url = f"https://www.zhipin.com{job_url}"
+                    if throttle.wait(stop_event, pause_event):
+                        _check_control(stop_event, pause_event)
+                    detail_url = job_url
                     detail_target = new_tab(detail_url, background=True)
                     if not detail_target:
                         continue
@@ -273,6 +342,7 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                         "company": detail.get("company", job_data.get("company", "")),
                         "salary": detail.get("salary", job_data.get("salary", "")),
                         "city": city,
+                        "city_code": str(city_code),
                         "experience": detail.get("experience", job_data.get("experience", "")),
                         "jd": detail.get("jd", ""),
                         "hr_name": detail.get("hr_name", ""),
@@ -283,16 +353,77 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                         "url": detail_url,
                     }
 
-                    insert_job(db, job_record)
-                    new_count += 1
-                    keyword_new += 1
-                    progress.update(task, description=f"搜索: {label} 第{page}页 (新增 {keyword_new})")
+                    inserted = insert_job(db, job_record)
+                    # Older integrations mocked insert_job as a side effect
+                    # function. Treat its None return as an inserted row for
+                    # backward compatibility; real SQLite returns bool.
+                    if inserted is None:
+                        inserted = True
+                    if inserted:
+                        new_count += 1
+                        combo_new_count += 1
+                    progress.update(task, description=f"搜索: {label} 第{page}页 (新增 {combo_new_count}/{target_per_combo})")
 
                 # Anti-scraping: pause between pages
                 if page < max_pages:
-                    time.sleep(random.uniform(3.0, 6.0))
+                    _controlled_wait(config, random.uniform(3.0, 6.0))
 
-            progress.update(task, description=f"搜索: {label} (新增 {keyword_new})")
+            if combo_new_count >= target_per_combo:
+                shortfall_reason = ""
+            elif not shortfall_reason:
+                shortfall_reason = "达到最大翻页数"
+            report = {
+                "keyword": keyword,
+                "city": city,
+                "city_code": str(city_code),
+                "target": target_per_combo,
+                "inserted": combo_new_count,
+                "pages_scanned": pages_scanned,
+                "shortfall_reason": shortfall_reason,
+            }
+            combo_reports.append(report)
+            callback = config.get("_workbench_collect_progress")
+            if callable(callback):
+                callback({"combo_index": combo_index + 1, "combo_total": len(search_combos), **report})
+            progress.update(task, description=f"搜索: {label} (新增 {combo_new_count}/{target_per_combo})")
 
     db.close()
     return new_count
+
+
+def _safe_job_url_exists(db, url: str) -> bool:
+    """Keep lightweight scraper mocks compatible while deduping real URLs."""
+    try:
+        import sqlite3
+
+        if not isinstance(db, sqlite3.Connection):
+            return False
+        return job_url_exists(db, url)
+    except Exception:
+        return False
+
+
+def _check_control(stop_event, pause_event) -> None:
+    if stop_event is not None and stop_event.is_set():
+        raise OperationCancelled("用户已请求停止")
+    if pause_event is not None and pause_event.is_set():
+        raise OperationPaused("用户已请求暂停")
+
+
+def _controlled_wait(config: dict, seconds: float) -> None:
+    stop_event = get_stop_event(config)
+    pause_event = get_pause_event(config)
+    if stop_event is None and pause_event is None:
+        time.sleep(seconds)
+        return
+    # Waiting in small interruptible chunks means a pause does not wait out a
+    # browser throttle interval before saving its checkpoint.
+    remaining = max(float(seconds), 0.0)
+    while remaining > 0:
+        _check_control(stop_event, pause_event)
+        chunk = min(remaining, 0.25)
+        if stop_event is not None and stop_event.wait(chunk):
+            _check_control(stop_event, pause_event)
+        elif pause_event is not None and pause_event.wait(0):
+            _check_control(stop_event, pause_event)
+        remaining -= chunk

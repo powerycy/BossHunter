@@ -2,16 +2,68 @@
 
 import json
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from bosshunter.ai.credentials import AIRequestError, call_anthropic_text
-from bosshunter.cancellation import OperationCancelled, run_cancellable
-from bosshunter.db import add_history, get_db, get_jobs_by_status, update_job_greeting, update_job_status
+from bosshunter.candidate_context import build_candidate_context
+from bosshunter.cancellation import OperationCancelled, OperationPaused, run_cancellable
+from bosshunter.db import (
+    add_history,
+    clear_job_greeting_failure,
+    get_db,
+    get_jobs_by_status,
+    mark_job_greeting_generating,
+    update_job_greeting,
+    update_job_greeting_failure,
+    update_job_status,
+)
 
 console = Console()
+
+
+@dataclass
+class GreetingResult:
+    """Structured greeting outcome with integer compatibility for CLI callers."""
+
+    selected: int = 0
+    generated: int = 0
+    failed: int = 0
+    remaining: int = 0
+    outcome: str = "completed"
+    pause_reason: str = ""
+    generated_job_ids: list[str] = field(default_factory=list)
+    failed_job_ids: list[str] = field(default_factory=list)
+    remaining_job_ids: list[str] = field(default_factory=list)
+
+    def __int__(self) -> int:
+        return self.generated
+
+    def __index__(self) -> int:
+        return self.generated
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, GreetingResult):
+            return self.__dict__ == other.__dict__
+        if isinstance(other, int):
+            return self.generated == other
+        return NotImplemented
+
+    def to_dict(self) -> dict:
+        return {
+            "selected": self.selected,
+            "generated": self.generated,
+            "failed": self.failed,
+            "remaining": self.remaining,
+            "outcome": self.outcome,
+            "pause_reason": self.pause_reason or None,
+            "generated_job_ids": list(self.generated_job_ids),
+            "failed_job_ids": list(self.failed_job_ids),
+            "remaining_job_ids": list(self.remaining_job_ids),
+        }
 
 GREETING_PROMPT = """你是一位求职者，需要在BOSS直聘上给HR发送打招呼消息。请根据以下信息生成一条个性化、自然的招呼语。
 
@@ -62,12 +114,8 @@ REVIEW_PROMPT = """请评估以下BOSS直聘招呼语的质量。
 
 
 def _get_resume_summary(config: dict) -> str:
-    """Get a brief resume summary for greeting generation."""
-    resume_path = Path(config.get("profile", {}).get("resume_path", "./resume.md"))
-    if not resume_path.exists():
-        return ""
-    content = resume_path.read_text(encoding="utf-8")
-    return content[:1500]
+	"""Get a brief resume summary for greeting generation."""
+	return build_candidate_context(config, purpose="greeting")
 
 
 def _call_claude(
@@ -388,122 +436,178 @@ def _review_with_token_retry(greeting: str, job: dict, config: dict) -> dict | N
         raise
 
 
-def generate_greetings(config: dict) -> int:
-    """Generate greetings for approved jobs with optional self-review. Returns count generated."""
+def generate_greetings(
+    config: dict,
+    *,
+    job_ids: list[str] | None = None,
+    force_regenerate: bool = False,
+) -> GreetingResult:
+    """Generate greetings while preserving every selected job and checkpoint.
+
+    A single bad response is a job-level failure. Only global credential,
+    quota, model, rate-limit or explicit pause conditions pause the batch.
+    """
     db = get_db()
-    jobs = get_jobs_by_status(db, "approved")
-    _workbench_job_ids = {str(job_id) for job_id in config.get("_workbench_job_ids", [])}
-    if _workbench_job_ids:
-        jobs = [job for job in jobs if str(job["id"]) in _workbench_job_ids]
-
-    if not jobs:
-        console.print("[yellow]没有已确认的岗位可生成招呼语。请先运行 `bosshunter confirm`，或使用 `bosshunter run` 执行完整流程。[/yellow]")
-        db.close()
-        return 0
-
-    resume_summary = _get_resume_summary(config)
-    if not resume_summary:
-        console.print("[red]无法读取简历[/red]")
-        db.close()
-        return 0
-
-    ai_cfg = config.get("ai", {})
-    review_threshold = ai_cfg.get("greeting_review_threshold", 7.0)
+    result = GreetingResult()
     try:
-        max_iterations = max(0, int(ai_cfg.get("greeting_max_iterations", 2) or 0))
-    except (TypeError, ValueError):
-        max_iterations = 2
+        jobs = get_jobs_by_status(db, "approved")
+        requested_ids = {str(value) for value in (job_ids or config.get("_workbench_job_ids", [])) if str(value)}
+        if requested_ids:
+            jobs = [job for job in jobs if str(job["id"]) in requested_ids]
+        if not force_regenerate:
+            jobs = [
+                job for job in jobs
+                if not str(job.get("greeting") or "").strip()
+                or str(job.get("greeting_status") or "") in {"failed", "pending", "generating"}
+            ]
+        result.selected = len(jobs)
 
-    count = 0
-    failed = 0
-    pause_reason = ""
-    stop_event = config.get("_workbench_stop_event")
-    cancelled = False
+        if not jobs:
+            console.print("[yellow]没有已确认且待生成的岗位。[/yellow]")
+            return result
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        task = progress.add_task(f"生成招呼语 (0/{len(jobs)})", total=len(jobs))
+        resume_summary = _get_resume_summary(config)
+        if not resume_summary:
+            console.print("[red]无法读取简历[/red]")
+            result.outcome = "failed"
+            result.remaining = len(jobs)
+            return result
 
-        for index, job in enumerate(jobs, start=1):
-            if stop_event is not None and stop_event.is_set():
-                break
-            best_greeting = None
-            pause_after_current = ""
+        ai_cfg = config.get("ai", {})
+        review_threshold = ai_cfg.get("greeting_review_threshold", 7.0)
+        try:
+            max_iterations = max(0, int(ai_cfg.get("greeting_max_iterations", 2) or 0))
+        except (TypeError, ValueError):
+            max_iterations = 2
 
-            for iteration in range(max_iterations + 1):
-                if stop_event is not None and stop_event.is_set():
+        stop_event = config.get("_workbench_stop_event")
+        pause_event = config.get("_workbench_pause_event")
+        pause_reason = ""
+        processed = 0
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress_task = progress.add_task(f"生成招呼语 (0/{len(jobs)})", total=len(jobs))
+
+            for index, job in enumerate(jobs, start=1):
+                if _event_set(stop_event):
                     break
-                critique = ""
-                if iteration > 0 and best_greeting:
+                if _event_set(pause_event):
+                    pause_reason = "用户已请求暂停"
+                    break
+                mark_job_greeting_generating(db, job["id"])
+                best_greeting = None
+                pause_after_current = ""
+                job_failure: AIRequestError | None = None
+
+                for iteration in range(max_iterations + 1):
+                    if _event_set(stop_event):
+                        break
+                    if _event_set(pause_event):
+                        pause_reason = "用户已请求暂停"
+                        break
+                    critique = ""
+                    if iteration > 0 and best_greeting:
+                        try:
+                            review = _review_with_token_retry(best_greeting, job, config)
+                        except (OperationCancelled, OperationPaused) as exc:
+                            if isinstance(exc, OperationPaused):
+                                pause_reason = str(exc)
+                            break
+                        except AIRequestError as exc:
+                            pause_after_current = exc.user_message
+                            job_failure = exc
+                            break
+                        if review is None:
+                            _notify(config, f"{job['company']}｜{job['title']} 的质量检查返回格式无法识别，已保留可用招呼语并继续。")
+                            break
+                        if review and review.get("avg", 10) >= review_threshold:
+                            break
+                        critique = review.get("critique", "") if review else ""
+
                     try:
-                        review = _review_with_token_retry(best_greeting, job, config)
+                        greeting = _generate_with_token_retry(job, resume_summary, config, critique)
                     except OperationCancelled:
-                        cancelled = True
+                        break
+                    except OperationPaused as exc:
+                        pause_reason = str(exc)
                         break
                     except AIRequestError as exc:
-                        pause_after_current = exc.user_message
+                        job_failure = exc
+                        if best_greeting:
+                            pause_after_current = exc.user_message
+                        elif exc.kind in {"auth", "token_quota", "rate_limit", "model_not_found"}:
+                            pause_reason = exc.user_message
+                        else:
+                            # Network/content failures are isolated to this job
+                            # unless the provider explicitly classifies them as
+                            # a global safety stop.
+                            pass
                         break
-                    if review is None:
-                        _notify(
-                            config,
-                            f"{job['company']}｜{job['title']} 的质量检查返回格式无法识别，已保留可用招呼语并继续。",
-                        )
+
+                    if not greeting:
                         break
-                    if review and review.get("avg", 10) >= review_threshold:
+                    best_greeting = greeting
+                    if max_iterations == 0:
                         break
-                    critique = review.get("critique", "") if review else ""
 
-                try:
-                    greeting = _generate_with_token_retry(job, resume_summary, config, critique)
-                except OperationCancelled:
-                    cancelled = True
+                if _event_set(stop_event):
                     break
-                except AIRequestError as exc:
-                    if best_greeting:
-                        pause_after_current = exc.user_message
-                    else:
-                        pause_reason = exc.user_message
+                if pause_reason and not best_greeting:
+                    break
+                processed += 1
+                if not best_greeting:
+                    result.failed += 1
+                    result.failed_job_ids.append(str(job["id"]))
+                    failure_json = _serialize_greeting_failure(job_failure, attempts=int(job.get("greeting_attempts") or 0) + 1)
+                    update_job_greeting_failure(db, job["id"], failure_json)
+                    add_history(db, job["id"], "greeting_failed", failure_json)
+                    _notify(config, f"已跳过 {job['company']}｜{job['title']}：招呼语未生成，岗位仍保留并可重新生成。")
+                else:
+                    update_job_greeting(db, job["id"], best_greeting)
+                    clear_job_greeting_failure(db, job["id"])
+                    update_job_status(db, job["id"], "ready")
+                    result.generated += 1
+                    result.generated_job_ids.append(str(job["id"]))
+                progress.update(progress_task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
+                if pause_after_current:
+                    pause_reason = pause_after_current
                     break
 
-                if not greeting:
-                    if not best_greeting:
-                        failed += 1
-                    break
+        result.remaining = max(len(jobs) - processed, 0)
+        result.remaining_job_ids = [str(job["id"]) for job in jobs[processed:]]
+        if pause_reason:
+            result.outcome = "paused"
+            result.pause_reason = pause_reason
+            _notify(config, f"招呼语生成已安全暂停：{pause_reason}。已生成内容已保存，剩余 {result.remaining} 个岗位下次运行会继续处理。", error=True)
+        elif _event_set(stop_event):
+            result.outcome = "stopped"
+        elif result.failed:
+            result.outcome = "completed_with_errors"
+            _notify(config, f"本轮有 {result.failed} 个岗位未生成招呼语并保留为待处理，可稍后重试。")
+        return result
+    finally:
+        db.close()
 
-                best_greeting = greeting
-                if max_iterations == 0:
-                    break
 
-            if cancelled or (stop_event is not None and stop_event.is_set()):
-                break
-            if not best_greeting:
-                if not pause_reason and not (stop_event is not None and stop_event.is_set()):
-                    add_history(db, job["id"], "greeting_failed", "AI 未返回完整招呼语，岗位保留为待生成")
-                progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
-                if pause_reason:
-                    break
-                continue
+def _event_set(event) -> bool:
+    return bool(event is not None and event.is_set())
 
-            update_job_greeting(db, job["id"], best_greeting)
-            update_job_status(db, job["id"], "ready")
-            count += 1
-            progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
 
-            if pause_after_current:
-                pause_reason = pause_after_current
-                break
-
-    db.close()
-    if pause_reason:
-        remaining = max(len(jobs) - count, 0)
-        _notify(
-            config,
-            f"招呼语生成已安全暂停：{pause_reason}。已生成内容已保存，剩余 {remaining} 个岗位下次运行会继续处理。",
-            error=True,
-        )
-    if failed:
-        _notify(config, f"本轮有 {failed} 个岗位未生成招呼语并保留为待处理，可稍后重试。")
-    return count
+def _serialize_greeting_failure(error: AIRequestError | None, *, attempts: int) -> str:
+    kind = error.kind if error else "empty_response"
+    message = error.user_message if error else "AI 未返回完整招呼语"
+    payload = {
+        "schema": "bosshunter.greeting_failure.v1",
+        "kind": str(kind)[:64],
+        "user_message": str(message)[:240],
+        "attempts": max(int(attempts), 1),
+        "at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+        "retryable": kind not in {"auth", "token_quota", "model_not_found"},
+    }
+    if error and isinstance(error.status_code, int):
+        payload["status_code"] = error.status_code
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

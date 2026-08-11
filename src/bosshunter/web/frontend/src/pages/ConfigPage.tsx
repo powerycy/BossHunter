@@ -1,64 +1,46 @@
 import { useConfig } from '@/hooks/useConfig'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Select } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
 import { TagsInput } from '@/components/ui/tags-input'
+import { CityMultiSelect, type CityOption } from '@/components/config/CityMultiSelect'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
-import { Save, RotateCcw, Upload, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
+import { Save, RotateCcw, Upload, Trash2, ChevronDown, ChevronRight, ArrowRight, Bot } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-
-// City options
-const CITIES = [
-  '北京', '上海', '深圳', '广州', '杭州', '成都', '武汉', '南京',
-  '西安', '苏州', '天津', '重庆', '郑州', '长沙', '东莞', '佛山',
-  '合肥', '厦门', '青岛', '大连'
-]
-
-const AI_SERVICES = {
-  anthropic: {
-    label: 'Claude / Anthropic',
-    provider: 'anthropic',
-    baseUrl: '',
-    defaultModel: 'claude-sonnet-4-6',
-    keyEnv: 'ANTHROPIC_API_KEY',
-  },
-  deepseek: {
-    label: 'DeepSeek',
-    provider: 'openai_compatible',
-    baseUrl: 'https://api.deepseek.com',
-    defaultModel: '',
-    keyEnv: 'DEEPSEEK_API_KEY',
-  },
-  doubao: {
-    label: '豆包 / 火山方舟',
-    provider: 'openai_compatible',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    defaultModel: '',
-    keyEnv: 'ARK_API_KEY',
-  },
-  custom: {
-    label: '其他 OpenAI 兼容接口',
-    provider: 'openai_compatible',
-    baseUrl: '',
-    defaultModel: '',
-    keyEnv: 'OPENAI_API_KEY',
-  },
-} as const
-
-type AiService = keyof typeof AI_SERVICES
 
 export default function ConfigPage() {
   const { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig } = useConfig()
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({ profile: true, search: true })
   const [resumeInfo, setResumeInfo] = useState<any>(null)
   const [resumeUploadError, setResumeUploadError] = useState('')
-  const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
+  const [cityOptions, setCityOptions] = useState<CityOption[]>([])
+  const [cityRefresh, setCityRefresh] = useState(false)
+  const [cityMessage, setCityMessage] = useState('')
 
   useEffect(() => {
     fetch('/api/resume').then(r => r.json()).then(setResumeInfo).catch(() => {})
+    fetch('/api/cities', { cache: 'no-store' }).then(r => r.json()).then(data => {
+      if (Array.isArray(data.cities)) setCityOptions(data.cities)
+    }).catch(() => setCityMessage('本地城市列表读取失败'))
   }, [])
+
+  const handleCityRefresh = async () => {
+    setCityRefresh(true)
+    setCityMessage('')
+    try {
+      const res = await fetch('/api/cities/refresh', { method: 'POST' })
+      const data = await res.json()
+      if (Array.isArray(data.cities)) setCityOptions(data.cities)
+      if (!res.ok || !data.ok) throw new Error(data.error || '刷新失败，继续使用本地城市数据')
+      setCityMessage(`已刷新 ${data.count} 个城市。`)
+    } catch (err) {
+      setCityMessage(err instanceof Error ? err.message : '刷新失败，继续使用本地城市数据')
+    } finally {
+      setCityRefresh(false)
+    }
+  }
 
   const toggleSection = (key: string) => {
     setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }))
@@ -92,46 +74,6 @@ export default function ConfigPage() {
     updateConfig('profile.resume_path', '')
   }
 
-  const handleAiTest = async () => {
-    if (dirty) {
-      setAiTest({ testing: false, ok: false, message: '请先保存当前配置，再测试 AI 连接。' })
-      return
-    }
-    setAiTest({ testing: true })
-    try {
-      const res = await fetch('/api/diagnostics/ai', { cache: 'no-store' })
-      const data = await res.json()
-      const check = Array.isArray(data.checks) ? data.checks[0] : null
-      setAiTest({
-        testing: false,
-        ok: Boolean(res.ok && data.ok),
-        message: check ? `${check.message}：${check.detail}` : (data.messages?.[0] || 'AI 接口未返回检测结果'),
-      })
-    } catch {
-      setAiTest({ testing: false, ok: false, message: '无法连接本地检测接口，请确认 BossHunter 后端正在运行。' })
-    }
-  }
-
-  const handleAiServiceChange = (service: AiService) => {
-    const currentService = (config?.ai?.service || (config?.ai?.provider === 'openai_compatible' ? 'custom' : 'anthropic')) as AiService
-    if (service === currentService) return
-    if (
-      (config?.ai?.api_key || config?.ai?.api_key_masked || config?.ai?.auth_token_masked)
-      && !window.confirm('切换 AI 服务商会清除当前保存的 AI 凭证，是否继续？')
-    ) {
-      return
-    }
-    const preset = AI_SERVICES[service]
-    updateConfig('ai.service', service)
-    updateConfig('ai.provider', preset.provider)
-    updateConfig('ai.base_url', preset.baseUrl)
-    updateConfig('ai.model', preset.defaultModel)
-    updateConfig('ai.api_key', '')
-    updateConfig('ai.api_key_masked', '')
-    updateConfig('ai.auth_token_masked', '')
-    updateConfig('ai.clear_credentials', true)
-    setAiTest({ testing: false })
-  }
 
   if (loading) {
     return <div className="flex items-center justify-center h-full text-muted text-sm">加载中...</div>
@@ -187,8 +129,8 @@ export default function ConfigPage() {
               ) : (
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-card-border p-6 transition-colors hover:border-primary/50 hover:bg-[#FFFCFA]">
                   <Upload className="mb-2 h-6 w-6 text-muted" />
-                  <span className="text-sm text-muted">拖拽或点击上传 (.md、.docx)</span>
-                  <input type="file" accept=".md,.docx" onChange={handleResumeUpload} className="hidden" />
+                  <span className="text-sm text-muted">拖拽或点击上传 (.md、.txt、.pdf、.docx)</span>
+                  <input type="file" accept=".md,.txt,.pdf,.docx" onChange={handleResumeUpload} className="hidden" />
                 </label>
               )}
               {resumeUploadError && (
@@ -220,30 +162,24 @@ export default function ConfigPage() {
               <TagsInput value={config.search?.keywords || []} onChange={v => updateConfig('search.keywords', v)} />
             </Field>
             <Field label="城市">
-              <div className="flex flex-wrap gap-2">
-                {CITIES.map(city => {
-                  const cities = (config.search?.cities?.length ? config.search.cities : config.profile?.target_cities) || []
-                  const selected = cities.includes(city)
-                  return (
-                    <button
-                      key={city}
-                      type="button"
-                      onClick={() => {
-                        const newCities = selected ? cities.filter((c: string) => c !== city) : [...cities, city]
-                        updateConfig('search.cities', newCities)
-                        updateConfig('profile.target_cities', newCities)
-                      }}
-                      className={`px-2 py-1 text-xs rounded border transition-colors ${selected ? 'bg-primary/20 border-primary/50 text-primary' : 'border-card-border bg-[#FFFCFA] text-muted hover:border-primary/40 hover:text-foreground'}`}
-                    >
-                      {city}
-                    </button>
-                  )
-                })}
-              </div>
+              <CityMultiSelect
+                options={cityOptions}
+                value={(config.search?.cities?.length ? config.search.cities : config.profile?.target_cities) || []}
+                onChange={cities => { updateConfig('search.cities', cities); updateConfig('profile.target_cities', cities) }}
+                onRefresh={handleCityRefresh}
+                refreshing={cityRefresh}
+                message={cityMessage}
+              />
             </Field>
-            <Field label="每关键词翻页数">
-              <Input type="number" value={config.search?.max_pages || 3} onChange={e => updateConfig('search.max_pages', Number(e.target.value))} min={1} max={10} />
-            </Field>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="每个关键词和城市组合采集数">
+                <Input type="number" value={config.search?.target_per_combo || 10} onChange={e => updateConfig('search.target_per_combo', Number(e.target.value))} min={1} max={200} />
+                <p className="mt-1 text-xs text-muted">每个组合分别计算新增唯一岗位，重复岗位不计入目标。</p>
+              </Field>
+              <Field label="最大翻页数（安全上限）">
+                <Input type="number" value={config.search?.max_pages || 3} onChange={e => updateConfig('search.max_pages', Number(e.target.value))} min={1} max={10} />
+              </Field>
+            </div>
           </div>
         </SectionCard>
 
@@ -295,93 +231,10 @@ export default function ConfigPage() {
           </div>
         </SectionCard>
 
-        {/* AI Section */}
-        <SectionCard title="AI 设置" sectionKey="ai" expanded={expandedSections} toggle={toggleSection}>
-          <div className="space-y-4">
-            <Field label="提供商">
-              <Select
-                value={config.ai?.service || (config.ai?.provider === 'openai_compatible' ? 'custom' : 'anthropic')}
-                onChange={e => handleAiServiceChange(e.target.value as AiService)}
-              >
-                {Object.entries(AI_SERVICES).map(([value, preset]) => (
-                  <option key={value} value={value}>{preset.label}</option>
-                ))}
-              </Select>
-              <p className="mt-1 text-xs text-muted">
-                BossHunter 会自动配置协议和服务地址；也可安全复用环境变量 {
-                  AI_SERVICES[(config.ai?.service || (config.ai?.provider === 'openai_compatible' ? 'custom' : 'anthropic')) as AiService].keyEnv
-                }，不会在前端显示其内容。
-              </p>
-            </Field>
-            <Field label="模型名称">
-              <Input value={config.ai?.model || ''} onChange={e => {
-                updateConfig('ai.model', e.target.value)
-                setAiTest({ testing: false })
-              }} placeholder="填写服务商当前支持的模型 ID" />
-            </Field>
-            <Field label="API Key">
-              <Input type="password" value={config.ai?.api_key || ''} onChange={e => {
-                updateConfig('ai.api_key', e.target.value)
-                setAiTest({ testing: false })
-              }} placeholder={config.ai?.api_key_masked || '也可通过环境变量设置'} />
-            </Field>
-            <Field label="Base URL">
-              <Input value={config.ai?.base_url || ''} onChange={e => {
-                updateConfig('ai.base_url', e.target.value)
-                setAiTest({ testing: false })
-              }} placeholder="留空使用默认" />
-            </Field>
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Thinking 模式">
-                <Select
-                  value={config.ai?.thinking || 'auto'}
-                  onChange={e => updateConfig('ai.thinking', e.target.value)}
-                >
-                  <option value="auto">自动兼容（推荐）</option>
-                  <option value="disabled">强制关闭</option>
-                  <option value="enabled">强制开启</option>
-                  <option value="off">不发送参数</option>
-                </Select>
-                <p className="mt-1 text-xs text-muted">自动模式优先获取纯文本；接口不支持 thinking 参数时会安全回退。</p>
-              </Field>
-              <Field label="Thinking 预算 Token">
-                <Input
-                  type="number"
-                  value={config.ai?.thinking_budget || 2048}
-                  onChange={e => updateConfig('ai.thinking_budget', Number(e.target.value))}
-                  min={1024}
-                  max={32768}
-                  disabled={(config.ai?.thinking || 'auto') !== 'enabled'}
-                />
-              </Field>
-            </div>
-            <Field label="AI 请求超时 (秒)">
-              <Input
-                type="number"
-                value={config.ai?.timeout_seconds || 180}
-                onChange={e => updateConfig('ai.timeout_seconds', Number(e.target.value))}
-                min={5}
-                max={600}
-              />
-            </Field>
-            <div className="rounded-2xl border border-card-border bg-[#FFFCFA] p-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-black text-foreground">AI 连接检测</div>
-                  <p className="mt-1 text-xs text-muted">不会消耗对话 Token；检测已保存的 Key、Base URL 和服务可用性。</p>
-                </div>
-                <Button variant="secondary" size="sm" onClick={handleAiTest} disabled={aiTest.testing}>
-                  {aiTest.testing ? '检测中...' : '测试连接'}
-                </Button>
-              </div>
-              {aiTest.message && (
-                <p className={`mt-2 rounded-lg px-3 py-2 text-xs ${
-                  aiTest.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-500'
-                }`}>
-                  {aiTest.message}
-                </p>
-              )}
-            </div>
+        <SectionCard title="AI 状态摘要" sectionKey="ai-summary" expanded={expandedSections} toggle={toggleSection}>
+          <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
+            <div className="flex items-start gap-3"><Bot className="mt-0.5 h-5 w-5 text-primary" /><div><div className="text-sm font-black">{config.ai?.service || 'anthropic'} · {config.ai?.model || '未设置模型'}</div><p className="mt-1 text-xs text-muted">凭据状态：{config.ai?.api_key_masked || config.ai?.has_api_key ? '已配置（已隐藏）' : '未配置或使用环境变量'}</p></div></div>
+            <Link to="/ai-settings" className="inline-flex items-center rounded-xl bg-primary px-3 py-2 text-xs font-black text-white hover:bg-primary/90">打开 AI 设置<ArrowRight className="ml-2 h-3 w-3" /></Link>
           </div>
         </SectionCard>
 

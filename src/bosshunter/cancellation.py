@@ -14,6 +14,10 @@ class OperationCancelled(RuntimeError):
     """Raised when the user stops an in-progress workbench operation."""
 
 
+class OperationPaused(RuntimeError):
+    """Raised when the user pauses an in-progress workbench operation."""
+
+
 def get_stop_event(config: dict | None) -> Event | None:
     """Return the workbench stop event carried in a runtime config."""
     if not isinstance(config, dict):
@@ -22,9 +26,22 @@ def get_stop_event(config: dict | None) -> Event | None:
     return event if isinstance(event, Event) else None
 
 
+def get_pause_event(config: dict | None) -> Event | None:
+    """Return the separate pause event, if the operation is task-controlled."""
+    if not isinstance(config, dict):
+        return None
+    event = config.get("_workbench_pause_event")
+    return event if isinstance(event, Event) else None
+
+
 def stop_requested(config: dict | None) -> bool:
     """Return whether the current workbench task has been asked to stop."""
     event = get_stop_event(config)
+    return bool(event and event.is_set())
+
+
+def pause_requested(config: dict | None) -> bool:
+    event = get_pause_event(config)
     return bool(event and event.is_set())
 
 
@@ -41,10 +58,13 @@ def run_cancellable(
     request may finish later, but its result is discarded.
     """
     stop_event = get_stop_event(config)
-    if stop_event is None:
+    pause_event = get_pause_event(config)
+    if stop_event is None and pause_event is None:
         return operation()
-    if stop_event.is_set():
+    if stop_event is not None and stop_event.is_set():
         raise OperationCancelled("用户已请求停止")
+    if pause_event is not None and pause_event.is_set():
+        raise OperationPaused("用户已请求暂停")
 
     results: Queue[tuple[bool, object]] = Queue(maxsize=1)
 
@@ -58,14 +78,18 @@ def run_cancellable(
 
     timeout = max(float(poll_seconds), 0.01)
     while True:
-        if stop_event.is_set():
+        if stop_event is not None and stop_event.is_set():
             raise OperationCancelled("用户已请求停止")
+        if pause_event is not None and pause_event.is_set():
+            raise OperationPaused("用户已请求暂停")
         try:
             succeeded, value = results.get(timeout=timeout)
         except Empty:
             continue
-        if stop_event.is_set():
+        if stop_event is not None and stop_event.is_set():
             raise OperationCancelled("用户已请求停止")
+        if pause_event is not None and pause_event.is_set():
+            raise OperationPaused("用户已请求暂停")
         if succeeded:
             return value  # type: ignore[return-value]
         raise value  # type: ignore[misc]

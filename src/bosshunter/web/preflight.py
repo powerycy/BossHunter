@@ -15,11 +15,12 @@ from bosshunter.ai.credentials import (
 	get_ai_base_url,
 	get_ai_key_source,
 	get_ai_service,
+	normalize_openai_base_url,
 )
 from bosshunter.browser.diagnostics import run_browser_diagnostics
 
 
-VALID_MODES = {"full", "collect", "rescore", "monitor"}
+VALID_MODES = {"full", "collect", "score", "rescore", "greet", "monitor", "deliver"}
 
 
 def collect_preflight_checks(mode: str, config: dict) -> list[dict[str, str]]:
@@ -27,9 +28,15 @@ def collect_preflight_checks(mode: str, config: dict) -> list[dict[str, str]]:
 	checks = _configuration_checks(mode, config)
 	if mode not in VALID_MODES:
 		return checks
+	if mode in {"score", "greet"}:
+		checks.extend(check_ai_connection(deepcopy(config), required=True))
+		return checks
 
 	with ThreadPoolExecutor(max_workers=2) as executor:
-		ai_future = executor.submit(check_ai_connection, deepcopy(config), mode in {"full", "collect", "rescore"})
+		# Collection is useful before AI is configured. It remains browser-checked,
+		# but missing AI credentials are a warning and never a blocker.
+		ai_required = mode in {"full", "rescore", "deliver"}
+		ai_future = executor.submit(check_ai_connection, deepcopy(config), ai_required)
 		browser_future = executor.submit(check_browser_connection, deepcopy(config))
 		for future, fallback in (
 			(ai_future, _check("ai_connection", "AI 接口连接", "error", "AI 接口检测失败", "请检查 AI 设置后重试。", "config")),
@@ -86,6 +93,11 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 		]
 
 	base_url = str(base_url_value or "").strip()
+	if provider == "openai_compatible" and service == "lulucoding":
+		try:
+			base_url = normalize_openai_base_url(base_url, service)
+		except ValueError:
+			return [_check("ai_base_url", "AI Base URL", severity, "LuluCoding Base URL 无效", "请输入根地址或 /v1 地址。", "config")]
 	if service == "custom" and provider == "openai_compatible" and not base_url:
 		return [
 			_check(
@@ -184,6 +196,21 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 				"config",
 			)
 		]
+	body = getattr(result, "text", None)
+	if isinstance(body, str) and body.strip():
+		content_type = str(getattr(result, "headers", {}).get("content-type", "")).lower()
+		if "html" in content_type or body.lstrip().lower().startswith(("<!doctype", "<html")):
+			return [_check("ai_connection", "AI 接口连接", severity, "AI 接口返回 HTML", "模型列表接口没有返回 JSON，未判定为连接成功。", "config")]
+		try:
+			payload = result.json()
+		except Exception:
+			return [_check("ai_connection", "AI 接口连接", severity, "AI 接口返回非法 JSON", "模型列表接口没有返回可解析的 JSON。", "config")]
+		models = payload.get("data") if isinstance(payload, dict) else None
+		if not isinstance(models, list):
+			return [_check("ai_connection", "AI 接口连接", severity, "模型列表格式无效", "响应缺少 data 模型数组。", "config")]
+		model_ids = {str(item.get("id") or "") for item in models if isinstance(item, dict)}
+		if model not in model_ids and model.lower() not in {item.lower() for item in model_ids}:
+			return [_check("ai_model", "AI 模型", severity, "当前模型不在模型列表中", "请选择服务商返回的模型名称后保存。", "config")]
 
 	return [
 		_check(

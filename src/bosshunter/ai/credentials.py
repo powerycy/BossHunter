@@ -3,6 +3,7 @@
 import hashlib
 import os
 import re
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -125,6 +126,7 @@ def normalize_ai_error(exc: Exception, response: object | None = None) -> AIRequ
         "限流",
         "频率限制",
     )
+    model_markers = ("model not found", "model_not_found", "model does not exist", "unknown model", "模型不存在")
 
     if any(marker in raw for marker in context_markers):
         return AIRequestError("context_limit", "请求内容超过当前模型的上下文限制", status_code)
@@ -132,10 +134,14 @@ def normalize_ai_error(exc: Exception, response: object | None = None) -> AIRequ
         return AIRequestError("output_limit", "当前模型不接受设置的输出 Token 上限", status_code)
     if status_code == 402 or any(marker in raw for marker in quota_markers):
         return AIRequestError("token_quota", "AI Token 额度或账户余额不足", status_code)
+    if status_code == 404 and any(marker in raw for marker in model_markers):
+        return AIRequestError("model_not_found", "当前 AI 模型不存在或不可用", status_code)
     if status_code == 429 or any(marker in raw for marker in rate_markers):
         return AIRequestError("rate_limit", "AI 服务触发请求或 Token 频率限制", status_code)
     if status_code in {401, 403}:
         return AIRequestError("auth", "AI API Key 无效或当前模型没有访问权限", status_code)
+    if isinstance(exc, httpx.TimeoutException):
+        return AIRequestError("timeout", "AI 服务请求超时", status_code)
     if isinstance(exc, httpx.RequestError):
         return AIRequestError("network", "AI 服务连接失败或超时", status_code)
     return AIRequestError("request_failed", "AI 服务请求失败", status_code)
@@ -225,23 +231,21 @@ def _openai_thinking_strategies(
     budget: int,
     max_tokens: int,
 ) -> list[tuple[dict, int]]:
-    """Return OpenAI-compatible strategies for providers with default reasoning."""
+    """Return OpenAI-compatible strategies without sending Thinking by default."""
     expanded_tokens = max(max_tokens, budget + 1024)
     if mode == "enabled":
         # Compatible providers generally enable reasoning by default and do not
         # consistently accept Anthropic's explicit enabled parameter.
         return [({}, expanded_tokens)]
     if mode == "disabled":
-        strategies = [({"thinking": {"type": "disabled"}}, max_tokens)]
-        if expanded_tokens != max_tokens:
-            strategies.append(({"thinking": {"type": "disabled"}}, expanded_tokens))
-        return strategies
+        # An explicit disabled choice may use one safe compatibility fallback,
+        # but it must never become an unbounded retry loop.
+        return [
+            ({"thinking": {"type": "disabled"}}, max_tokens),
+            ({}, max_tokens),
+        ]
     if mode == "auto":
-        strategies = [({"thinking": {"type": "disabled"}}, max_tokens)]
-        if expanded_tokens != max_tokens:
-            strategies.append(({"thinking": {"type": "disabled"}}, expanded_tokens))
-        strategies.append(({}, expanded_tokens))
-        return strategies
+        return [({}, max_tokens)]
     strategies = [({}, max_tokens)]
     if expanded_tokens != max_tokens:
         strategies.append(({}, expanded_tokens))
@@ -303,6 +307,12 @@ def get_ai_api_key(config: dict) -> str | None:
             or os.environ.get("OPENAI_API_KEY")
             or ai_cfg.get("api_key")
         )
+    if service == "lulucoding":
+        return (
+            os.environ.get("LULUCODING_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or ai_cfg.get("api_key")
+        )
     if service == "custom":
         return (
             os.environ.get("OPENAI_API_KEY")
@@ -320,6 +330,7 @@ def get_ai_key_source(config: dict) -> str | None:
     candidates = {
         "deepseek": ("DEEPSEEK_API_KEY", "OPENAI_API_KEY"),
         "doubao": ("ARK_API_KEY", "OPENAI_API_KEY"),
+        "lulucoding": ("LULUCODING_API_KEY", "OPENAI_API_KEY"),
         "custom": ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"),
         "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
     }[service]
@@ -351,6 +362,13 @@ def get_ai_base_url(config: dict) -> str | None:
             or ai_cfg.get("base_url")
             or AI_SERVICE_PRESETS[service]["base_url"]
         )
+    if service == "lulucoding":
+        return (
+            os.environ.get("LULUCODING_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or ai_cfg.get("base_url")
+            or AI_SERVICE_PRESETS[service]["base_url"]
+        )
     if service == "custom":
         return (
             os.environ.get("OPENAI_BASE_URL")
@@ -358,6 +376,32 @@ def get_ai_base_url(config: dict) -> str | None:
             or ai_cfg.get("base_url")
         )
     return os.environ.get("ANTHROPIC_BASE_URL") or ai_cfg.get("base_url")
+
+
+def normalize_openai_base_url(url: str, service: str = "custom") -> str:
+    """Normalize an OpenAI-compatible base without duplicating path segments."""
+    value = str(url or "").strip()
+    if not value:
+        raise ValueError("AI Base URL 不能为空")
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("AI Base URL 必须是有效的 HTTP/HTTPS 地址")
+    if parsed.username or parsed.password:
+        raise ValueError("AI Base URL 不得包含用户名或密码")
+    path = parsed.path.rstrip("/")
+    for endpoint in ("/chat/completions", "/models"):
+        if path.endswith(endpoint):
+            path = path[: -len(endpoint)].rstrip("/")
+            break
+    if str(service).strip().lower() == "lulucoding":
+        # Accept the documented site root, `/v1`, and accidental repeated
+        # suffixes without ever producing `/v1/v1`.
+        path_parts = [part for part in path.split("/") if part]
+        while path_parts and path_parts[-1].lower() == "v1":
+            path_parts.pop()
+        path = "/" + "/".join(path_parts) if path_parts else ""
+        path = f"{path}/v1" if path else "/v1"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
 def build_anthropic_client_kwargs(config: dict) -> dict:
@@ -492,6 +536,10 @@ def call_openai_compatible_text(
     model = ai_cfg.get("model") or ""
     if not api_key or not base_url:
         return None
+    try:
+        base_url = normalize_openai_base_url(base_url, get_ai_service(config))
+    except ValueError as exc:
+        raise AIRequestError("invalid_url", "AI Base URL 无效") from exc
 
     mode, budget = resolve_thinking_options(config, purpose)
     strategies = _openai_thinking_strategies(mode, budget, max_tokens)
@@ -525,14 +573,16 @@ def call_openai_compatible_text(
                 continue
             raise normalize_ai_error(exc, response) from exc
 
-        payload_data = response.json()
+        payload_data = _parse_openai_response(response)
+        if isinstance(payload_data, dict) and payload_data.get("error"):
+            raise normalize_ai_error(RuntimeError("AI provider returned an error"), response)
         choices = payload_data.get("choices", []) if isinstance(payload_data, dict) else []
         if not choices:
             if isinstance(payload_data, dict):
                 direct_text = _extract_text_content(payload_data.get("output_text"))
                 if direct_text:
                     return direct_text
-            continue
+            raise AIRequestError("invalid_response", "AI 响应缺少可用的 choices")
         choice = choices[0] if isinstance(choices[0], dict) else {}
         if choice.get("finish_reason") in {"length", "max_tokens"}:
             output_truncated = True
@@ -544,11 +594,33 @@ def call_openai_compatible_text(
             text = _extract_text_content(choice.get("text"))
         if text:
             return text
+        raise AIRequestError("empty_response", "AI 响应中没有可用文本")
     if output_truncated:
         raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
     if compatibility_error is not None:
         raise normalize_ai_error(compatibility_error) from compatibility_error
     return None
+
+
+def _parse_openai_response(response: object) -> dict:
+    """Parse a non-streaming response without leaking HTML or raw payloads."""
+    content_type = str(getattr(response, "headers", {}).get("content-type", "")).lower()
+    body_text = getattr(response, "text", None)
+    if body_text is not None:
+        body_text = str(body_text)
+        if not body_text.strip():
+            raise AIRequestError("empty_response", "AI 接口返回空响应")
+        if "html" in content_type or body_text.lstrip().lower().startswith(("<!doctype", "<html")):
+            raise AIRequestError("invalid_content_type", "AI 接口返回了 HTML，而不是 JSON")
+    try:
+        payload = response.json()
+    except AIRequestError:
+        raise
+    except Exception as exc:
+        raise AIRequestError("invalid_json", "AI 接口返回不是合法 JSON") from exc
+    if not isinstance(payload, dict):
+        raise AIRequestError("invalid_response", "AI 接口 JSON 顶层结构无效")
+    return payload
 
 
 def _match_model_name(requested: str, available: list[str]) -> str | None:
