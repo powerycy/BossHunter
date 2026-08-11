@@ -479,8 +479,11 @@ def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
 		if task.stop_requested.is_set():
 			return
 		if selected_job_ids and generated_count != len(selected_job_ids):
-			raise RuntimeError(
-				f"招呼语生成失败：选择 {len(selected_job_ids)} 个岗位，仅成功生成 {generated_count} 条；未发送任何消息"
+			failed_count = max(len(selected_job_ids) - generated_count, 0)
+			_log(
+				task,
+				f"招呼语生成部分完成：成功 {generated_count}，失败 {failed_count}；"
+				"已生成的岗位继续发送，失败岗位保留待下次处理",
 			)
 	_log(task, "发送招呼语")
 	sent_count = send_greetings(config, force=True)

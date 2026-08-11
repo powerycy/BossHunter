@@ -896,6 +896,33 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertIn("1 个岗位发送失败已单独记录，继续后续流程", task.logs)
         self.assertIn("1 个岗位因今日发送额度未执行，已保留在“待发送招呼语”", task.logs)
 
+    def test_deliver_continues_when_one_selected_greeting_cannot_be_generated(self):
+        # Arrange
+        task = WorkbenchTask(id="partial-greeting", mode="deliver", label="投递")
+        config = {"_workbench_job_ids": ["job-a", "job-b"]}
+        send_config_seen = {}
+
+        def fake_send(send_config, force=False):
+            send_config_seen.update(send_config)
+            send_config["_workbench_send_report"] = {
+                "sent_count": 1,
+                "failed_count": 0,
+                "deferred_count": 0,
+                "quota_deferred_count": 0,
+                "stop_reason": None,
+            }
+            return 1
+
+        # Act: one AI generation failure must not prevent the usable greeting
+        # from entering the send flow.
+        with patch("bosshunter.ai.greeter.generate_greetings", return_value=1), \
+             patch("bosshunter.executor.sender.send_greetings", side_effect=fake_send):
+            server._execute_deliver(task, config)
+
+        # Assert
+        self.assertEqual(send_config_seen["_workbench_job_ids"], ["job-a", "job-b"])
+        self.assertTrue(any("招呼语生成部分完成：成功 1，失败 1" in log for log in task.logs))
+
     def test_deliver_still_stops_on_account_risk_signal(self):
         # Arrange
         task = WorkbenchTask(id="risk-delivery", mode="full", label="运行全流程")
