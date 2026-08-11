@@ -145,7 +145,8 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
     if config_path.exists():
         with open(config_path, encoding="utf-8") as f:
             user_cfg = yaml.safe_load(f) or {}
-        _deep_merge(cfg, user_cfg)
+        if isinstance(user_cfg, dict):
+            _deep_merge(cfg, user_cfg)
     normalize_scoring_config(cfg)
     _validate_ai_provider(cfg)
     return cfg
@@ -153,6 +154,10 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
 
 def normalize_scoring_config(config: dict[str, Any]) -> dict[str, Any]:
     """Normalize score thresholds shared by config loading and API writes."""
+    for section, defaults in DEFAULTS.items():
+        if isinstance(defaults, dict) and not isinstance(config.get(section), dict):
+            config[section] = _deep_copy_dict(defaults)
+
     scoring = config.setdefault("scoring", {})
     raw_delete_threshold = scoring.get("low_score_delete_threshold", 50)
     try:
@@ -165,10 +170,7 @@ def normalize_scoring_config(config: dict[str, Any]) -> dict[str, Any]:
         scoring["deep_scoring"] = raw_deep_scoring.strip().lower() in {"1", "true", "yes", "on"}
     else:
         scoring["deep_scoring"] = bool(raw_deep_scoring)
-    search = config.get("search")
-    if not isinstance(search, dict):
-        search = _deep_copy_dict(DEFAULTS["search"])
-        config["search"] = search
+    search = config["search"]
     search["collection_concurrency"] = get_collection_concurrency(config)
     return config
 

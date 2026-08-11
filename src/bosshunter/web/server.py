@@ -7,11 +7,14 @@ Serves:
 
 import json
 import mimetypes
+import os
+import tempfile
 import time
 from copy import deepcopy
 from pathlib import Path
 from threading import Event, Lock
 
+import yaml
 from bottle import Bottle, request, response, static_file, abort
 
 from bosshunter import __version__
@@ -153,6 +156,43 @@ def _redact_config_for_response(config):
 	if warnings:
 		redacted["_warnings"] = {"unreadable_search_values": warnings}
 	return redacted
+
+
+def _config_download_payload(config: dict) -> str:
+	"""Serialize a shareable config backup without credentials."""
+	redacted = _redact_config_for_response(config)
+	ai_cfg = redacted.get("ai")
+	if isinstance(ai_cfg, dict):
+		ai_cfg.pop("api_key_masked", None)
+		ai_cfg.pop("auth_token_masked", None)
+	return yaml.dump(redacted, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def _write_config(config: dict) -> None:
+	"""Atomically replace config.yaml so an interrupted write cannot corrupt it."""
+	CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+	temporary_path = None
+	try:
+		with tempfile.NamedTemporaryFile(
+			"w",
+			encoding="utf-8",
+			dir=CONFIG_PATH.parent,
+			prefix=f".{CONFIG_PATH.name}.",
+			suffix=".tmp",
+			delete=False,
+		) as temporary:
+			temporary_path = Path(temporary.name)
+			yaml.dump(config, temporary, allow_unicode=True, default_flow_style=False, sort_keys=False)
+			temporary.flush()
+			os.fsync(temporary.fileno())
+		os.replace(temporary_path, CONFIG_PATH)
+		temporary_path = None
+	finally:
+		if temporary_path is not None:
+			try:
+				temporary_path.unlink()
+			except FileNotFoundError:
+				pass
 
 
 def _sanitize_config_for_write(data):
@@ -956,8 +996,7 @@ def api_config_post():
 			return _json_response({"error": "salary_min must be <= salary_max"}, 400)
 
 		# Write YAML (backend exclusively owns YAML serialization)
-		with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-			yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+		_write_config(data)
 
 		return _json_response({"success": True, "message": "配置已保存"})
 	except Exception as e:
@@ -979,7 +1018,7 @@ def api_config_download():
 	if CONFIG_PATH.exists():
 		response.content_type = "application/x-yaml; charset=utf-8"
 		response.headers["Content-Disposition"] = "attachment; filename=config.yaml"
-		return CONFIG_PATH.read_text(encoding="utf-8")
+		return _config_download_payload(load_config(CONFIG_PATH))
 	abort(404, "config.yaml not found")
 
 
@@ -1043,8 +1082,7 @@ def api_resume_upload():
 		# Update config
 		config = load_config(CONFIG_PATH)
 		config.setdefault("profile", {})["resume_path"] = str(dest)
-		with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-			yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+		_write_config(config)
 
 		return _json_response({
 			"success": True,
@@ -1066,8 +1104,7 @@ def api_resume_delete():
 
 		# Never delete the master resume from disk; only detach it from config.
 		config.setdefault("profile", {})["resume_path"] = ""
-		with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-			yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+		_write_config(config)
 
 		return _json_response({"success": True})
 	except Exception as e:
