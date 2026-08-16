@@ -1,0 +1,21 @@
+{
+  "schema": "bosshunter.zhilian_cities.v1",
+  "source": "bundled_public_reference_snapshot",
+  "fetched_at": null,
+  "note": "用户只需填写城市名称；编码由内置智联目录自动匹配。运行前仍需在授权环境中核验页面行为，匹配不到的城市不会复用 BOSS 编码。",
+  "cities": [
+    {"name": "全国", "code": "489"},
+    {"name": "北京", "code": "530"},
+    {"name": "上海", "code": "538"},
+    {"name": "天津", "code": "531"},
+    {"name": "广州", "code": "763"},
+    {"name": "深圳", "code": "765"},
+    {"name": "成都", "code": "801"},
+    {"name": "杭州", "code": "653"},
+    {"name": "武汉", "code": "736"},
+    {"name": "大连", "code": "600"},
+    {"name": "南京", "code": "635"},
+    {"name": "苏州", "code": "639"},
+    {"name": "西安", "code": "854"}
+  ]
+}

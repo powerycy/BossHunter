@@ -87,13 +87,39 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
     _migrate_v1_1(conn)
     _migrate_v1_2(conn)
+    _migrate_v1_3(conn)
     _init_scoring_runs(conn)
+    _init_collection_runs(conn)
 
 
 def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
     """Check if a job already exists in the database."""
     row = conn.execute("SELECT 1 FROM jobs WHERE id = ?", (job_id,)).fetchone()
     return row is not None
+
+
+def job_identity_exists(
+    conn: sqlite3.Connection,
+    source_platform: str,
+    source_job_id: str,
+    *,
+    legacy_job_id: str | None = None,
+) -> bool:
+    """Check a platform identity while retaining old BOSS id compatibility."""
+    source_platform = str(source_platform or "boss").strip() or "boss"
+    source_job_id = str(source_job_id or "").strip()
+    if not source_job_id:
+        return bool(legacy_job_id and job_exists(conn, str(legacy_job_id)))
+    row = conn.execute(
+        "SELECT 1 FROM jobs WHERE source_platform = ? AND source_job_id = ? LIMIT 1",
+        (source_platform, source_job_id),
+    ).fetchone()
+    if row is not None:
+        return True
+    if source_platform == "boss":
+        fallback_id = str(legacy_job_id or source_job_id)
+        return job_exists(conn, fallback_id)
+    return False
 
 
 def _normalize_job_ids(job_ids: Any, *, required: bool = False) -> list[str]:
@@ -298,15 +324,48 @@ def permanent_delete_jobs(
     return {"requested_count": len(ids), "affected_count": len(ids)}
 
 
-def insert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
-    """Insert a new job record."""
-    conn.execute("""
-        INSERT OR IGNORE INTO jobs (id, title, company, salary, city, experience, jd,
-            hr_name, hr_title, hr_active, company_size, company_industry, url)
-        VALUES (:id, :title, :company, :salary, :city, :experience, :jd,
-            :hr_name, :hr_title, :hr_active, :company_size, :company_industry, :url)
-    """, job)
+def insert_job_if_new(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
+    """Insert a job atomically and return True only when a row was inserted."""
+    values = {
+        "id": str(job.get("id") or ""),
+        "title": str(job.get("title") or ""),
+        "company": str(job.get("company") or ""),
+        "salary": job.get("salary", ""),
+        "city": job.get("city", ""),
+        "experience": job.get("experience", ""),
+        "jd": job.get("jd", ""),
+        "hr_name": job.get("hr_name", ""),
+        "hr_title": job.get("hr_title", ""),
+        "hr_active": job.get("hr_active", ""),
+        "company_size": job.get("company_size", ""),
+        "company_industry": job.get("company_industry", ""),
+        "url": job.get("url", ""),
+        "source_platform": str(job.get("source_platform") or "boss"),
+        "source_job_id": str(job.get("source_job_id") or "") or None,
+        "source_keyword": job.get("source_keyword", ""),
+        "source_city_code": job.get("source_city_code", ""),
+    }
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO jobs (
+            id, title, company, salary, city, experience, jd,
+            hr_name, hr_title, hr_active, company_size, company_industry, url,
+            source_platform, source_job_id, source_keyword, source_city_code
+        ) VALUES (
+            :id, :title, :company, :salary, :city, :experience, :jd,
+            :hr_name, :hr_title, :hr_active, :company_size, :company_industry, :url,
+            :source_platform, :source_job_id, :source_keyword, :source_city_code
+        )
+        """,
+        values,
+    )
     conn.commit()
+    return cursor.rowcount == 1
+
+
+def insert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
+    """Backward-compatible insert entry point; returns whether it was new."""
+    return insert_job_if_new(conn, job)
 
 
 def update_job_score(conn: sqlite3.Connection, job_id: str, score: int, reason: str) -> None:
@@ -429,6 +488,29 @@ def _migrate_v1_2(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_v1_3(conn: sqlite3.Connection) -> None:
+    """Add source identity columns without rewriting existing BOSS ids."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    additions = {
+        "source_platform": "TEXT NOT NULL DEFAULT 'boss'",
+        "source_job_id": "TEXT NULL",
+        "source_keyword": "TEXT NULL",
+        "source_city_code": "TEXT NULL",
+    }
+    for name, definition in additions.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_source_identity
+        ON jobs(source_platform, source_job_id)
+        WHERE source_job_id IS NOT NULL AND TRIM(source_job_id) <> ''
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_source_platform ON jobs(source_platform)")
+    conn.commit()
+
+
 def _init_scoring_runs(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -446,6 +528,29 @@ def _init_scoring_runs(conn: sqlite3.Connection) -> None:
             finished_at TIMESTAMP NULL
         );
         CREATE INDEX IF NOT EXISTS idx_scoring_runs_status ON scoring_runs(status);
+        """
+    )
+    conn.commit()
+
+
+def _init_collection_runs(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS collection_runs (
+            id TEXT PRIMARY KEY,
+            task_id TEXT,
+            status TEXT NOT NULL,
+            options_json TEXT NOT NULL,
+            platform_states_json TEXT NOT NULL,
+            collected_job_ids_json TEXT NOT NULL,
+            current_platform TEXT,
+            stop_reason TEXT,
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            finished_at TIMESTAMP NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_collection_runs_status ON collection_runs(status);
         """
     )
     conn.commit()

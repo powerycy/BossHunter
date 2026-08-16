@@ -18,6 +18,12 @@ from bosshunter.db import (
     update_job_status, add_history,
 )
 from bosshunter.throttle import RequestThrottle, SendWindowChecker
+from bosshunter.executor.zhilian_actions import (
+    check_zhilian_replies,
+    extract_zhilian_conversation,
+    open_zhilian_conversation,
+    send_zhilian_message,
+)
 
 console = Console()
 
@@ -462,8 +468,12 @@ def _generate_auto_reply(messages: list[dict], job: dict, config: dict) -> str |
     return _call_claude(prompt, config)
 
 
-def _send_message_in_chat(target_id: str, message: str) -> bool:
+def _send_message_in_chat(target_id: str, message: str, *, platform: str = "boss", config: dict | None = None) -> bool:
     """Send a text message in the current open chat via Vue handleSubmit."""
+    if str(platform or "boss").strip().lower() == "zhilian":
+        result = send_zhilian_message(target_id, message, config or {})
+        return bool(result.get("success") and result.get("verified"))
+
     js_send = f"""
     (() => {{
         const input = document.querySelector('#chat-input');
@@ -505,6 +515,8 @@ def _open_conversation(job: dict, config: dict) -> str | None:
     """
     if stop_requested(config):
         return None
+    if str(job.get("source_platform") or "boss").strip().lower() == "zhilian":
+        return open_zhilian_conversation(job, config)
     job_url = job.get("url", "")
 
     # Strategy A: Via job URL (try up to 2 times)
@@ -724,7 +736,7 @@ def _deliver_resume_to_chat(target_id: str) -> bool:
     return True  # Optimistic - resume dialog appeared and we clicked send
 
 
-def check_replies(config: dict) -> list[dict]:
+def _check_boss_replies(config: dict, tracked_jobs: list[dict] | None = None) -> list[dict]:
     """Open BOSS chat page and detect conversations with HR replies.
 
     Returns list of conversations with replies (including matched job info).
@@ -737,12 +749,17 @@ def check_replies(config: dict) -> list[dict]:
     chat_url = monitor_cfg.get("chat_url", "https://www.zhipin.com/web/geek/chat")
 
     # Get jobs we've sent greetings to (or already replied/resume_sent/follow_up_sent/needs_resume - keep monitoring)
-    sent_jobs = get_jobs_by_status(db, "sent")
-    replied_jobs = get_jobs_by_status(db, "replied")
-    resume_sent_jobs = get_jobs_by_status(db, "resume_sent")
-    follow_up_jobs = get_jobs_by_status(db, "follow_up_sent")
-    needs_resume_jobs = get_jobs_by_status(db, "needs_resume")
-    all_tracked_jobs = sent_jobs + replied_jobs + resume_sent_jobs + follow_up_jobs + needs_resume_jobs
+    if tracked_jobs is None:
+        sent_jobs = get_jobs_by_status(db, "sent")
+        replied_jobs = get_jobs_by_status(db, "replied")
+        resume_sent_jobs = get_jobs_by_status(db, "resume_sent")
+        follow_up_jobs = get_jobs_by_status(db, "follow_up_sent")
+        needs_resume_jobs = get_jobs_by_status(db, "needs_resume")
+        tracked_jobs = sent_jobs + replied_jobs + resume_sent_jobs + follow_up_jobs + needs_resume_jobs
+    all_tracked_jobs = [
+        job for job in tracked_jobs
+        if str(job.get("source_platform") or "boss").strip().lower() == "boss"
+    ]
 
     if not all_tracked_jobs:
         console.print("[dim]没有需要监测的对话[/dim]")
@@ -823,6 +840,25 @@ def check_replies(config: dict) -> list[dict]:
     return results
 
 
+def check_replies(config: dict) -> list[dict]:
+    """Check BOSS and智联 conversations through their platform adapters."""
+    db = get_db()
+    try:
+        tracked = []
+        for status in ("sent", "replied", "resume_sent", "follow_up_sent", "needs_resume"):
+            tracked.extend(get_jobs_by_status(db, status))
+    finally:
+        db.close()
+    boss_results = _check_boss_replies(config, tracked)
+    zhilian_jobs = [
+        job for job in tracked
+        if str(job.get("source_platform") or "boss").strip().lower() == "zhilian"
+    ]
+    if not zhilian_jobs:
+        return boss_results
+    return boss_results + check_zhilian_replies(config, zhilian_jobs)
+
+
 def _match_conversation_to_job(conv: dict, jobs: list[dict]) -> dict | None:
     """Match a chat conversation to a job record."""
     conv_hr = conv.get("hr_name", "").strip()
@@ -884,20 +920,24 @@ def _handle_conversation(job: dict, config: dict) -> str:
         close_tab(target_id)
         return "stopped"
 
-    # Extract full conversation messages
-    raw = evaluate(target_id, JS_EXTRACT_CONVERSATION)
+    # Extract full conversation messages through the platform adapter.
+    is_zhilian = str(job.get("source_platform") or "boss").strip().lower() == "zhilian"
+    raw = None if is_zhilian else evaluate(target_id, JS_EXTRACT_CONVERSATION)
     if stop_requested(config):
         close_tab(target_id)
         return "stopped"
-    if not raw:
+    if is_zhilian:
+        messages = extract_zhilian_conversation(target_id)
+    elif not raw:
+        messages = []
+    else:
+        try:
+            messages = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            messages = []
+    if not messages:
         close_tab(target_id)
         console.print("[yellow]    无法获取对话内容[/yellow]")
-        return "failed"
-
-    try:
-        messages = json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, TypeError):
-        close_tab(target_id)
         return "failed"
 
     # Check if I already replied after the last HR message
@@ -968,7 +1008,7 @@ def _handle_conversation(job: dict, config: dict) -> str:
                 if stop_requested(config):
                     close_tab(target_id)
                     return "stopped"
-                if _send_message_in_chat(target_id, link_msg):
+                if _send_message_in_chat(target_id, link_msg, platform="zhilian" if is_zhilian else "boss", config=config):
                     console.print("[green]    ✓ 在线简历链接已发送[/green]")
                 else:
                     console.print("[yellow]    ! 在线简历链接发送失败[/yellow]")
@@ -1054,7 +1094,7 @@ def _handle_conversation(job: dict, config: dict) -> str:
     if stop_requested(config):
         close_tab(target_id)
         return "stopped"
-    if _send_message_in_chat(target_id, reply):
+    if _send_message_in_chat(target_id, reply, platform="zhilian" if is_zhilian else "boss", config=config):
         console.print("[green]    ✓ 自动回复已发送[/green]")
         db = get_db()
         add_history(db, job["id"], "auto_replied", _build_reply_detail(messages, reply))
@@ -1203,7 +1243,12 @@ def _check_follow_ups(config: dict, throttle, replied_job_ids: set | None = None
         if stop_event and stop_event.is_set():
             close_tab(target_id)
             break
-        if _send_message_in_chat(target_id, follow_up_msg):
+        if _send_message_in_chat(
+            target_id,
+            follow_up_msg,
+            platform=str(job.get("source_platform") or "boss"),
+            config=config,
+        ):
             console.print(f"[green]  ✓ 跟进: {job['company']} - {job['title']}[/green]")
             update_job_status(db, job["id"], "follow_up_sent")
             add_history(db, job["id"], "follow_up_sent", follow_up_msg[:100])

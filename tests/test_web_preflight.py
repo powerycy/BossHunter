@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 import httpx
 
-from bosshunter.web.preflight import check_ai_connection, check_browser_connection
+from bosshunter.web.preflight import check_ai_connection, check_browser_connection, collect_preflight_checks
 
 
 class AiPreflightTests(unittest.TestCase):
@@ -63,6 +63,25 @@ class AiPreflightTests(unittest.TestCase):
 
 
 class BrowserPreflightTests(unittest.TestCase):
+	@patch("bosshunter.web.preflight.check_ai_connection")
+	@patch("bosshunter.web.preflight.check_browser_connection")
+	def test_full_flow_accepts_enabled_zhilian_before_start(self, browser_check, ai_check):
+		ai_check.return_value = []
+		browser_check.return_value = []
+		config = {
+			"search": {"keywords": ["人力"]},
+			"platforms": {
+				"boss": {"enabled": True},
+				"zhilian": {"enabled": True},
+			},
+		}
+
+		checks = collect_preflight_checks("full", config)
+
+		platform_check = next(check for check in checks if check["id"] == "full_flow_platform")
+		self.assertEqual(platform_check["status"], "pass")
+		self.assertIn("智联", platform_check["detail"])
+
 	@patch("bosshunter.web.preflight.run_browser_diagnostics")
 	def test_running_runtime_is_reused_when_node_is_not_on_path(self, diagnostics):
 		diagnostics.return_value = {
@@ -134,6 +153,27 @@ class BrowserPreflightTests(unittest.TestCase):
 		product_check = next(check for check in checks if check["id"] == "chrome_product")
 		self.assertEqual(product_check["status"], "error")
 		self.assertIn("Chromium", product_check["message"])
+
+	@patch("bosshunter.web.preflight.run_browser_diagnostics")
+	def test_selected_zhilian_requires_real_search_page_state(self, diagnostics):
+		diagnostics.return_value = {
+			"node": {"available": True, "version": "v22"},
+			"runtime": True,
+			"chrome": True,
+			"browser_name": "Google Chrome",
+			"browser_product": "Chrome/138.0",
+			"boss_tab": None,
+			"zhilian_tab": {"targetId": "2"},
+			"zhilian_page": {"status": "login_required", "message": "智联页面要求登录"},
+			"errors": [],
+			"runtime_url": "http://127.0.0.1:3456",
+		}
+
+		checks = check_browser_connection({}, {"platform_order": ["zhilian"]})
+
+		login_check = next(check for check in checks if check["id"] == "zhilian_login")
+		self.assertEqual(login_check["status"], "error")
+		self.assertIn("要求登录", login_check["message"])
 
 
 if __name__ == "__main__":

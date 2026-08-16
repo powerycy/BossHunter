@@ -1,0 +1,736 @@
+"""智联招聘 collector and offline HTML parser.
+
+The selectors and URL shape in this module are intentionally isolated. They are
+candidate site patterns and must be rechecked against an authorized, current
+browser session before being treated as stable platform facts.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from dataclasses import dataclass, field
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import Any, Callable
+from urllib.parse import parse_qs, quote, urljoin, urlparse
+
+from bosshunter.browser import (
+    click as browser_click,
+    close_tab,
+    evaluate,
+    new_tab,
+    press_key as browser_press_key,
+    scroll,
+    type_text as browser_type_text,
+    wait_for_load,
+)
+from bosshunter.collection.base import CollectionBlockedError, CollectionError, CollectorHooks
+from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
+
+
+SEARCH_URL = "https://www.zhaopin.com/sou/jl{city_code}/"
+DETAIL_BASE_URL = "https://www.zhaopin.com"
+CITY_SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "data" / "zhilian_cities.json"
+LIST_ITEM_CLASSES = ("joblist-box__item", "joblist-item", "job-card")
+TITLE_CLASSES = ("summary-planes__title", "jobinfo__name", "job-name", "job-title")
+SALARY_CLASSES = ("summary-planes__salary", "jobinfo__salary", "job-salary", "salary")
+COMPANY_CLASSES = ("company-info__name", "companyinfo__name", "company-name", "company")
+CITY_CLASSES = ("jobinfo__city", "job-city", "city", "summary-planes__info", "address-info__content")
+JD_CLASSES = (
+    "describtion-card__detail-content",
+    "describtion__detail-content",
+    "job-detail",
+    "jobdetail",
+    "job-intro",
+    "job-description",
+)
+DETAIL_PATH_PATTERN = re.compile(r"/(?:jobdetail|job|position|detail)/[^/?]+", re.IGNORECASE)
+
+
+def load_zhilian_city_snapshot() -> dict[str, Any]:
+    """Load the isolated, local-only 智联 city snapshot without network access."""
+    try:
+        payload = json.loads(CITY_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        payload = {}
+    cities = payload.get("cities") if isinstance(payload, dict) and isinstance(payload.get("cities"), list) else []
+    return {
+        "schema": "bosshunter.zhilian_cities.v1",
+        "source": str(payload.get("source") or "manual_authorized_snapshot_required") if isinstance(payload, dict) else "manual_authorized_snapshot_required",
+        "fetched_at": payload.get("fetched_at") if isinstance(payload, dict) else None,
+        "note": payload.get("note", "智联城市编码需要人工核验") if isinstance(payload, dict) else "智联城市编码需要人工核验",
+        "cities": cities,
+    }
+
+
+def _city_name_variants(city: str) -> set[str]:
+    """Match normal user input without treating BOSS codes as Zhilian codes."""
+    value = str(city or "").strip()
+    if not value:
+        return set()
+    variants = {value}
+    for suffix in ("市", "地区", "自治州"):
+        if value.endswith(suffix) and len(value) > len(suffix):
+            variants.add(value[: -len(suffix)])
+    return variants
+
+
+def get_zhilian_city_code(city: str) -> str | None:
+    """Resolve a city name from the local Zhilian-only snapshot."""
+    variants = _city_name_variants(city)
+    if not variants:
+        return None
+    for item in load_zhilian_city_snapshot()["cities"]:
+        if not isinstance(item, dict):
+            continue
+        names = _city_name_variants(str(item.get("name") or ""))
+        if variants & names and str(item.get("code") or "").strip():
+            return str(item["code"]).strip()
+    return None
+
+JS_SUBMIT_SEARCH = """
+(() => {
+  const input = document.querySelector('input[placeholder="输入职位、公司等搜索"], input[placeholder*="职位、公司"]');
+  if (!input) return JSON.stringify({ok: false, reason: 'search_input_missing'});
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  if (setter) setter.call(input, __KEYWORD__);
+  else input.value = __KEYWORD__;
+  input.focus();
+  input.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: __KEYWORD__}));
+  input.dispatchEvent(new Event('change', {bubbles: true}));
+  const button = document.querySelector('.query-search__content-button, button[class*="query-search"]');
+  if (button) {
+    button.click();
+    return JSON.stringify({ok: true, value: input.value, submitted_by: 'button'});
+  }
+  input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
+  input.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
+  return JSON.stringify({ok: true, value: input.value, submitted_by: 'enter'});
+})()
+"""
+
+JS_FOCUS_SEARCH_INPUT = """
+(() => {
+  const input = document.querySelector('input[placeholder="输入职位、公司等搜索"], input[placeholder*="职位、公司"]');
+  if (!input) return JSON.stringify({ok: false, reason: 'search_input_missing'});
+  input.focus();
+  return JSON.stringify({ok: true, value: input.value || '', active: document.activeElement === input});
+})()
+"""
+
+JS_CLICK_SEARCH_BUTTON = """
+(() => {
+  const input = document.querySelector('input[placeholder="输入职位、公司等搜索"], input[placeholder*="职位、公司"]');
+  const button = document.querySelector('.query-search__content-button, button[class*="query-search"]');
+  if (!button) return JSON.stringify({ok: false, reason: 'search_button_missing'});
+  button.click();
+  return JSON.stringify({ok: true, value: input ? input.value || '' : '', submitted_by: 'button'});
+})()
+"""
+
+JS_READ_SEARCH_STATE = """
+(() => {
+  const input = document.querySelector('input[placeholder="输入职位、公司等搜索"], input[placeholder*="职位、公司"]');
+  const items = Array.from(document.querySelectorAll(
+    'div.joblist-box__item, div.joblist-item, article.job-card'
+  )).slice(0, 8);
+  const signature = items.map((item) => {
+    const link = item.querySelector('a[href*="/jobdetail/"], a[href*="/job/"], a[href*="/position/"], a[href*="/detail/"]');
+    return (link?.getAttribute('href') || item.textContent || '').trim().slice(0, 240);
+  }).join('|');
+  return JSON.stringify({
+    url: window.location.href,
+    input: input ? input.value || '' : '',
+    signature,
+    item_count: items.length,
+  });
+})()
+"""
+
+JS_NAVIGATE_PAGE = """
+(() => {
+  const url = new URL(window.location.href);
+  const page = String(__PAGE__);
+  if (/\\/p\\d+\\/?$/.test(url.pathname)) {
+    url.pathname = url.pathname.replace(/\\/p\\d+\\/?$/, `/p${page}`);
+  } else {
+    url.pathname = `${url.pathname.replace(/\\/?$/, '')}/p${page}`;
+  }
+  window.location.href = url.toString();
+  return JSON.stringify({ok: true, url: url.toString()});
+})()
+"""
+
+JS_EXTRACT_LIST = """
+(() => {
+  const text = document.body ? document.body.innerText : '';
+  const expectedCity = "__EXPECTED_CITY__";
+  const searchInput = document.querySelector('input[placeholder="输入职位、公司等搜索"], input[placeholder*="职位、公司"]');
+  const blockedMatch = text.match(/验证码|滑块|访问频繁|频率限制|账号异常|拒绝访问/);
+  const items = Array.from(document.querySelectorAll(
+    'div.joblist-box__item, div.joblist-item, article.job-card'
+  )).map((item) => {
+    const first = (selectors) => selectors.map((s) => item.querySelector(s)).find(Boolean);
+    const title = first(['a.jobinfo__name', '.job-name', '.job-title']);
+    const salary = first(['p.jobinfo__salary', '.job-salary', '.salary']);
+    const company = first(['.companyinfo__name', '.company-name', '.company']);
+    const info = Array.from(item.querySelectorAll('.jobinfo__other-info-item')).map((node) => node.textContent.trim()).filter(Boolean);
+    const cityNode = first(['.jobinfo__city', '.job-city', '.city']);
+    const city = info.find(value => expectedCity && value.includes(expectedCity)) || (cityNode ? cityNode.textContent.trim() : '') || info[0] || expectedCity;
+    const detailLink = item.querySelector('a[href*="/jobdetail/"], a[href*="/job/"], a[href*="/position/"], a[href*="/detail/"]');
+    const href = [
+      title ? title.getAttribute('href') : '',
+      detailLink ? detailLink.getAttribute('href') : ''
+    ].find(Boolean) || '';
+    let matchedId = null;
+    try {
+      const detailPath = new URL(href, window.location.href).pathname;
+      matchedId = detailPath.match(/\\/(?:jobdetail|job|position|detail)\\/([^/?]+?)(?:\\.html?)?$/i);
+    } catch (_) {}
+    return {
+      source_job_id: item.getAttribute('data-positionid') || item.getAttribute('data-job-id') || item.getAttribute('data-id')
+        || (title ? title.getAttribute('data-positionid') : '') || (detailLink ? detailLink.getAttribute('data-positionid') : '')
+        || (matchedId ? matchedId[1] : ''),
+      title: title ? title.textContent.trim() : '',
+      salary: salary ? salary.textContent.trim() : '',
+      company: company ? company.textContent.trim() : '',
+      city,
+      url: href
+    };
+  });
+  const hasListRegion = Boolean(document.querySelector('.positionlist__list, [class*="positionlist"]'));
+  const loginWallText = /请先登录|请登录|登录后(?:查看|继续|获取)|登录失效|账号登录|扫码登录/.test(text);
+  const loginDialog = Boolean(document.querySelector('[role="dialog"], .login-dialog, [class*="login-modal"], [class*="login-dialog"]'));
+  const loginRequired = loginWallText && (!searchInput || loginDialog || !items.length);
+  const status = blockedMatch ? 'blocked' : loginRequired ? 'login_required' : items.length ? 'ready' : hasListRegion ? 'empty' : 'selector_changed';
+  return JSON.stringify({status, blocked_code: blockedMatch ? blockedMatch[0] : '', items, has_search_input: Boolean(searchInput)});
+})()
+"""
+
+JS_EXTRACT_DETAIL = """
+(() => {
+  const expectedCity = "__EXPECTED_CITY__";
+  const first = (selectors) => selectors.map((s) => document.querySelector(s)).find(Boolean);
+  const jd = first(['.describtion-card__detail-content', '.describtion__detail-content', '.job-detail', '.jobdetail', '.job-intro', '.job-description']);
+  const title = first(['.summary-planes__title', 'h1.jobinfo__name', '.job-name', '.job-title', 'h1']);
+  const salary = first(['.summary-planes__salary', 'p.jobinfo__salary', '.job-salary', '.salary']);
+  const company = first(['.company-info__name', 'div.companyinfo__name', '.company-name', '.company']);
+  const cityNode = first(['.address-info__content', '.summary-planes__info', '.jobinfo__city', '.job-city', '.city']);
+  const cityText = cityNode ? cityNode.textContent.trim() : '';
+  const city = expectedCity && cityText.includes(expectedCity) ? expectedCity : cityText;
+  return JSON.stringify({
+    title: title ? title.textContent.trim() : '', salary: salary ? salary.textContent.trim() : '',
+    company: company ? company.textContent.trim() : '', city,
+    jd: jd ? jd.textContent.trim() : '', url: window.location.href
+  });
+})()
+"""
+
+
+def _js_literal(value: Any) -> str:
+    return json.dumps(str(value or ""), ensure_ascii=False)
+
+
+def _build_submit_search_script(keyword: str) -> str:
+    return JS_SUBMIT_SEARCH.replace("__KEYWORD__", _js_literal(keyword))
+
+
+def _build_page_script(page: int) -> str:
+    return JS_NAVIGATE_PAGE.replace("__PAGE__", str(int(page)))
+
+
+def _build_list_script(city: str) -> str:
+    return JS_EXTRACT_LIST.replace('"__EXPECTED_CITY__"', _js_literal(city))
+
+
+def _build_detail_script(city: str) -> str:
+    return JS_EXTRACT_DETAIL.replace('"__EXPECTED_CITY__"', _js_literal(city))
+
+
+@dataclass
+class _Node:
+    tag: str
+    attrs: dict[str, str]
+    parent: "_Node | None" = None
+    children: list["_Node | str"] = field(default_factory=list)
+
+    def text(self) -> str:
+        return " ".join(
+            item.text() if isinstance(item, _Node) else str(item)
+            for item in self.children
+        ).strip()
+
+    def has_class(self, class_name: str) -> bool:
+        return class_name in set(self.attrs.get("class", "").split())
+
+    def descendants(self) -> list["_Node"]:
+        result: list[_Node] = []
+        for item in self.children:
+            if isinstance(item, _Node):
+                result.append(item)
+                result.extend(item.descendants())
+        return result
+
+    def find_class(self, names: tuple[str, ...]) -> "_Node | None":
+        nodes = [self, *self.descendants()]
+        for name in names:
+            for node in nodes:
+                if node.has_class(name):
+                    return node
+        return None
+
+
+class _TreeParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.root = _Node("root", {})
+        self.current = self.root
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        normalized = {key: str(value or "") for key, value in attrs}
+        node = _Node(tag.lower(), normalized, self.current)
+        self.current.children.append(node)
+        if tag.lower() not in {"br", "img", "input", "meta", "link", "hr"}:
+            self.current = node
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if self.current.parent is not None:
+            self.current = self.current.parent
+
+    def handle_endtag(self, tag: str) -> None:
+        node = self.current
+        while node is not self.root:
+            if node.tag == tag.lower():
+                self.current = node.parent or self.root
+                return
+            node = node.parent or self.root
+
+    def handle_data(self, data: str) -> None:
+        if data.strip():
+            self.current.children.append(data)
+
+
+def _parse_tree(html: str) -> _Node:
+    parser = _TreeParser()
+    parser.feed(str(html or ""))
+    parser.close()
+    return parser.root
+
+
+def _blocked_reason(html: str) -> tuple[str, str] | None:
+    text = re.sub(r"\s+", " ", str(html or "")).strip()
+    if "验证码" in text or "滑块" in text:
+        return "captcha", "智联页面要求完成验证码，已停止当前平台"
+    if "账号异常" in text:
+        return "login_required", "智联页面报告账号异常，请人工检查登录状态"
+    if "访问频繁" in text or "频率限制" in text:
+        return "rate_limit", "智联页面报告访问频率受限，已停止当前平台"
+    if re.search(r"请(?:先)?登录|登录后(?:查看|继续)|登录失效|账号登录|扫码登录", text):
+        return "login_required", "智联页面要求登录，已停止当前平台"
+    return None
+
+
+def _source_job_id(url: str, attrs: dict[str, str] | None = None) -> str:
+    attrs = attrs or {}
+    for key in ("source_job_id", "data-positionid", "data-job-id", "data-id", "positionid", "jobid"):
+        if attrs.get(key):
+            return str(attrs[key]).strip()
+    parsed = urlparse(str(url or ""))
+    for key in ("positionid", "jobid", "id"):
+        value = parse_qs(parsed.query).get(key, [""])[0].strip()
+        if value:
+            return value
+    match = re.search(r"/(?:jobdetail|job|position|detail)/([^/?]+?)(?:\.html?)?$", parsed.path)
+    return match.group(1) if match else ""
+
+
+def _detail_url(url: str, source_job_id: str) -> str:
+    """Return a direct detail URL, falling back to the card's platform ID."""
+    candidate_url = urljoin(DETAIL_BASE_URL, str(url or "").strip())
+    parsed = urlparse(candidate_url)
+    if parsed.netloc.lower().endswith("zhaopin.com") and DETAIL_PATH_PATTERN.search(parsed.path):
+        return candidate_url
+    source_job_id = str(source_job_id or "").strip()
+    if source_job_id:
+        return urljoin(DETAIL_BASE_URL, f"/jobdetail/{quote(source_job_id, safe='')}.htm")
+    return ""
+
+
+def _city_node(node: _Node, city: str = "") -> _Node | None:
+    """Find the current list location field without mistaking experience for city."""
+    expected = str(city or "").replace("市", "").strip()
+    location_nodes = [item for item in [node, *node.descendants()] if item.has_class("jobinfo__other-info-item")]
+    for item in location_nodes:
+        if expected and expected in item.text().replace("市", ""):
+            return item
+    return node.find_class(CITY_CLASSES)
+
+
+def _detail_href(node: _Node) -> str:
+    title_node = node.find_class(TITLE_CLASSES)
+    title_href = str((title_node.attrs if title_node else {}).get("href") or "").strip()
+    if title_href:
+        return title_href
+    for item in [node, *node.descendants()]:
+        if item.tag != "a":
+            continue
+        href = str(item.attrs.get("href") or "").strip()
+        if href and DETAIL_PATH_PATTERN.search(urlparse(urljoin(DETAIL_BASE_URL, href)).path):
+            return href
+    return ""
+
+
+def parse_zhilian_list_html(html: str, *, city: str = "", source_keyword: str = "") -> list[dict[str, str]]:
+    """Parse a saved search-page fixture without opening a browser."""
+    blocked = _blocked_reason(html)
+    if blocked:
+        raise CollectionBlockedError(*blocked)
+    root = _parse_tree(html)
+    nodes = [
+        node for node in root.descendants()
+        if any(node.has_class(name) for name in LIST_ITEM_CLASSES)
+        and not any(node.parent and node.parent.has_class(name) for name in LIST_ITEM_CLASSES)
+    ]
+    if not nodes:
+        visible = root.text()
+        if visible and len(visible) > 40:
+            raise CollectionError("selector_changed", "智联列表选择器未命中，可能是页面结构变化")
+        return []
+    result: list[dict[str, str]] = []
+    for node in nodes:
+        title_node = node.find_class(TITLE_CLASSES)
+        salary_node = node.find_class(SALARY_CLASSES)
+        company_node = node.find_class(COMPANY_CLASSES)
+        city_node = _city_node(node, city)
+        href = _detail_href(node)
+        source_id = _source_job_id(href, node.attrs)
+        title = title_node.text() if title_node else ""
+        company = company_node.text() if company_node else ""
+        detail_url = _detail_url(href, source_id)
+        if not source_id or not title or not company or not detail_url:
+            continue
+        result.append({
+            "source_job_id": source_id,
+            "title": title,
+            "company": company,
+            "salary": salary_node.text() if salary_node else "",
+            "city": city_node.text() if city_node else city,
+            "url": detail_url,
+            "source_keyword": source_keyword,
+        })
+    return result
+
+
+def parse_zhilian_detail_html(
+    html: str,
+    *,
+    source_job_id: str = "",
+    list_candidate: dict[str, str] | None = None,
+) -> dict[str, str]:
+    blocked = _blocked_reason(html)
+    if blocked:
+        raise CollectionBlockedError(*blocked)
+    root = _parse_tree(html)
+    title_node = root.find_class(TITLE_CLASSES)
+    company_node = root.find_class(COMPANY_CLASSES)
+    salary_node = root.find_class(SALARY_CLASSES)
+    city_node = _city_node(root, str((list_candidate or {}).get("city") or ""))
+    jd_node = root.find_class(JD_CLASSES)
+    candidate = list_candidate or {}
+    result = {
+        "source_job_id": source_job_id or candidate.get("source_job_id", ""),
+        "title": (title_node.text() if title_node else "") or candidate.get("title", ""),
+        "company": (company_node.text() if company_node else "") or candidate.get("company", ""),
+        "salary": (salary_node.text() if salary_node else "") or candidate.get("salary", ""),
+        "city": (
+            candidate.get("city", "")
+            if city_node and candidate.get("city") and (
+                candidate["city"] in city_node.text()
+                or re.split(r"[·\s]", candidate["city"])[0] in city_node.text()
+            )
+            else (city_node.text() if city_node else "") or candidate.get("city", "")
+        ),
+        "jd": jd_node.text() if jd_node else "",
+        "url": _detail_url(candidate.get("url", ""), source_job_id or candidate.get("source_job_id", "")),
+    }
+    if not result["source_job_id"] or not result["title"] or not result["company"] or not result["url"] or not result["city"]:
+        raise CollectionError("parse_failed", "智联详情缺少岗位身份、职位、公司、城市或链接")
+    if not result["jd"]:
+        raise CollectionError("parse_failed", "智联详情未提取到完整 JD")
+    return result
+
+
+@dataclass
+class ZhilianBrowser:
+    new_tab: Callable[..., str | None] = new_tab
+    close_tab: Callable[[str], bool] = close_tab
+    evaluate: Callable[..., Any] = evaluate
+    scroll: Callable[..., bool] = scroll
+    wait_for_load: Callable[..., bool] = wait_for_load
+    # Optional so existing offline fakes can continue to exercise evaluate-only
+    # parsing. The real collector wires these to the shared Browser Runtime.
+    click_action: Callable[..., bool] | None = None
+    type_text_action: Callable[..., bool] | None = None
+    press_key_action: Callable[..., bool] | None = None
+
+
+class ZhilianCollector:
+    platform = "zhilian"
+
+    def __init__(self, *, browser: ZhilianBrowser | None = None):
+        if browser is not None:
+            self.browser = browser
+        else:
+            self.browser = ZhilianBrowser(
+                click_action=browser_click,
+                type_text_action=browser_type_text,
+                press_key_action=browser_press_key,
+            )
+
+    def _submit_keyword(self, target_id: str, keyword: str) -> None:
+        before_state = self._search_state(target_id)
+        actions = (
+            self.browser.click_action,
+            self.browser.type_text_action,
+            self.browser.press_key_action,
+        )
+        if all(action is not None for action in actions):
+            # The runtime click endpoint uses DOM click(), which does not
+            # reliably focus an input on the current 智联 SPA. Focus it first
+            # and verify the controlled value after CDP typing.
+            focused = self._parse_payload(self.browser.evaluate(target_id, JS_FOCUS_SEARCH_INPUT))
+            if focused.get("ok") is False:
+                raise CollectionError("selector_changed", "智联搜索框选择器未命中，可能是页面结构变化")
+            if not self.browser.click_action(target_id, 'input[placeholder="输入职位、公司等搜索"]'):
+                raise CollectionError("selector_changed", "智联搜索框选择器未命中，可能是页面结构变化")
+            # The city landing page normally starts with an empty search box.
+            # Clear it first when the platform restores a previous query.
+            if not self.browser.press_key_action(target_id, "SelectAll"):
+                raise CollectionError("selector_changed", "智联搜索框无法聚焦")
+            if not self.browser.press_key_action(target_id, "Backspace"):
+                raise CollectionError("selector_changed", "智联搜索框无法清空")
+            if not self.browser.type_text_action(target_id, keyword, human=True):
+                raise CollectionError("selector_changed", "智联搜索框无法输入关键词")
+            typed_state = self._search_state(target_id)
+            if typed_state and typed_state.get("input") != keyword:
+                # Keep a DOM-backed fallback for runtimes whose CDP keyboard
+                # path still fails to update a controlled input.
+                submitted = self.browser.evaluate(target_id, _build_submit_search_script(keyword))
+            else:
+                # The current 智联 page does not consistently handle the raw
+                # CDP Enter event. Click its real search button, which follows
+                # the platform's own submission path.
+                submitted = self.browser.evaluate(target_id, JS_CLICK_SEARCH_BUTTON)
+            submit_payload = self._parse_payload(submitted)
+            if submit_payload.get("ok") is False:
+                raise CollectionError("selector_changed", "智联搜索按钮选择器未命中，可能是页面结构变化")
+            if submit_payload.get("ok") and submit_payload.get("value") != keyword:
+                raise CollectionError("search_not_applied", "智联搜索框未写入目标关键词")
+            self._wait_for_search_results(target_id, keyword, before_state)
+            return
+
+        # Keep the evaluate seam for unit-test fakes and older Browser Runtime
+        # adapters. It uses the same DOM setter and real search button as the
+        # current live page instead of relying on synthetic key events alone.
+        submitted = self.browser.evaluate(target_id, _build_submit_search_script(keyword))
+        submit_payload = self._parse_payload(submitted)
+        if isinstance(submit_payload, dict) and submit_payload.get("ok") is False:
+            raise CollectionError("selector_changed", "智联搜索框选择器未命中，可能是页面结构变化")
+        if submit_payload.get("ok") and submit_payload.get("value") != keyword:
+            raise CollectionError("search_not_applied", "智联搜索框未写入目标关键词")
+        self._wait_for_search_results(target_id, keyword, before_state)
+
+    @staticmethod
+    def _parse_payload(value: Any) -> dict[str, Any]:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return {}
+        return value if isinstance(value, dict) else {}
+
+    def _search_state(self, target_id: str) -> dict[str, Any]:
+        payload = self._parse_payload(self.browser.evaluate(target_id, JS_READ_SEARCH_STATE))
+        # Older fakes/adapters may return the list payload for every evaluate
+        # call. Only treat the dedicated state shape as live search state.
+        if not any(key in payload for key in ("url", "input", "signature", "item_count")):
+            return {}
+        return payload
+
+    def _wait_for_search_results(
+        self,
+        target_id: str,
+        keyword: str,
+        before_state: dict[str, Any],
+        timeout: float = 8.0,
+    ) -> None:
+        """Wait until the keyword route and refreshed list are both observable.
+
+        ``wait_for_load`` is insufficient for this SPA: the document remains
+        ``complete`` while the old city list is still on screen. If an adapter
+        cannot expose search state (for example an older offline fake), leave
+        the compatibility seam untouched.
+        """
+        if not before_state:
+            return
+        old_signature = str(before_state.get("signature") or "")
+        deadline = time.monotonic() + timeout
+        last_state: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            last_state = self._search_state(target_id)
+            if not last_state:
+                return
+            url = str(last_state.get("url") or "")
+            value = str(last_state.get("input") or "")
+            keyword_route = bool(re.search(r"/kw[^/]+(?:/|$)", url, re.IGNORECASE))
+            refreshed = str(last_state.get("signature") or "") != old_signature
+            if value == keyword and keyword_route and refreshed:
+                return
+            time.sleep(0.5)
+        if last_state and str(last_state.get("input") or "") != keyword:
+            raise CollectionError("search_not_applied", "智联搜索框关键词未生效，已停止采集以避免采到无关岗位")
+        raise CollectionError("search_not_applied", "智联搜索结果未按目标关键词刷新，已停止采集以避免采到无关岗位")
+
+    @staticmethod
+    def build_search_url(request: PlatformCollectionRequest, city: str, keyword: str, page: int) -> str:
+        code = str(request.city_codes.get(city) or "").strip()
+        if not code:
+            raise CollectionError("no_valid_city", f"未配置智联城市编码：{city}")
+        # 智联当前把关键词编码到 /kw.../ 路径中，编码规则由页面脚本生成；
+        # 先打开城市搜索页，再通过搜索框提交关键词，避免猜测私有编码。
+        return SEARCH_URL.format(city_code=quote(code))
+
+    def collect(self, request: PlatformCollectionRequest, hooks: CollectorHooks) -> PlatformCollectionResult:
+        if any(not str(request.city_codes.get(city) or "").strip() for city in request.cities):
+            return PlatformCollectionResult(self.platform, "failed", "no_valid_city", "智联城市编码未配置")
+        for city in request.cities:
+            for keyword in request.keywords:
+                target_id: str | None = None
+                try:
+                    try:
+                        search_url = self.build_search_url(request, city, keyword, 1)
+                    except CollectionError as exc:
+                        return PlatformCollectionResult(self.platform, "failed", exc.code, exc.message)
+                    target_id = self.browser.new_tab(search_url, background=True)
+                    if not target_id:
+                        return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "无法打开智联搜索页")
+                    for page in range(1, request.max_pages + 1):
+                        if hooks.stop_event is not None and hooks.stop_event.is_set():
+                            return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                        hooks.on_event(phase="loading_list", keyword=keyword, city=city, page=page)
+                        try:
+                            self.browser.wait_for_load(target_id, timeout=10)
+                            if page == 1:
+                                self._submit_keyword(target_id, keyword)
+                            else:
+                                self.browser.evaluate(target_id, _build_page_script(page))
+                            self.browser.wait_for_load(target_id, timeout=10)
+                        except CollectionError as exc:
+                            return PlatformCollectionResult(self.platform, "blocked", exc.code, exc.message)
+                        except Exception:
+                            return PlatformCollectionResult(self.platform, "blocked", "selector_changed", "智联搜索页未能正常加载")
+                        try:
+                            self.browser.scroll(target_id, y=2600)
+                            raw = self.browser.evaluate(target_id, _build_list_script(city))
+                            payload = json.loads(raw) if isinstance(raw, str) else raw
+                            if isinstance(payload, list):
+                                items = payload
+                                status = "ready" if items else "empty"
+                            elif isinstance(payload, dict):
+                                items = payload.get("items", [])
+                                status = str(payload.get("status") or ("ready" if items else "empty"))
+                            else:
+                                items = []
+                                status = "selector_changed"
+                            if status == "blocked":
+                                raise CollectionBlockedError("blocked", "智联页面受到验证码、频率限制或账号异常拦截，已停止当前平台")
+                            if status == "login_required":
+                                raise CollectionBlockedError("login_required", "智联页面要求登录，已停止当前平台")
+                            if status == "selector_changed":
+                                raise CollectionError("selector_changed", "智联列表选择器未命中，可能是页面结构变化")
+                            if not isinstance(items, list):
+                                raise CollectionError("selector_changed", "智联列表返回格式无效")
+                        except CollectionBlockedError as exc:
+                            return PlatformCollectionResult(self.platform, "blocked", exc.code, exc.message)
+                        except (CollectionError, json.JSONDecodeError, TypeError) as exc:
+                            code = exc.code if isinstance(exc, CollectionError) else "selector_changed"
+                            message = str(exc) or "智联列表解析失败，可能是页面结构变化"
+                            return PlatformCollectionResult(self.platform, "blocked", code, message)
+                        if not items:
+                            return PlatformCollectionResult(self.platform, "completed", "no_results", "智联没有更多搜索结果")
+                        for raw_item in items:
+                            candidate = self._candidate_from_list(raw_item, city, keyword)
+                            if candidate is None or not hooks.on_list_candidate(candidate):
+                                continue
+                            hooks.on_event(phase="loading_detail", keyword=keyword, city=city, page=page)
+                            detail_target = self.browser.new_tab(candidate.url, background=True)
+                            if not detail_target:
+                                hooks.on_parse_failed("无法打开智联详情页")
+                                continue
+                            try:
+                                self.browser.wait_for_load(detail_target, timeout=10)
+                                raw_detail = self.browser.evaluate(detail_target, _build_detail_script(city))
+                            finally:
+                                self.browser.close_tab(detail_target)
+                            try:
+                                detail = json.loads(raw_detail) if isinstance(raw_detail, str) else raw_detail
+                                if not isinstance(detail, dict):
+                                    raise CollectionError("parse_failed", "智联详情返回格式无效")
+                                if not detail.get("source_job_id"):
+                                    detail["source_job_id"] = candidate.source_job_id
+                                if not detail.get("url"):
+                                    detail["url"] = candidate.url
+                                if not detail.get("city"):
+                                    detail["city"] = candidate.city
+                                if not detail.get("jd"):
+                                    raise CollectionError("parse_failed", "智联详情未提取到完整 JD")
+                                final = self._candidate_from_detail(detail, candidate)
+                                if not final.title or not final.company or not final.url or not final.jd:
+                                    raise CollectionError("parse_failed", "智联详情缺少职位、公司、链接或 JD")
+                            except CollectionBlockedError as exc:
+                                return PlatformCollectionResult(self.platform, "blocked", exc.code, exc.message)
+                            except (CollectionError, json.JSONDecodeError, TypeError) as exc:
+                                hooks.on_parse_failed(str(exc) or "智联详情解析失败")
+                                continue
+                            if not hooks.on_candidate(final):
+                                return PlatformCollectionResult(self.platform, "completed", "target_reached", "已达到目标新增数量")
+                finally:
+                    if target_id:
+                        self.browser.close_tab(target_id)
+        return PlatformCollectionResult(self.platform, "completed", "search_exhausted", "智联搜索结果已采集完毕")
+
+    @staticmethod
+    def _candidate_from_list(raw: Any, city: str, keyword: str) -> JobCandidate | None:
+        if not isinstance(raw, dict):
+            return None
+        raw_url = str(raw.get("url") or "").strip()
+        source_id = str(raw.get("source_job_id") or raw.get("id") or _source_job_id(raw_url) or "").strip()
+        url = _detail_url(raw_url, source_id)
+        title = str(raw.get("title") or "").strip()
+        company = str(raw.get("company") or "").strip()
+        # Company data can be rendered after the title/link on the live page.
+        # Defer the required company validation to the detail page, matching
+        # the BOSS collector's candidate-selection boundary.
+        if not source_id or not url or not title:
+            return None
+        return JobCandidate(
+            platform="zhilian", source_job_id=source_id, title=title, company=company,
+            salary=str(raw.get("salary") or "").strip(), city=str(raw.get("city") or city).strip(),
+            url=url, source_keyword=keyword,
+        )
+
+    @staticmethod
+    def _candidate_from_detail(detail: dict[str, Any], base: JobCandidate) -> JobCandidate:
+        source_job_id = str(detail.get("source_job_id") or base.source_job_id)
+        detail_url = _detail_url(str(detail.get("url") or ""), source_job_id) or base.url
+        return JobCandidate(
+            platform="zhilian", source_job_id=source_job_id,
+            title=str(detail.get("title") or base.title).strip(), company=str(detail.get("company") or base.company).strip(),
+            salary=str(detail.get("salary") or base.salary).strip(), city=str(detail.get("city") or base.city).strip(),
+            experience=str(detail.get("experience") or "").strip(), education=str(detail.get("education") or "").strip(),
+            jd=str(detail.get("jd") or "").strip(), url=detail_url,
+            source_keyword=base.source_keyword,
+        )

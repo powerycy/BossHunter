@@ -18,11 +18,14 @@ MAX_EXPORT_JOB_IDS = 1000
 
 EXPORT_COLUMNS = [
 	("岗位 ID", "id"),
+	("来源平台", "source_platform_label"),
+	("来源岗位 ID", "source_job_id"),
+	("来源关键词", "source_keyword"),
 	("职位", "title"),
 	("公司", "company"),
 	("薪资", "salary"),
 	("城市", "city"),
-	("BOSS 城市编码", "city_code"),
+	("平台城市编码", "platform_city_code"),
 	("工作经验", "experience"),
 	("JD", "jd"),
 	("HR 姓名", "hr_name"),
@@ -93,6 +96,12 @@ def _filtered_rows(conn: sqlite3.Connection, filters: dict[str, Any] | None = No
 	if status:
 		conditions.append("status = ?")
 		params.append(status)
+	source_platform = str(filters.get("source_platform") or "").strip()
+	if source_platform:
+		if source_platform not in {"boss", "zhilian"}:
+			raise ValueError("source_platform 参数无效")
+		conditions.append("COALESCE(source_platform, 'boss') = ?")
+		params.append(source_platform)
 	minimum_score = filters.get("min_score")
 	if minimum_score not in (None, ""):
 		try:
@@ -198,8 +207,18 @@ def _greeting_failure_reason(job: dict[str, Any]) -> str:
 
 
 def _row_values(job: dict[str, Any]) -> list[Any]:
-	city_code = str(job.get("city_code") or "").strip() or (get_city_code(str(job.get("city") or "")) or "")
-	job = {**job, "city_code": city_code, "score_failure_reason": _failure_reason(job), "greeting_failure_reason": _greeting_failure_reason(job)}
+	platform = str(job.get("source_platform") or "boss").strip() or "boss"
+	platform_labels = {"boss": "BOSS 直聘", "zhilian": "智联招聘"}
+	city_code = str(job.get("source_city_code") or "").strip()
+	if not city_code and platform == "boss":
+		city_code = str(job.get("city_code") or "").strip() or (get_city_code(str(job.get("city") or "")) or "")
+	job = {
+		**job,
+		"source_platform_label": platform_labels.get(platform, platform),
+		"platform_city_code": city_code,
+		"score_failure_reason": _failure_reason(job),
+		"greeting_failure_reason": _greeting_failure_reason(job),
+	}
 	return [job.get(key, "") if job.get(key) is not None else "" for _, key in EXPORT_COLUMNS]
 
 

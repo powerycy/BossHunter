@@ -1853,6 +1853,93 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(resolved_item["resolved"])
         self.assertEqual(resolved_item["resume_path"], "/tmp/generated.md")
 
+    def test_full_task_receives_global_boss_collection_options(self):
+        config = {
+            "search": {"keywords": ["旧关键词"], "cities": ["北京"]},
+            "profile": {"target_cities": ["北京"]},
+            "collection": {"default_order": ["boss"]},
+            "platforms": {
+                "boss": {"enabled": True, "search": {"keywords": ["全局关键词"], "cities": ["上海"], "max_pages": 2, "sort": "newest", "target_count": 4}},
+                "zhilian": {"enabled": False, "search": {}},
+            },
+        }
+        with patch.object(server, "load_config", return_value=config), patch.object(server, "_preflight_messages", return_value=[]), patch.object(
+            server.task_runner, "start", return_value={"id": "full-global-config"}
+        ) as start:
+            status, _, body = self._request("/api/workbench/task", method="POST", json_body={"mode": "full"})
+
+        self.assertTrue(status.startswith("200"), body)
+        task_config = start.call_args.args[1]
+        self.assertEqual(task_config["_collection_options"]["platforms"]["boss"]["keywords"], ["全局关键词"])
+        self.assertEqual(task_config["_collection_options"]["platforms"]["boss"]["cities"], ["上海"])
+        self.assertEqual(task_config["_collection_options"]["platforms"]["boss"]["target_count"], 4)
+        self.assertTrue(task_config["_collection_options"]["auto_score"])
+
+    def test_full_task_accepts_enabled_zhilian_before_starting(self):
+        config = {
+            "search": {"keywords": ["人力"], "cities": ["深圳"]},
+            "profile": {"resume_path": "C:/resume.md"},
+            "ai": {"api_key": "test-key"},
+            "collection": {"default_order": ["boss", "zhilian"]},
+            "platforms": {
+                "boss": {"enabled": True, "search": {"keywords": ["人力"], "cities": ["深圳"]}},
+                "zhilian": {"enabled": True, "search": {"keywords": ["人力"], "cities": ["深圳"]}},
+            },
+        }
+        with patch.object(server, "load_config", return_value=config), patch.object(server, "_preflight_messages", return_value=[]), patch.object(
+            server.task_runner, "start", return_value={"id": "full-with-zhilian"}
+        ) as start:
+            status, _, body = self._request("/api/workbench/task", method="POST", json_body={"mode": "full"})
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(json.loads(body)["id"], "full-with-zhilian")
+        start.assert_called_once()
+        task_config = start.call_args.args[1]
+        self.assertEqual(task_config["_collection_options"]["platform_order"], ["boss", "zhilian"])
+        self.assertTrue(task_config["_collection_options"]["auto_score"])
+
+    def test_full_task_accepts_dialog_options_and_persists_global_search_settings(self):
+        config = {
+            "profile": {"resume_path": "C:/resume.md"},
+            "ai": {"api_key": "test-key"},
+            "collection": {"default_order": ["boss"]},
+            "platforms": {
+                "boss": {"enabled": True, "search": {}},
+                "zhilian": {"enabled": False, "search": {}},
+            },
+        }
+        options = {
+            "platform_order": ["zhilian"],
+            "auto_score": False,
+            "platforms": {
+                "zhilian": {
+                    "keywords": ["人力"],
+                    "cities": ["深圳"],
+                    "city_codes": {"深圳": "765"},
+                    "max_pages": 3,
+                    "sort": "default",
+                    "target_count": 3,
+                },
+            },
+        }
+        with patch.object(server, "load_config", return_value=config), patch.object(server, "_preflight_messages", return_value=[]), patch.object(
+            server, "_write_config"
+        ) as write_config, patch.object(server.task_runner, "start", return_value={"id": "full-dialog-options"}) as start:
+            status, _, body = self._request(
+                "/api/workbench/task",
+                method="POST",
+                json_body={"mode": "full", "options": options},
+            )
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(json.loads(body)["id"], "full-dialog-options")
+        task_config = start.call_args.args[1]
+        self.assertTrue(task_config["_collection_options"]["auto_score"])
+        persisted = write_config.call_args.args[0]
+        self.assertEqual(persisted["collection"]["default_order"], ["zhilian"])
+        self.assertEqual(persisted["platforms"]["zhilian"]["search"]["cities"], ["深圳"])
+        self.assertTrue(persisted["platforms"]["zhilian"]["enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

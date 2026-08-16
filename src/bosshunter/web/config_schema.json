@@ -27,6 +27,25 @@
       ]
     },
     {
+      "key": "collection",
+      "label": "岗位采集队列",
+      "icon": "ListOrdered",
+      "fields": [
+        {"key": "default_order", "label": "默认平台顺序", "type": "multi-select", "options": ["boss", "zhilian"], "default": ["boss"]},
+        {"key": "auto_score_default", "label": "采集后自动评分", "type": "switch", "default": false},
+        {"key": "default_target_count", "label": "默认目标新增数量", "type": "number", "min": 1, "max": 500, "default": 10}
+      ]
+    },
+    {
+      "key": "platforms",
+      "label": "平台采集设置",
+      "icon": "Layers",
+      "fields": [
+        {"key": "boss", "label": "BOSS 直聘独立设置", "type": "object", "description": "配置页保存 BOSS 的关键词、城市、页数、排序和目标新增数量；城市编码由系统管理"},
+        {"key": "zhilian", "label": "智联招聘独立设置", "type": "object", "description": "配置页保存智联的关键词、城市、页数、排序和目标新增数量；城市编码由内置智联目录自动匹配，招呼和监测使用智联专用页面适配器"}
+      ]
+    },
+    {
       "key": "scoring",
       "label": "评分设置",
       "icon": "Star",

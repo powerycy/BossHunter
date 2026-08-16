@@ -46,6 +46,14 @@ from bosshunter.db import (
 	soft_delete_jobs,
 	update_job_status,
 )
+from bosshunter.collection.capabilities import platform_supports
+from bosshunter.collection.orchestrator import CollectionOrchestrator, normalize_collection_options
+from bosshunter.collection.platforms.zhilian import load_zhilian_city_snapshot
+from bosshunter.collection_run_store import (
+	get_collection_run,
+	list_collection_runs,
+	mark_orphaned_collection_runs_stopped,
+)
 from bosshunter.job_filters import parse_monthly_salary_k
 from bosshunter.job_export import InvalidJobSelectionError, export_jobs, export_row_count
 from bosshunter.scoring_run_store import (
@@ -109,6 +117,7 @@ def set_base_dir(base_dir: Path | str) -> None:
 	RESUME_DIR = DATA_DIR / "resumes"
 	CONFIG_PATH = BASE_DIR / "config.yaml"
 	mark_orphaned_scoring_runs_paused(DATA_DIR / "bosshunter.db")
+	mark_orphaned_collection_runs_stopped(DATA_DIR / "bosshunter.db")
 
 
 def _get_web_db():
@@ -247,21 +256,40 @@ def _sanitize_config_for_write(data):
 	return cleaned
 
 
-def _preflight_messages(mode: str, config: dict) -> list[str]:
+def _preflight_messages(mode: str, config: dict, options: dict | None = None) -> list[str]:
 	"""Return user-actionable blockers before starting a dashboard task."""
 	messages: list[str] = []
 	if mode not in {"full", "collect", "rescore", "monitor"}:
 		messages.append(f"不支持的任务模式：{mode}")
+	if mode == "collect":
+		try:
+			collection_options = normalize_collection_options(config, options)
+		except ValueError as exc:
+			messages.append(str(exc))
+			return messages
+		if collection_options.get("auto_score"):
+			resume_path = config.get("profile", {}).get("resume_path", "")
+			if not resume_path or not Path(str(resume_path)).exists():
+				messages.append("自动评分前请先在配置页上传 .md、.docx 或 .pdf 简历。")
+			if not get_ai_api_key(config):
+				messages.append("选择自动评分后，请先配置当前 AI 服务的 API Key。")
+			return messages
 
 	profile = config.get("profile", {})
 	resume_path = profile.get("resume_path", "")
-	if not resume_path or not Path(str(resume_path)).exists():
+	if mode in {"full", "rescore"} and (not resume_path or not Path(str(resume_path)).exists()):
 		messages.append("请先在配置页上传 .md、.docx 或 .pdf 简历。")
 
-	if mode in {"full", "collect"} and not config.get("search", {}).get("keywords"):
-		messages.append("请先在配置页填写搜索关键词。")
+	if mode == "full":
+		try:
+			full_options = normalize_collection_options(config, options)
+		except ValueError as exc:
+			messages.append(str(exc))
+		else:
+			if not full_options.get("platform_order"):
+				messages.append("运行全流程至少需要选择一个采集平台。")
 
-	if mode in {"full", "collect", "rescore"} and not get_ai_api_key(config):
+	if mode in {"full", "rescore"} and not get_ai_api_key(config):
 		messages.append("请先在配置页填写当前 AI 服务的 API Key，或设置对应的标准环境变量。")
 
 	return messages
@@ -283,7 +311,12 @@ def _record_collect_progress(task: WorkbenchTask, state: dict) -> None:
 		"collect_seen": int(state.get("seen") or 0),
 		"collect_new": int(state.get("new") or 0),
 		"collect_duplicate": int(state.get("duplicate") or 0),
+		"collect_filtered": int(state.get("filtered") or 0),
+		"collect_parse_failed": int(state.get("parse_failed") or 0),
+		"collect_save_failed": int(state.get("save_failed") or 0),
 	})
+	if isinstance(state.get("progress"), dict):
+		task.progress = deepcopy(state["progress"])
 
 
 def _record_score_progress(task: WorkbenchTask, state: dict) -> None:
@@ -301,28 +334,43 @@ def _record_score_progress(task: WorkbenchTask, state: dict) -> None:
 
 
 def _execute_collect(task: WorkbenchTask, config: dict) -> None:
-	from bosshunter.ai.scorer import score_jobs
-	from bosshunter.scraper.jobs import scrape_jobs
-
-	keywords = config.get("search", {}).get("keywords", [])
 	_log(task, "开始采集岗位")
 	collect_config = dict(config)
 	collect_config["_workbench_stop_event"] = task.stop_requested
 	collect_config["_workbench_collect_progress"] = lambda state: _record_collect_progress(task, state)
-	collected_job_ids: list[str] = []
-	scrape_jobs(collect_config, keywords, collected_job_ids=collected_job_ids)
+	if "_collection_options" not in config:
+		# Preserve the old private executor seam used by legacy callers. New Web
+		# collection tasks always inject normalized options before starting.
+		from bosshunter.ai.scorer import score_jobs
+		from bosshunter.scraper.jobs import scrape_jobs
+		keywords = config.get("search", {}).get("keywords", [])
+		collected_job_ids: list[str] = []
+		scrape_jobs(collect_config, keywords, collected_job_ids=collected_job_ids)
+		if task.stop_requested.is_set():
+			return
+		_log(task, f"本轮采集完成：扫描 {task.metrics.get('collect_seen', 0)}，新增 {task.metrics.get('collect_new', 0)}，重复 {task.metrics.get('collect_duplicate', 0)}")
+		_log(task, f"开始 AI 评分：处理全部未评分岗位（本轮新增 {len(collected_job_ids)} 个）")
+		score_config = dict(config)
+		score_config["_workbench_stop_event"] = task.stop_requested
+		score_config["_workbench_log"] = lambda message: _log(task, message)
+		score_config["_workbench_score_progress"] = lambda state: _record_score_progress(task, state)
+		score_jobs(score_config)
+		return
+
+	result = CollectionOrchestrator(
+		collect_config,
+		db_path=DATA_DIR / "bosshunter.db",
+		task_id=task.id,
+	).run(config.get("_collection_options"))
+	task.progress = {
+		"run_id": result.get("run_id", ""),
+		"outcome": result.get("status", "completed"),
+		"platforms": result.get("platforms", {}),
+		"collected_job_ids": result.get("collected_job_ids", []),
+	}
+	_log(task, f"本轮采集完成：新增 {len(result.get('collected_job_ids', []))}，状态 {result.get('status', 'completed')}")
 	if task.stop_requested.is_set():
 		return
-	_log(
-		task,
-		f"本轮采集完成：扫描 {task.metrics.get('collect_seen', 0)}，新增 {task.metrics.get('collect_new', 0)}，重复 {task.metrics.get('collect_duplicate', 0)}",
-	)
-	_log(task, f"开始 AI 评分：处理全部未评分岗位（本轮新增 {len(collected_job_ids)} 个）")
-	score_config = dict(config)
-	score_config["_workbench_stop_event"] = task.stop_requested
-	score_config["_workbench_log"] = lambda message: _log(task, message)
-	score_config["_workbench_score_progress"] = lambda state: _record_score_progress(task, state)
-	score_jobs(score_config)
 
 
 def _execute_rescore(task: WorkbenchTask, config: dict) -> None:
@@ -464,7 +512,22 @@ def _execute_full(task: WorkbenchTask, config: dict) -> None:
 		if task.stop_requested.is_set():
 			return
 
-	_execute_collect(task, config)
+	full_collection_config = dict(config)
+	try:
+		configured_options = full_collection_config.get("_collection_options")
+		if not isinstance(configured_options, dict):
+			configured_options = normalize_collection_options(full_collection_config, None)
+		full_collection_config["_collection_options"] = {
+			**configured_options,
+			"auto_score": True,
+		}
+	except ValueError as exc:
+		if "不支持已启用的智联招聘" in str(exc):
+			raise
+		# Keep the legacy executor path available for callers/tests that supply
+		# an intentionally minimal config and replace collection externally.
+		full_collection_config.pop("_collection_options", None)
+	_execute_collect(task, full_collection_config)
 	if task.stop_requested.is_set():
 		return
 
@@ -765,6 +828,12 @@ def api_job_search():
 	if status_filter:
 		conditions.append("status = ?")
 		params.append(status_filter)
+	source_platform = request.params.get("source_platform", "").strip()
+	if source_platform:
+		if source_platform not in {"boss", "zhilian"}:
+			return _json_response({"error": "source_platform 参数无效"}, 400)
+		conditions.append("COALESCE(source_platform, 'boss') = ?")
+		params.append(source_platform)
 	if created_within == "today":
 		conditions.append("created_at >= datetime('now', 'localtime', 'start of day', 'utc')")
 	elif created_within == "3d":
@@ -870,12 +939,15 @@ def api_workbench():
 		db.close()
 
 
-@app.route("/api/workbench/preflight")
+@app.route("/api/workbench/preflight", method=["GET", "POST"])
 def api_workbench_preflight():
-	mode = request.params.get("mode", "")
+	body = request.json if request.method == "POST" else {}
+	body = body if isinstance(body, dict) else {}
+	mode = str(body.get("mode") or request.params.get("mode", ""))
+	options = body.get("options") if isinstance(body.get("options"), dict) else None
 	try:
 		config = load_config(CONFIG_PATH)
-		checks = collect_preflight_checks(mode, config)
+		checks = collect_preflight_checks(mode, config, options)
 		messages = error_messages(checks)
 		return _json_response({"ok": not messages, "messages": messages, "checks": checks})
 	except Exception as e:
@@ -1058,17 +1130,72 @@ def api_scoring_end(run_id):
 def api_workbench_task_start():
 	try:
 		body = request.json or {}
-		mode = body.get("mode", "")
-		messages = _preflight_messages(mode, load_config(CONFIG_PATH))
+		if not isinstance(body, dict):
+			return _json_response({"error": "请求体必须是对象"}, 400)
+		mode = str(body.get("mode", ""))
+		base_config = load_config(CONFIG_PATH)
+		options = body.get("options") if isinstance(body.get("options"), dict) else None
+		collection_options = None
+		if mode == "collect":
+			try:
+				collection_options = normalize_collection_options(base_config, options)
+			except ValueError as exc:
+				return _json_response({"error": str(exc)}, 400)
+		elif mode == "full":
+			try:
+				collection_options = normalize_collection_options(base_config, options)
+			except ValueError as exc:
+				return _json_response({"error": str(exc)}, 400)
+			collection_options["auto_score"] = True
+		messages = _preflight_messages(mode, base_config, collection_options)
 		if messages:
 			return _json_response({"error": "请先处理启动前检查", "messages": messages}, 400)
+		extra = {"_collection_options": collection_options} if collection_options is not None else {}
+		if collection_options is not None:
+			# Persist only non-secret collection preferences so the next dialog can
+			# restore each platform's independent fields and queue order.
+			base_config["collection"] = {
+				**(base_config.get("collection") if isinstance(base_config.get("collection"), dict) else {}),
+				"default_order": collection_options["platform_order"],
+				"auto_score_default": collection_options["auto_score"],
+			}
+			platform_configs = deepcopy(base_config.get("platforms")) if isinstance(base_config.get("platforms"), dict) else {}
+			selected_platforms = set(collection_options["platform_order"])
+			for platform, value in collection_options["platforms"].items():
+				platform_configs[platform] = {
+					**(platform_configs.get(platform) if isinstance(platform_configs.get(platform), dict) else {}),
+					"enabled": platform in selected_platforms,
+					"search": value,
+				}
+			for platform in ("boss", "zhilian"):
+				if platform not in selected_platforms and isinstance(platform_configs.get(platform), dict):
+					platform_configs[platform]["enabled"] = False
+			base_config["platforms"] = platform_configs
+			_write_config(base_config)
 		with job_mutation_lock:
-			task = task_runner.start(mode, _task_config())
+			task = task_runner.start(mode, _task_config(extra))
 		return _json_response(task)
 	except TaskAlreadyRunningError as e:
 		return _json_response({"error": str(e)}, 409)
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/collection/runs")
+def api_collection_runs():
+	try:
+		limit = int(request.params.get("limit", 20))
+		return _json_response(list_collection_runs(DATA_DIR / "bosshunter.db", limit=limit))
+	except (TypeError, ValueError) as exc:
+		return _json_response({"error": str(exc)}, 400)
+
+
+@app.route("/api/collection/runs/<run_id>")
+def api_collection_run_detail(run_id):
+	run = get_collection_run(DATA_DIR / "bosshunter.db", run_id)
+	if not run:
+		return _json_response({"error": "采集运行记录不存在"}, 404)
+	return _json_response(run)
 
 
 @app.route("/api/workbench/task/<task_id>/stop", method="POST")
@@ -1098,11 +1225,26 @@ def api_workbench_deliver():
 					job_ids,
 				).fetchall()
 			}
+			platform_rows = validation_db.execute(
+				f"SELECT id, COALESCE(source_platform, 'boss') AS source_platform FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
+				job_ids,
+			).fetchall()
 		finally:
 			validation_db.close()
 		invalid_ids = [job_id for job_id in job_ids if job_id not in active_ids]
 		if invalid_ids:
 			return _json_response({"error": "所选岗位不存在或已进入回收站", "invalid_ids": invalid_ids}, 409)
+		unsupported = [
+			str(row["id"])
+			for row in platform_rows
+			if not platform_supports(str(row["source_platform"] or "boss"), "deliver")
+		]
+		if unsupported:
+			return _json_response({
+				"error": "所选岗位的平台暂不支持投递动作",
+				"unsupported_platform": "unknown",
+				"invalid_ids": unsupported,
+			}, 403)
 
 		direct_send = bool(body.get("direct_send"))
 		status = task_runner.status()
@@ -1235,9 +1377,11 @@ def api_job_detail(job_id):
 def api_job_mark_resume_sent(job_id):
 	db = _get_web_db()
 	try:
-		row = db.execute("SELECT 1 FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)).fetchone()
+		row = db.execute("SELECT source_platform FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)).fetchone()
 		if not row:
 			return _json_response({"error": "岗位不存在或已进入回收站"}, 404)
+		if not platform_supports(str(row["source_platform"] or "boss"), "deliver"):
+			return _json_response({"error": "该岗位来源平台当前不支持投递或简历发送链路"}, 403)
 		update_job_status(db, job_id, "resume_sent")
 		add_history(db, job_id, "resume_sent", "Web Dashboard 标记定制简历已发送")
 		return _json_response({"success": True})
@@ -1405,6 +1549,16 @@ def api_city_lookup():
 
 @app.route("/api/cities")
 def api_city_snapshot():
+	if request.params.get("platform", "").strip().lower() == "zhilian":
+		snapshot = load_zhilian_city_snapshot()
+		return _json_response({
+			"ok": True,
+			"source": snapshot["source"],
+			"count": len(snapshot["cities"]),
+			"updated_at": snapshot.get("fetched_at"),
+			"note": snapshot.get("note", ""),
+			"cities": snapshot["cities"],
+		})
 	try:
 		snapshot = load_city_snapshot(BASE_DIR)
 		return _json_response({
@@ -1426,6 +1580,13 @@ def api_city_snapshot():
 
 @app.route("/api/cities/refresh", method="POST")
 def api_city_refresh():
+	if request.params.get("platform", "").strip().lower() == "zhilian":
+		return _json_response({
+			"ok": False,
+			"source": "local",
+			"using_local_data": True,
+			"error": "智联使用内置城市目录，不执行联网刷新；岗位采集窗口会根据城市名称自动匹配编码。",
+		}, 409)
 	try:
 		snapshot = refresh_city_cache(DATA_DIR / "cities.cache.json")
 		return _json_response({

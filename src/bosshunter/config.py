@@ -78,6 +78,37 @@ DEFAULTS: dict[str, Any] = {
         "cities": [],  # Empty = fallback to profile.target_cities
         "city_codes": {},
         "max_pages": 3,
+        "sort": "default",
+        "target_count": 10,
+    },
+    "collection": {
+        "default_order": ["boss"],
+        "auto_score_default": False,
+        "default_target_count": 10,
+    },
+    "platforms": {
+        "boss": {
+            "enabled": True,
+            "search": {
+                "keywords": [],
+                "cities": [],
+                "city_codes": {},
+                "max_pages": 3,
+                "sort": "default",
+                "target_count": 10,
+            },
+        },
+        "zhilian": {
+            "enabled": False,
+            "search": {
+                "keywords": [],
+                "cities": [],
+                "city_codes": {},
+                "max_pages": 3,
+                "sort": "default",
+                "target_count": 10,
+            },
+        },
     },
     "scoring": {
         "threshold": 71,

@@ -8,6 +8,7 @@ export interface JobFilters {
   salaryMax: string
   status: string
   createdWithin: string
+  sourcePlatform: string
 }
 
 export const EMPTY_JOB_FILTERS: JobFilters = {
@@ -17,6 +18,7 @@ export const EMPTY_JOB_FILTERS: JobFilters = {
   salaryMax: '',
   status: '',
   createdWithin: '',
+  sourcePlatform: '',
 }
 
 export function useDebouncedValue<T>(value: T, delay: number) {
@@ -96,6 +98,7 @@ export function filterJobs(jobs: Job[], filters: JobFilters) {
     }
     if (minimumScore !== null && Number(job.score || 0) < minimumScore) return false
     if (filters.status && job.status !== filters.status) return false
+    if (filters.sourcePlatform && job.source_platform !== filters.sourcePlatform) return false
     if (salaryEnabled) {
       const salaryRange = parseMonthlySalaryK(job.salary || '')
       if (!salaryRange) return false

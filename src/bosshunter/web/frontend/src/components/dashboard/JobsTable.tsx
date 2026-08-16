@@ -103,6 +103,9 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <span className="max-w-[160px] truncate font-black text-foreground">{job.company}</span>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${job.source_platform === 'zhilian' ? 'bg-blue-50 text-blue-700' : 'bg-[#FFF0E5] text-primary'}`}>
+                            {job.source_platform === 'zhilian' ? '智联' : 'BOSS'}
+                          </span>
                           {job.company_size && (
                             <span className="rounded-full bg-[#FFFCFA] px-2 py-0.5 text-[10px] font-bold text-muted">{job.company_size}</span>
                           )}

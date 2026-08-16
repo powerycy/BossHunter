@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useDashboard, type HistoryItem, type Job, type WorkbenchTask } from '@/hooks/useDashboard'
+import { useDashboard, type CollectionProgress, type HistoryItem, type Job, type WorkbenchTask } from '@/hooks/useDashboard'
 import { useJobSearch } from '@/hooks/useJobSearch'
 import { Button } from '@/components/ui/button'
 import { JobsTable } from '@/components/dashboard/JobsTable'
 import { RecycleBinPanel } from '@/components/dashboard/RecycleBinPanel'
 import { ScoreJobsDialog } from '@/components/dashboard/ScoreJobsDialog'
+import { CollectJobsDialog } from '@/components/dashboard/CollectJobsDialog'
 import { JobFilterBar } from '@/components/jobs/JobFilterBar'
 import { parseHistoryDetail } from '@/lib/historyDetail'
 import {
@@ -133,7 +134,7 @@ const modes: Array<{ mode: WorkbenchMode; title: string; description: string }> 
   {
     mode: 'collect',
     title: '单独采集',
-    description: '采集岗位、AI评分、确认投递、发送招呼语；完成后不进入持续监测。',
+    description: '打开岗位采集窗口，选择 BOSS/智联、目标数量和执行顺序；默认只采集不评分。',
   },
   {
     mode: 'monitor',
@@ -154,6 +155,9 @@ const taskMetricItems = [
   { key: 'collect_seen', label: '本轮扫描' },
   { key: 'collect_new', label: '本轮新增' },
   { key: 'collect_duplicate', label: '重复岗位' },
+  { key: 'collect_filtered', label: '过滤' },
+  { key: 'collect_parse_failed', label: '解析失败' },
+  { key: 'collect_save_failed', label: '保存失败' },
   { key: 'ai_passed', label: 'AI通过' },
   { key: 'ai_filtered', label: 'AI过滤' },
   { key: 'ai_failed', label: 'AI失败' },
@@ -288,6 +292,8 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const [confirmedDeliveryIds, setConfirmedDeliveryIds] = useState<Set<string>>(new Set())
   const [todayFilters, setTodayFilters] = useState<JobFilters>({ ...EMPTY_JOB_FILTERS })
   const [statsScope, setStatsScope] = useState<StatsScope>('today')
+  const [collectDialogOpen, setCollectDialogOpen] = useState(false)
+  const [collectDialogMode, setCollectDialogMode] = useState<'collect' | 'full'>('collect')
 
   const todayJobs = useMemo(
     () => workbench.pending_confirmation.filter(job => !confirmedDeliveryIds.has(job.id)),
@@ -321,9 +327,15 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     setSelected(prev => (prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]))
   }
 
-  const runPreflight = async (mode: WorkbenchMode) => {
+  const runPreflight = async (mode: WorkbenchMode, options?: Record<string, unknown>) => {
     setPreflightMode(mode)
-    const res = await fetch(`/api/workbench/preflight?mode=${mode}`)
+    const res = options
+      ? await fetch('/api/workbench/preflight', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, options }),
+      })
+      : await fetch(`/api/workbench/preflight?mode=${mode}`)
     const data = await parsePreflightResponse(res)
     setPreflightChecks(data.checks)
     if (!data.ok) {
@@ -353,6 +365,11 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         )
         return
       }
+      if (mode === 'full') {
+        setCollectDialogMode('full')
+        setCollectDialogOpen(true)
+        return
+      }
       const target = modes.find(item => item.mode === mode)
       setModePending(mode)
       setNotice(`${target?.title || '任务'}启动前预检中...`)
@@ -376,6 +393,22 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       setNotice(ok ? '' : '仍有问题需要处理，请查看检查结果。')
     } catch {
       setNotice('重新检查失败，请确认 BossHunter 后端仍在运行。')
+    } finally {
+      setModePending(null)
+    }
+  }
+
+  const startCollection = async (options: Record<string, unknown>) => {
+    const mode = collectDialogMode
+    setModePending(mode)
+    setNotice(mode === 'full' ? '全流程启动前预检中...' : '岗位采集启动前预检中...')
+    try {
+      if (!(await runPreflight(mode, options))) return
+      await startTask(mode, options)
+      setCollectDialogOpen(false)
+      setNotice(mode === 'full' ? '全流程已启动，进度会在下方更新。' : '岗位采集已启动，进度会在下方更新。')
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '岗位采集启动失败')
     } finally {
       setModePending(null)
     }
@@ -538,7 +571,21 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             return (
               <button
                 key={item.mode}
-                onClick={() => handleModeClick(item.mode)}
+                onClick={() => {
+                  if (isActive) {
+                    void handleModeClick(item.mode)
+                    return
+                  }
+                  if (disabled) {
+                    setNotice(`当前正在运行${activeTask?.label || '其他任务'}，请先停止后再启动岗位采集。`)
+                    return
+                  }
+                  if (item.mode === 'collect' || item.mode === 'full') {
+                    setCollectDialogMode(item.mode)
+                    setCollectDialogOpen(true)
+                  }
+                  else void handleModeClick(item.mode)
+                }}
                 aria-disabled={disabled}
                 className={`min-h-[126px] rounded-3xl p-5 text-left transition ${
                   isActive
@@ -597,6 +644,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 </div>
               )}
             </div>
+            {visibleTask.progress?.platforms && <CollectionProgressPanel progress={visibleTask.progress} />}
             {visibleTask.error && visibleTaskError && (
               <div className="mt-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-danger">
                 <div className="font-black">{visibleTaskError.title}</div>
@@ -802,6 +850,39 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       </section>
 
       {selectedJob && <JobDetailModal job={selectedJob} onClose={() => setSelectedJob(null)} />}
+      <CollectJobsDialog
+        open={collectDialogOpen}
+        mode={collectDialogMode}
+        activeTask={activeTask && (activeTask.mode === 'collect' || activeTask.mode === 'full') ? activeTask : null}
+        onClose={() => setCollectDialogOpen(false)}
+        onStart={options => void startCollection(options)}
+      />
+    </div>
+  )
+}
+
+function CollectionProgressPanel({ progress }: { progress: CollectionProgress }) {
+  return (
+    <div className="mt-3 rounded-2xl border border-primary/20 bg-[#FFF0E5] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-black text-primary">多平台采集进度</div>
+        <div className="text-xs font-bold text-muted">{progress.outcome === 'running' ? '执行中' : progress.outcome || '已结束'}</div>
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        {Object.entries(progress.platforms || {}).map(([platform, state]) => (
+          <div key={platform} className="rounded-xl border border-card-border bg-white p-3">
+            <div className="flex items-center justify-between text-sm font-black">
+              <span>{platform === 'boss' ? 'BOSS 直聘' : '智联招聘'}</span>
+              <span>{state.new}/{state.target == null ? '不限' : state.target}{state.percent == null ? '' : ` · ${state.percent}%`}</span>
+            </div>
+            <div className="mt-1 text-xs text-muted">
+              {state.status === 'queued' ? '等待前序平台完成' : `${state.city || '城市未开始'} · ${state.keyword || '关键词未开始'} · 第 ${state.page || 0}/${state.max_pages || 0} 页`}
+            </div>
+            <div className="mt-1 text-xs text-muted">扫描 {state.seen || 0} · 重复 {state.duplicate || 0} · 过滤 {state.filtered || 0} · 解析失败 {state.parse_failed || 0} · 保存失败 {state.save_failed || 0}</div>
+            {(state.message || state.reason_code) && <div className="mt-1 text-xs font-bold text-primary">{state.message || state.reason_code}</div>}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -842,6 +923,7 @@ function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void }) {
           <InfoBlock label="HR" value={[job.hr_name, job.hr_title].filter(Boolean).join(' · ') || '-'} />
           <InfoBlock label="招聘者活跃" value={job.hr_active || '活跃度未知'} />
           <InfoBlock label="公司" value={[job.company_size, job.company_industry].filter(Boolean).join(' · ') || '-'} />
+          <InfoBlock label="来源平台" value={job.source_platform === 'zhilian' ? '智联招聘｜独立动作适配器' : 'BOSS 直聘'} />
           <InfoBlock label="匹配分" value={String(job.score || '-')} />
           <InfoBlock label="定制简历" value={job.resume_path || '未生成'} />
         </div>
@@ -888,7 +970,7 @@ function JobsPoolView() {
 
   useEffect(() => {
     setPage(0)
-  }, [filters.query, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin])
+  }, [filters.query, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.sourcePlatform])
 
   const toggleSelected = (jobId: string) => {
     setSelectedIds(previous => previous.includes(jobId) ? previous.filter(id => id !== jobId) : [...previous, jobId])
@@ -1014,6 +1096,7 @@ function JobsPoolView() {
             salary_max: filters.salaryMax,
             status: filters.status,
             created_within: filters.createdWithin,
+            source_platform: filters.sourcePlatform,
           } : {},
         }),
       })
@@ -1106,6 +1189,7 @@ function JobsPoolView() {
         totalCount={allTotal}
         invalidSalary={hasInvalidSalaryRange(filters)}
         showStatus
+        showSource
       />
       <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
         <Button variant="secondary" size="sm" disabled={!items.length} onClick={toggleCurrentPage}>

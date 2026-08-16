@@ -18,6 +18,8 @@ from bosshunter.browser import (
     type_text,
 )
 from bosshunter.db import get_db, get_jobs_ready_to_send, update_job_status, add_history, add_risk_event
+from bosshunter.collection.capabilities import platform_supports
+from bosshunter.executor.zhilian_actions import send_zhilian_greeting_once
 from bosshunter.throttle import RequestThrottle, SendWindowChecker, ProgressiveBackoff, should_take_day_off
 
 console = Console()
@@ -626,6 +628,9 @@ JS_SEND_GREETING = """
 
 
 def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tuple[dict, str | None]:
+    if str(job.get("source_platform") or "boss").strip().lower() == "zhilian":
+        return send_zhilian_greeting_once(job, greeting, throttle_config)
+
     stop_event = throttle_config.get("_workbench_stop_event")
     existing_target_ids = {
         str(target.get("targetId") or "")
@@ -892,6 +897,15 @@ def send_greetings(config: dict, force: bool = False) -> int:
     jobs = get_jobs_ready_to_send(db)
     if workbench_job_ids:
         jobs = [job for job in jobs if str(job["id"]) in workbench_job_ids]
+    unsupported_jobs = [
+        job for job in jobs
+        if not platform_supports(str(job.get("source_platform") or "boss"), "deliver")
+    ]
+    if unsupported_jobs:
+        send_report["unsupported_platform_ids"] = [str(job["id"]) for job in unsupported_jobs]
+        for job in unsupported_jobs:
+            console.print(f"[yellow]跳过岗位：{job.get('company', '')}｜{job.get('title', '')}（来源平台未提供发送适配器）[/yellow]")
+        jobs = [job for job in jobs if job not in unsupported_jobs]
     send_report["eligible_count"] = len(jobs)
     send_report["deferred_count"] = len(workbench_job_ids) if workbench_job_ids else len(jobs)
 

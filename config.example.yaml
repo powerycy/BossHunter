@@ -25,6 +25,32 @@ search:
   max_pages: 5
   sort: newest
 
+collection:
+  default_order: [boss]
+  auto_score_default: false
+  default_target_count: 10
+
+platforms:
+  boss:
+    enabled: true
+    search:
+      keywords: ["关键词1", "关键词2"]
+      cities: ["北京"]
+      city_codes: {}
+      max_pages: 5
+      sort: newest
+      target_count: 10
+  zhilian:
+    enabled: false
+    search:
+      keywords: []
+      cities: []
+      # 只需填写城市名称；BossHunter 会从内置智联目录自动匹配城市编码。
+      city_codes: {}
+      max_pages: 3
+      sort: default
+      target_count: 10
+
 scoring:
   threshold: 70
   max_candidates: 20

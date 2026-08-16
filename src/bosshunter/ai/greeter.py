@@ -13,7 +13,7 @@ from bosshunter.db import add_history, get_db, get_jobs_by_status, update_job_gr
 
 console = Console()
 
-GREETING_PROMPT = """你是一位求职者，需要在BOSS直聘上给HR发送打招呼消息。请根据以下信息生成一条个性化、自然的招呼语。
+GREETING_PROMPT = """你是一位求职者，需要在{platform}上给HR发送打招呼消息。请根据以下信息生成一条个性化、自然的招呼语。
 
 ## 我的背景
 {resume_summary}
@@ -43,7 +43,7 @@ GREETING_PROMPT = """你是一位求职者，需要在BOSS直聘上给HR发送�
 请直接输出招呼语文本，不要加任何标记或解释。
 """
 
-REVIEW_PROMPT = """请评估以下BOSS直聘招呼语的质量。
+REVIEW_PROMPT = """请评估以下{platform}招呼语的质量。
 
 ## 岗位
 {title} @ {company}
@@ -239,6 +239,7 @@ def _review_greeting(
 ) -> dict | None:
     """Self-evaluate a greeting. Returns scores dict or None on failure."""
     prompt = REVIEW_PROMPT.format(
+        platform="智联招聘" if str(job.get("source_platform") or "boss") == "zhilian" else "BOSS直聘",
         title=job["title"],
         company=job["company"],
         greeting=greeting,
@@ -272,6 +273,7 @@ def _generate_greeting_once(
     extra_highlights = "\n".join(highlight_lines) if highlight_lines else "（无额外亮点配置）"
 
     prompt = GREETING_PROMPT.format(
+        platform="智联招聘" if str(job.get("source_platform") or "boss") == "zhilian" else "BOSS直聘",
         resume_summary=_truncate_prompt_text(resume_summary, resume_limit),
         title=job["title"],
         company=job["company"],

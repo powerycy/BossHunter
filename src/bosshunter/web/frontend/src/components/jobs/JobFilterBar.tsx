@@ -13,6 +13,7 @@ interface JobFilterBarProps {
   totalCount: number
   invalidSalary?: boolean
   showStatus?: boolean
+  showSource?: boolean
 }
 
 export function JobFilterBar({
@@ -23,6 +24,7 @@ export function JobFilterBar({
   totalCount,
   invalidSalary = false,
   showStatus = false,
+  showSource = false,
 }: JobFilterBarProps) {
   const update = (key: keyof JobFilters, value: string) => onChange({ ...filters, [key]: value })
 
@@ -77,6 +79,13 @@ export function JobFilterBar({
             {Object.entries(STATUS_LABELS).map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
+          </Select>
+        )}
+        {showSource && (
+          <Select className="min-w-0" value={filters.sourcePlatform} onChange={event => update('sourcePlatform', event.target.value)} aria-label="来源平台">
+            <option value="">来源平台：全部</option>
+            <option value="boss">BOSS 直聘</option>
+            <option value="zhilian">智联招聘</option>
           </Select>
         )}
         <div className="flex min-h-9 min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-card-border bg-white px-3 py-1">
