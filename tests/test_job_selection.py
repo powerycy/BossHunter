@@ -20,6 +20,7 @@ from bosshunter.executor.sender import CHAT_BUTTON_SCRIPT_FOR_TESTS
 from bosshunter.executor.sender import _chat_target_matches_job
 from bosshunter.executor.sender import _confirm_preset_greeting
 from bosshunter.executor.sender import _handle_greet_popup
+from bosshunter.executor.sender import _message_delivery_state
 from bosshunter.executor.sender import send_greetings
 from bosshunter.executor.sender import _send_greeting_once
 from bosshunter.executor.sender import _submit_chat_message_background
@@ -114,6 +115,20 @@ class JobSelectionTests(unittest.TestCase):
         script = evaluate_mock.call_args.args[1]
         self.assertIn("vue.handleSubmit()", script)
         self.assertIn("enableSubmit", script)
+
+    def test_delivery_check_matches_bubble_text_with_status_labels(self):
+        greeting = "您好，我的经历和岗位需求比较匹配。"
+        with patch(
+            "bosshunter.executor.sender.evaluate",
+            return_value='{"success": true, "state": "delivered"}',
+        ) as evaluate_mock:
+            state = _message_delivery_state("target-1", greeting)
+
+        self.assertEqual(state, "delivered")
+        script = evaluate_mock.call_args.args[1]
+        self.assertIn(".message-content", script)
+        self.assertIn("text.includes(expectedText)", script)
+        self.assertIn("发送中|已读|未读|送达|发送成功|重试|重新发送", script)
 
     def test_startchat_popup_reuses_chat_redirect_without_foreground_input(self):
         click_result = {"redirectUrl": "/web/geek/chat?jobId=first-contact"}

@@ -459,20 +459,37 @@ def _message_delivery_state(target_id: str, greeting: str) -> str:
     greeting_escaped = json.dumps(greeting, ensure_ascii=False)
     result = _parse_js_result(evaluate(target_id, f"""
     (() => {{
-        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const normalize = (value) => String(value || '')
+            .replace(/[\\u200b-\\u200f\\ufeff]/g, '')
+            .replace(/\\s+/g, ' ')
+            .trim();
+        const removeDeliveryLabels = (value) => normalize(value)
+            .replace(/(发送中|已读|未读|送达|发送成功|重试|重新发送)$/g, '')
+            .trim();
+        const textMatchesExpected = (value, expectedText) => {{
+            const text = removeDeliveryLabels(value);
+            return text === expectedText || text.includes(expectedText);
+        }};
+        const messageText = (node) => {{
+            const contentNode = node.querySelector(
+                '.message-content, .text, .content, .message-text, '
+                + '[class*="message-content"], [class*="msg-content"], [class*="text"]'
+            );
+            return normalize(contentNode ? contentNode.innerText || contentNode.textContent : node.innerText || node.textContent);
+        }};
         const expected = normalize({greeting_escaped});
         const ownMessages = Array.from(document.querySelectorAll(
             '.chat-record .message-item.item-myself, .chat-record .item-myself, '
             + '.chat-record .message-item.item-self, .chat-record [class*="item-my"]'
         ));
-        const matching = ownMessages.filter((node) => normalize(node.innerText || node.textContent) === expected);
+        const matching = ownMessages.filter((node) => textMatchesExpected(messageText(node), expected));
         const messageList = document.querySelector('.chat-record');
         const vue = messageList && messageList.__vue__;
         const records = vue && Array.isArray(vue.list$) ? vue.list$ : [];
         const matchingRecords = records.filter((message) => {{
             if (!message || !message.isSelf) return false;
-            const text = message.text || message.lastText || message.content || '';
-            return normalize(text) === expected;
+            const text = message.text || message.lastText || message.content || message.message || message.body || '';
+            return textMatchesExpected(text, expected);
         }});
         if (!matching.length && !matchingRecords.length) {{
             return JSON.stringify({{success: true, state: 'missing'}});
