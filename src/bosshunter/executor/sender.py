@@ -518,6 +518,41 @@ def _message_delivery_state(target_id: str, greeting: str) -> str:
     return str(result.get("state") or "missing")
 
 
+def _submitted_message_looks_accepted(target_id: str, greeting: str) -> bool:
+    """Return true when Boss appears to have accepted a send despite missing echo."""
+    greeting_escaped = json.dumps(greeting, ensure_ascii=False)
+    result = _parse_js_result(evaluate(target_id, f"""
+    (() => {{
+        const normalize = (value) => String(value || '')
+            .replace(/[\\u200b-\\u200f\\ufeff]/g, '')
+            .replace(/\\s+/g, ' ')
+            .trim();
+        const expected = normalize({greeting_escaped});
+        const input = document.querySelector('#chat-input');
+        const inputText = normalize(input ? input.innerText || input.textContent || input.value : '');
+        const inputCleared = !!input && inputText.length === 0;
+        const ownMessages = Array.from(document.querySelectorAll(
+            '.chat-record .message-item.item-myself, .chat-record .item-myself, '
+            + '.chat-record .message-item.item-self, .chat-record [class*="item-my"]'
+        ));
+        const hasFailedOwnMessage = ownMessages.some((node) => {{
+            const statusNode = node.querySelector('.message-status');
+            const statusClass = statusNode ? String(statusNode.className || '') : '';
+            const text = normalize(node.innerText || node.textContent);
+            return statusClass.includes('status-error')
+                || (text.includes('发送失败') && (text.includes(expected) || expected.includes(text)));
+        }});
+        return JSON.stringify({{
+            success: true,
+            accepted: inputCleared && !hasFailedOwnMessage,
+            inputCleared,
+            hasFailedOwnMessage
+        }});
+    }})()
+    """))
+    return bool(result.get("success") and result.get("accepted"))
+
+
 def _submit_chat_message_background(target_id: str, greeting: str) -> dict:
     """Use BossHunter's original Vue submit path without foregrounding Chrome."""
     greeting_escaped = json.dumps(greeting, ensure_ascii=False)
@@ -788,6 +823,13 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
                     "history_detail": "首次招呼语曾出现但未稳定保留在会话中",
                     "skip_backoff": True,
                 }, target_id
+        if _submitted_message_looks_accepted(target_id, greeting):
+            close_tab(target_id)
+            return {
+                "success": True,
+                "accepted_without_echo": True,
+                "first_contact": True,
+            }, None
         return {
             "success": False,
             "error": "first_contact_delivery_unverified",
@@ -852,6 +894,10 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
                 "history_detail": "消息曾出现但未稳定保留在会话中，未记录为已发送",
                 "skip_backoff": True,
             }, target_id
+
+    if _submitted_message_looks_accepted(target_id, greeting):
+        close_tab(target_id)
+        return {"success": True, "accepted_without_echo": True}, None
 
     return {
         "success": False,
