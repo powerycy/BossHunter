@@ -193,8 +193,9 @@ def runtime_targets(config: dict[str, Any] | None = None) -> list[dict[str, Any]
 
 
 def _is_port_available(host: str, port: int) -> bool:
+    # No SO_REUSEADDR here: on Windows it allows binding ports already in use,
+    # which would make this probe report occupied ports as available.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
         except OSError:
@@ -264,7 +265,15 @@ def ensure_runtime(config: dict[str, Any] | None = None, wait_seconds: float = 1
         return False
 
     health = runtime_health(browser)
-    if health and health.get("runtime") != "bosshunter":
+    host = browser.get("proxy_host", "127.0.0.1")
+    port = int(browser.get("proxy_port", 3456))
+    # Swap ports when the configured one serves a foreign runtime, or when
+    # nothing responds and the port cannot be bound at all (e.g. Windows
+    # reserved port ranges that shift after every reboot).
+    needs_fallback = (health is not None and health.get("runtime") != "bosshunter") or (
+        health is None and not _is_port_available(host, port)
+    )
+    if needs_fallback:
         fallback_port = _find_available_runtime_port(browser)
         if fallback_port is None:
             return False
