@@ -30,6 +30,9 @@ GREETING_PROMPT = """你是一位求职者，需要在BOSS直聘上给HR发送�
 ## 额外亮点（适时融入，不要生硬罗列）
 {extra_highlights}
 
+## 用户招呼语偏好（必须遵守）
+{greeting_preference}
+
 ## 要求
 1. 字数控制在50-150字
 2. 风格自然，像真人发的IM消息，不要太正式
@@ -286,6 +289,10 @@ def _generate_greeting_once(
         match_reason=_truncate_prompt_text(job.get("score_reason", ""), 240),
         critique_section=critique_section,
         extra_highlights=_truncate_prompt_text(extra_highlights, 500),
+        greeting_preference=_truncate_prompt_text(
+            profile_cfg.get("greeting_preference", "") or "（无额外偏好）",
+            500,
+        ),
     )
 
     ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}

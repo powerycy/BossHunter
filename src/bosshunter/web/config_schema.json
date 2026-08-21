@@ -8,6 +8,7 @@
         {"key": "resume_path", "label": "简历文件路径", "type": "file", "description": "上传 .md 格式简历"},
         {"key": "education", "label": "最高学历", "type": "select", "options": ["博士", "硕士", "本科", "大专", "其他"], "default": "", "description": "用于 AI 评分时判断岗位学历要求与个人背景的匹配度"},
         {"key": "recruitment_type", "label": "求职招聘类型", "type": "select", "options": ["campus", "experienced", "both"], "default": "", "description": "选择校招、社招或两者均可"},
+        {"key": "greeting_preference", "label": "招呼语偏好", "type": "textarea", "default": "", "description": "输入生成招呼语时必须遵守的额外要求，例如：不要提能否出差"},
         {"key": "target_cities", "label": "目标城市", "type": "multi-select", "options_from": "cities", "description": "支持多城市"},
         {"key": "salary_min", "label": "最低薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
         {"key": "salary_max", "label": "最高薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},

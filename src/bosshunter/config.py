@@ -68,6 +68,7 @@ DEFAULTS: dict[str, Any] = {
         "target_cities": ["北京"],
         "education": "",
         "recruitment_type": "",
+        "greeting_preference": "",
         "salary_min": 0,
         "salary_max": 0,
         "allow_internship": False,

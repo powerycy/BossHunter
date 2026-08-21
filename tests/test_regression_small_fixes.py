@@ -760,6 +760,7 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(fields["recruitment_type"]["label"], "求职招聘类型")
         self.assertEqual(fields["recruitment_type"]["type"], "select")
         self.assertEqual(fields["recruitment_type"]["options"], ["campus", "experienced", "both"])
+        self.assertEqual(fields["greeting_preference"]["type"], "textarea")
 
 
 class ScorerPrefilterTests(unittest.TestCase):

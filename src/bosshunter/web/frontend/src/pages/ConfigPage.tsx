@@ -251,6 +251,16 @@ export default function ConfigPage() {
                 </Select>
               </Field>
             </div>
+            <Field label="招呼语偏好">
+              <textarea
+                value={config.profile?.greeting_preference || ''}
+                onChange={e => updateConfig('profile.greeting_preference', e.target.value)}
+                placeholder="例如：不要提能否出差；语气简洁，不要主动询问薪资"
+                rows={3}
+                className="w-full resize-y rounded-md border border-card-border bg-[#FFFCFA] px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted focus:border-primary"
+              />
+              <p className="mt-1 text-xs text-muted">会作为生成招呼语的额外约束，保存后对后续生成生效。</p>
+            </Field>
             <div className="grid grid-cols-2 gap-4">
               <Field label="最低薪资 (K)">
                 <Input type="number" value={config.profile?.salary_min || 0} onChange={e => updateConfig('profile.salary_min', Number(e.target.value))} min={0} max={200} />
