@@ -232,6 +232,26 @@ export default function ConfigPage() {
               )}
             </div>
             <div className="grid grid-cols-2 gap-4">
+              <Field label="最高学历">
+                <Select value={config.profile?.education || ''} onChange={e => updateConfig('profile.education', e.target.value)}>
+                  <option value="">请选择</option>
+                  <option value="博士">博士</option>
+                  <option value="硕士">硕士</option>
+                  <option value="本科">本科</option>
+                  <option value="大专">大专</option>
+                  <option value="其他">其他</option>
+                </Select>
+              </Field>
+              <Field label="求职招聘类型">
+                <Select value={config.profile?.recruitment_type || ''} onChange={e => updateConfig('profile.recruitment_type', e.target.value)}>
+                  <option value="">请选择</option>
+                  <option value="campus">校招</option>
+                  <option value="experienced">社招</option>
+                  <option value="both">校招 / 社招均可</option>
+                </Select>
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
               <Field label="最低薪资 (K)">
                 <Input type="number" value={config.profile?.salary_min || 0} onChange={e => updateConfig('profile.salary_min', Number(e.target.value))} min={0} max={200} />
               </Field>
