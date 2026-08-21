@@ -421,6 +421,24 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(unknown_status.startswith("200"), unknown_body)
         self.assertEqual([job["id"] for job in json.loads(unknown_body)["items"]], ["unknown-education"])
 
+    def test_job_search_supports_column_sorting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                for job_id, score, education in (("low", 60, "本科"), ("high", 90, "博士")):
+                    job = _job(job_id)
+                    job["education"] = education
+                    insert_job(db, job)
+                    update_job_score(db, job_id, score, "评分")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+            status, _, body = self._request("/api/jobs/search?sort_by=score&sort_order=asc")
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual([job["id"] for job in json.loads(body)["items"]], ["low", "high"])
+
     def test_job_search_salary_overlap_excludes_unparseable_and_paginates(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)

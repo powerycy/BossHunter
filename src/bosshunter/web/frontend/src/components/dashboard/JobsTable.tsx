@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { getStatusLabel } from '@/lib/status'
 import type { Job } from '@/hooks/useDashboard'
+import type { JobSortKey, JobSortOrder } from '@/hooks/useJobSearch'
 
 interface JobsTableProps {
   jobs: Job[]
@@ -15,6 +16,9 @@ interface JobsTableProps {
   onToggleSelected: (id: string) => void
   onSoftDelete?: (job: Job) => void
   loading?: boolean
+  sortBy: JobSortKey
+  sortOrder: JobSortOrder
+  onSortChange: (sortBy: JobSortKey) => void
 }
 
 function statusVariant(status: string) {
@@ -36,7 +40,7 @@ function statusVariant(status: string) {
   return variants.has(status) ? status : 'default'
 }
 
-export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedIds, onToggleSelected, onSoftDelete, loading = false }: JobsTableProps) {
+export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedIds, onToggleSelected, onSoftDelete, loading = false, sortBy, sortOrder, onSortChange }: JobsTableProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [pageInput, setPageInput] = useState(String(page + 1))
   const totalPages = Math.ceil(total / pageSize)
@@ -74,6 +78,17 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
     return `${Math.floor(hours / 24)}d 前`
   }
 
+  const sortableHeader = (label: string, key: JobSortKey) => (
+    <button
+      type="button"
+      onClick={() => onSortChange(key)}
+      className="inline-flex items-center gap-1 font-bold hover:text-primary"
+      title={`按${label}排序`}
+    >
+      {label}<span className="text-[10px]">{sortBy === key ? (sortOrder === 'asc' ? '↑' : '↓') : '↕'}</span>
+    </button>
+  )
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -88,12 +103,12 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                 <th className="w-10 px-3 py-3 text-center font-bold">选</th>
                 <th className="px-4 py-3 text-left font-bold">公司</th>
                 <th className="px-4 py-3 text-left font-bold">职位</th>
-                <th className="px-4 py-3 text-left font-bold">薪资</th>
-                <th className="px-4 py-3 text-left font-bold">学历 / 招聘类型</th>
-                <th className="px-4 py-3 text-left font-bold">评分</th>
-                <th className="px-4 py-3 text-left font-bold">状态</th>
-                <th className="px-4 py-3 text-left font-bold">招聘者活跃</th>
-                <th className="px-4 py-3 text-left font-bold">时间</th>
+                <th className="px-4 py-3 text-left">{sortableHeader('薪资', 'salary')}</th>
+                <th className="px-4 py-3 text-left">{sortableHeader('学历 / 招聘类型', 'education')}</th>
+                <th className="px-4 py-3 text-left">{sortableHeader('评分', 'score')}</th>
+                <th className="px-4 py-3 text-left">{sortableHeader('状态', 'status')}</th>
+                <th className="px-4 py-3 text-left">{sortableHeader('招聘者活跃', 'hr_active')}</th>
+                <th className="px-4 py-3 text-left">{sortableHeader('时间', 'created_at')}</th>
                 {onSoftDelete && <th className="w-16 px-3 py-3 text-center font-bold">操作</th>}
               </tr>
             </thead>

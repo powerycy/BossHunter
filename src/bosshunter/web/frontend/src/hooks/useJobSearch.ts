@@ -10,7 +10,10 @@ interface JobSearchResponse {
   offset: number
 }
 
-export function useJobSearch(filters: JobFilters, page: number, pageSize: number) {
+export type JobSortKey = 'salary' | 'education' | 'score' | 'status' | 'hr_active' | 'created_at'
+export type JobSortOrder = 'asc' | 'desc'
+
+export function useJobSearch(filters: JobFilters, page: number, pageSize: number, sortBy: JobSortKey, sortOrder: JobSortOrder) {
   const debouncedQuery = useDebouncedValue(filters.query, 250)
   const [items, setItems] = useState<Job[]>([])
   const [total, setTotal] = useState(0)
@@ -41,6 +44,8 @@ export function useJobSearch(filters: JobFilters, page: number, pageSize: number
     if (filters.createdWithin) params.set('created_within', filters.createdWithin)
     if (filters.recruitmentType) params.set('recruitment_type', filters.recruitmentType)
     if (filters.education) params.set('education', filters.education)
+    params.set('sort_by', sortBy)
+    params.set('sort_order', sortOrder)
 
     setLoading(true)
     fetch(`/api/jobs/search?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
@@ -64,7 +69,7 @@ export function useJobSearch(filters: JobFilters, page: number, pageSize: number
       })
 
     return () => controller.abort()
-  }, [debouncedQuery, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.education, filters.recruitmentType, page, pageSize, revision])
+  }, [debouncedQuery, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.education, filters.recruitmentType, page, pageSize, sortBy, sortOrder, revision])
 
   return { items, total, allTotal, loading, error, refresh: () => setRevision(value => value + 1) }
 }

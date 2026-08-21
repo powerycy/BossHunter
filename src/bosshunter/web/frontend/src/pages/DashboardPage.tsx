@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useDashboard, type HistoryItem, type Job, type WorkbenchTask } from '@/hooks/useDashboard'
 import { useJobSearch } from '@/hooks/useJobSearch'
+import type { JobSortKey, JobSortOrder } from '@/hooks/useJobSearch'
 import { Button } from '@/components/ui/button'
 import { JobsTable } from '@/components/dashboard/JobsTable'
 import { RecycleBinPanel } from '@/components/dashboard/RecycleBinPanel'
@@ -892,13 +893,15 @@ function JobsPoolView() {
   const [notice, setNotice] = useState('')
   const [showRecycleBin, setShowRecycleBin] = useState(false)
   const [showScoreDialog, setShowScoreDialog] = useState(false)
+  const [sortBy, setSortBy] = useState<JobSortKey>('created_at')
+  const [sortOrder, setSortOrder] = useState<JobSortOrder>('desc')
   const [quickScoring, setQuickScoring] = useState(false)
   const [recycleJobs, setRecycleJobs] = useState<Job[]>([])
   const [recycleSelectedIds, setRecycleSelectedIds] = useState<string[]>([])
   const [recycleLoading, setRecycleLoading] = useState(false)
   const [permanentDeleteIds, setPermanentDeleteIds] = useState<string[]>([])
   const [permanentDeleteAcknowledged, setPermanentDeleteAcknowledged] = useState(false)
-  const { items, total, allTotal, loading, error, refresh: refreshJobs } = useJobSearch(filters, page, pageSize)
+  const { items, total, allTotal, loading, error, refresh: refreshJobs } = useJobSearch(filters, page, pageSize, sortBy, sortOrder)
 
   useEffect(() => {
     setPage(0)
@@ -914,6 +917,16 @@ function JobsPoolView() {
     setSelectedIds(previous => allPageSelected
       ? previous.filter(id => !pageIds.has(id))
       : [...new Set([...previous, ...pageIds])])
+  }
+
+  const changeSort = (nextSortBy: JobSortKey) => {
+    setPage(0)
+    if (nextSortBy === sortBy) {
+      setSortOrder(previous => previous === 'asc' ? 'desc' : 'asc')
+      return
+    }
+    setSortBy(nextSortBy)
+    setSortOrder(nextSortBy === 'score' || nextSortBy === 'created_at' ? 'desc' : 'asc')
   }
 
   const loadRecycleBin = async () => {
@@ -1177,6 +1190,9 @@ function JobsPoolView() {
         onToggleSelected={toggleSelected}
         onSoftDelete={job => void softDelete([job.id])}
         loading={loading}
+        sortBy={sortBy}
+        sortOrder={sortOrder}
+        onSortChange={changeSort}
       />
       <ScoreJobsDialog
         open={showScoreDialog}
