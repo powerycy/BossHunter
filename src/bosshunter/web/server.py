@@ -750,6 +750,12 @@ def api_job_search():
 		recruitment_type = request.params.get("recruitment_type", "").strip()
 		if recruitment_type and recruitment_type not in {"campus", "experienced", "unknown"}:
 			raise ValueError("recruitment_type 参数无效")
+		sort_by = request.params.get("sort_by", "created_at").strip()
+		if sort_by not in {"salary", "education", "score", "status", "hr_active", "created_at"}:
+			raise ValueError("sort_by 参数无效")
+		sort_order = request.params.get("sort_order", "desc").strip().lower()
+		if sort_order not in {"asc", "desc"}:
+			raise ValueError("sort_order 参数无效")
 	except ValueError as exc:
 		return _json_response({"error": str(exc)}, 400)
 
@@ -784,7 +790,15 @@ def api_job_search():
 		conditions.append("created_at >= datetime('now', '-7 days')")
 	if conditions:
 		query += " WHERE " + " AND ".join(conditions)
-	query += " ORDER BY created_at DESC, score DESC"
+	sort_expressions = {
+		"salary": "CAST(REPLACE(substr(COALESCE(salary, ''), 1, CASE WHEN instr(salary, 'K') > 0 THEN instr(salary, 'K') - 1 ELSE length(salary) END), ',', '') AS REAL)",
+		"education": "CASE TRIM(COALESCE(education, '')) WHEN '博士' THEN 5 WHEN '硕士' THEN 4 WHEN '本科' THEN 3 WHEN '大专' THEN 2 WHEN '不限' THEN 1 ELSE 0 END",
+		"score": "COALESCE(score, 0)",
+		"status": "COALESCE(status, '')",
+		"hr_active": "COALESCE(hr_active, '')",
+		"created_at": "COALESCE(created_at, '')",
+	}
+	query += f" ORDER BY {sort_expressions[sort_by]} {sort_order.upper()}, created_at DESC, score DESC"
 
 	db = _get_web_db()
 	try:
