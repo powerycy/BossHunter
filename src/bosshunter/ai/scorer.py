@@ -44,6 +44,8 @@ SCORING_PROMPT = """你是一位严谨的招聘匹配评估员。请只依据简
 - 公司：{company}
 - 薪资：{salary}
 - 要求：{experience}
+- 学历要求：{education}
+- 招聘类型：{recruitment_type}
 - JD：{jd}
 
 ## 统一评分维度
@@ -167,6 +169,10 @@ def _build_scoring_prompt(job: dict, resume: str, *, compact: bool = False) -> s
         company=job["company"],
         salary=job["salary"],
         experience=job["experience"],
+        education=job.get("education", "") or "未识别",
+        recruitment_type={"campus": "校招", "experienced": "社招"}.get(
+            job.get("recruitment_type", ""), "未识别"
+        ),
         jd=_truncate_prompt_text(job.get("jd", ""), jd_limit),
     )
 

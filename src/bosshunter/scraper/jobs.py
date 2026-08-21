@@ -21,6 +21,16 @@ from bosshunter.throttle import PageThrottle
 
 console = Console()
 
+
+def _classify_recruitment_type(*values: str) -> str:
+    """Classify a job as campus, experienced, or unknown recruitment."""
+    text = " ".join(str(value or "") for value in values).lower()
+    if any(marker in text for marker in ("校招", "校园招聘", "校园招", "应届生", "应届", "毕业生", "管培生", "实习生", "实习")):
+        return "campus"
+    if any(marker in text for marker in ("社招", "社会招聘", "社会招")) or re.search(r"\d+\s*年", text):
+        return "experienced"
+    return "unknown"
+
 # BOSS直聘搜索页 URL 模板
 SEARCH_URL = "https://www.zhipin.com/web/geek/job?query={keyword}&city={city_code}"
 
@@ -78,6 +88,10 @@ JS_EXTRACT_DETAIL = """
     const tagTexts = Array.from(tagItems).map(t => t.textContent.trim());
     info.experience = tagTexts[0] || '';
     info.education = tagTexts[1] || '';
+    const pageText = document.body?.innerText || '';
+    info.recruitment_type = /校招|校园招聘|应届生|应届|毕业生|管培生|实习生|实习/.test(pageText)
+        ? 'campus'
+        : (/社招|社会招聘/.test(pageText) ? 'experienced' : 'unknown');
 
     // JD
     info.jd = document.querySelector('.job-sec-text')?.textContent?.trim() || '';
@@ -337,6 +351,14 @@ def scrape_jobs(
                         "salary": detail.get("salary", job_data.get("salary", "")),
                         "city": city,
                         "experience": detail.get("experience", job_data.get("experience", "")),
+                        "education": detail.get("education", job_data.get("education", "")),
+                        "recruitment_type": (
+                            detail.get("recruitment_type")
+                            if detail.get("recruitment_type") in {"campus", "experienced"}
+                            else _classify_recruitment_type(
+                                detail.get("title", ""), detail.get("experience", ""), detail.get("jd", "")
+                            )
+                        ),
                         "jd": detail.get("jd", ""),
                         "hr_name": detail.get("hr_name", ""),
                         "hr_title": detail.get("hr_title", ""),

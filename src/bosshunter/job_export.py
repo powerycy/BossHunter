@@ -24,6 +24,8 @@ EXPORT_COLUMNS = [
 	("城市", "city"),
 	("BOSS 城市编码", "city_code"),
 	("工作经验", "experience"),
+	("学历要求", "education"),
+	("招聘类型", "recruitment_type"),
 	("JD", "jd"),
 	("HR 姓名", "hr_name"),
 	("HR 职位", "hr_title"),
@@ -93,6 +95,16 @@ def _filtered_rows(conn: sqlite3.Connection, filters: dict[str, Any] | None = No
 	if status:
 		conditions.append("status = ?")
 		params.append(status)
+	recruitment_type = str(filters.get("recruitment_type") or "").strip()
+	if recruitment_type:
+		if recruitment_type not in {"campus", "experienced", "unknown"}:
+			raise ValueError("recruitment_type 参数无效")
+		conditions.append("COALESCE(recruitment_type, 'unknown') = ?")
+		params.append(recruitment_type)
+	education = str(filters.get("education") or "").strip()
+	if education:
+		conditions.append("education LIKE ?")
+		params.append(f"%{education}%")
 	minimum_score = filters.get("min_score")
 	if minimum_score not in (None, ""):
 		try:
@@ -199,7 +211,15 @@ def _greeting_failure_reason(job: dict[str, Any]) -> str:
 
 def _row_values(job: dict[str, Any]) -> list[Any]:
 	city_code = str(job.get("city_code") or "").strip() or (get_city_code(str(job.get("city") or "")) or "")
-	job = {**job, "city_code": city_code, "score_failure_reason": _failure_reason(job), "greeting_failure_reason": _greeting_failure_reason(job)}
+	job = {
+		**job,
+		"city_code": city_code,
+		"recruitment_type": {"campus": "校招", "experienced": "社招"}.get(
+			str(job.get("recruitment_type") or ""), "未识别"
+		),
+		"score_failure_reason": _failure_reason(job),
+		"greeting_failure_reason": _greeting_failure_reason(job),
+	}
 	return [job.get(key, "") if job.get(key) is not None else "" for _, key in EXPORT_COLUMNS]
 
 

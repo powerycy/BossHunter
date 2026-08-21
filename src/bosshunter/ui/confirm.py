@@ -27,6 +27,8 @@ def show_confirmation(config: dict) -> bool:
     table.add_column("公司", width=16)
     table.add_column("职位", width=24)
     table.add_column("薪资", width=10)
+    table.add_column("学历", width=8)
+    table.add_column("招聘类型", width=8)
     table.add_column("匹配分", width=6, justify="center")
     table.add_column("评分理由", width=30)
 
@@ -42,6 +44,8 @@ def show_confirmation(config: dict) -> bool:
             (job["company"] or "")[:14],
             (job["title"] or "")[:22],
             job.get("salary", "") or "面议",
+            job.get("education", "") or "未识别",
+            {"campus": "校招", "experienced": "社招"}.get(job.get("recruitment_type", ""), "未识别"),
             f"[{score_style}]{job['score']}[/{score_style}]",
             reason_preview
         )
@@ -73,8 +77,15 @@ def show_confirmation(config: dict) -> bool:
     # Individual selection mode
     approved_count = 0
     for i, job in enumerate(jobs, 1):
+        recruitment_type = {"campus": "校招", "experienced": "社招"}.get(
+            job.get("recruitment_type", ""), "未识别"
+        )
         console.print(f"\n[bold]#{i}[/bold] {job['company']} - {job['title']} ({job.get('salary', '面议')})")
         console.print(f"  匹配分: {job['score']} | {job.get('score_reason', '')}")
+        console.print(
+            f"  学历: {job.get('education', '') or '未识别'} | 招聘类型: "
+            f"{recruitment_type}"
+        )
         console.print(f"  招呼语: {job.get('greeting', '')}")
 
         action = Prompt.ask("  ", choices=["y", "n", "e", "q"], default="y")

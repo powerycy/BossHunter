@@ -75,6 +75,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                 <th className="px-4 py-3 text-left font-bold">公司</th>
                 <th className="px-4 py-3 text-left font-bold">职位</th>
                 <th className="px-4 py-3 text-left font-bold">薪资</th>
+                <th className="px-4 py-3 text-left font-bold">学历 / 招聘类型</th>
                 <th className="px-4 py-3 text-left font-bold">评分</th>
                 <th className="px-4 py-3 text-left font-bold">状态</th>
                 <th className="px-4 py-3 text-left font-bold">招聘者活跃</th>
@@ -110,6 +111,10 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                       </td>
                       <td className="max-w-[220px] truncate px-4 py-3 font-bold text-foreground">{job.title}</td>
                       <td className="px-4 py-3 text-muted">{job.salary || '-'}</td>
+                      <td className="px-4 py-3 text-xs">
+                        <div className="font-bold text-foreground">{job.education || '未识别'}</div>
+                        <div className="mt-1 text-muted">{job.recruitment_type === 'campus' ? '校招' : job.recruitment_type === 'experienced' ? '社招' : '类型未识别'}</div>
+                      </td>
                       <td className="px-4 py-3">
                         <span className={`font-mono font-black ${getScoreColor(job.score)}`}>{job.score || '-'}</span>
                       </td>
@@ -133,8 +138,12 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-card-border bg-[#FFFCFA]">
-                        <td colSpan={onSoftDelete ? 9 : 8} className="px-6 py-4">
+                        <td colSpan={onSoftDelete ? 10 : 9} className="px-6 py-4">
                           <div className="grid grid-cols-1 gap-4 text-sm lg:grid-cols-3">
+                            <div className="rounded-2xl border border-card-border bg-white p-4">
+                              <p className="mb-2 text-xs font-black text-primary">学历 / 招聘类型</p>
+                              <p className="leading-6 text-muted">{job.education || '学历未识别'} · {job.recruitment_type === 'campus' ? '校招' : job.recruitment_type === 'experienced' ? '社招' : '类型未识别'}</p>
+                            </div>
                             <div className="rounded-2xl border border-card-border bg-white p-4">
                               <p className="mb-2 text-xs font-black text-primary">JD摘要</p>
                               <p className="line-clamp-6 leading-6 text-muted">{job.jd || '无'}</p>
@@ -156,7 +165,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
               })}
               {!jobs.length && (
                 <tr>
-                  <td colSpan={onSoftDelete ? 9 : 8} className="px-4 py-10 text-center text-sm text-muted">
+                  <td colSpan={onSoftDelete ? 10 : 9} className="px-4 py-10 text-center text-sm text-muted">
                     {loading ? '正在读取岗位…' : '没有符合当前条件的岗位'}
                   </td>
                 </tr>
