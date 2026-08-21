@@ -24,7 +24,7 @@ console = Console()
 PORTFOLIO_URL = None  # Set via config: profile.portfolio_url
 
 # JS: Extract chat list with full message context
-JS_EXTRACT_CHAT_LIST = """
+JS_EXTRACT_CHAT_LIST = r"""
 (() => {
     const items = document.querySelectorAll('li[role=listitem]');
     const results = [];
@@ -40,18 +40,27 @@ JS_EXTRACT_CHAT_LIST = """
         const company = spans.length >= 2 ? spans[1].textContent.trim() : '';
         const hrTitle = spans.length >= 3 ? spans[spans.length - 1].textContent.trim() : '';
 
-        // Determine if HR replied: no message-status means the last message is FROM HR
+        // A missing delivery marker is not enough to prove the message came from HR.
+        // Treat uncertain rows as candidates and verify direction from the full chat.
         const statusClass = msgStatus ? msgStatus.className : '';
-        const isOurMessage = statusClass.includes('status-read') || statusClass.includes('status-delivery');
-        const hasReply = !!lastMsgEl && !isOurMessage;
+        const lastMsgClass = lastMsgEl ? String(lastMsgEl.className || '').toLowerCase() : '';
+        const lastMessage = lastMsgEl ? lastMsgEl.textContent.trim().substring(0, 200) : '';
+        const isOurMessage = statusClass.includes('status-read')
+            || statusClass.includes('status-delivery')
+            || /(myself|self|mine|outgoing|send)/.test(lastMsgClass);
+        const isHrMessage = /(friend|other|incoming|receive)/.test(lastMsgClass);
+        const isSystemMessage = /正在与Boss.+沟通|近30天过滤了.+BOSS发来的消息|你与该职位竞争者PK情况|新岗位速递|VIP数据总结|根据你的历史开聊\/收藏岗位|根据你的开聊\/收藏岗位.+为你推荐\d+个新岗位|识别到以下新发布岗位你可能感兴趣|我是你的求职助手|感谢您使用VIP权益|(?:您的|VIP)权益已到期|点击续费vip|牛人vip怎么样|附件简历请求已发送|附件简历已发送给对方|附件简历.{0,80}已发送给Boss/i.test(lastMessage);
+        const lastDirection = isOurMessage ? 'me' : (isHrMessage ? 'hr' : 'unknown');
+        const hasReply = !!lastMsgEl && lastDirection !== 'me' && !isSystemMessage;
 
         results.push({
             hr_name: nameText.textContent.trim(),
             company: company,
             hr_title: hrTitle,
-            last_message: lastMsgEl ? lastMsgEl.textContent.trim().substring(0, 200) : '',
+            last_message: lastMessage,
             has_reply: hasReply,
             is_our_message: isOurMessage,
+            last_direction: lastDirection,
             element_index: results.length
         });
     });
@@ -125,15 +134,30 @@ JS_EXTRACT_CONVERSATION = r"""
         return hasAttachmentResume && hasIntent;
     }
 
+    function senderOf(msg, text) {
+        if (/正在与Boss.+沟通|近30天过滤了.+BOSS发来的消息|你与该职位竞争者PK情况|新岗位速递|VIP数据总结|根据你的历史开聊\/收藏岗位|根据你的开聊\/收藏岗位.+为你推荐\d+个新岗位|识别到以下新发布岗位你可能感兴趣|我是你的求职助手|感谢您使用VIP权益|(?:您的|VIP)权益已到期|点击续费vip|牛人vip怎么样|附件简历请求已发送|附件简历已发送给对方|附件简历.{0,80}已发送给Boss/i.test(text)) {
+            return 'system';
+        }
+
+        const classNames = [msg, ...msg.querySelectorAll('[class]')]
+            .map(el => String(el.className || '').toLowerCase())
+            .join(' ');
+        if (/(^|\s|[-_])(item-myself|message-self|msg-self|is-self|my-message|message-mine|from-me|outgoing)(\s|$|[-_])/.test(classNames)) {
+            return 'me';
+        }
+        if (/(^|\s|[-_])(item-friend|message-other|message-receive|from-other|incoming)(\s|$|[-_])/.test(classNames)) {
+            return 'hr';
+        }
+        return 'unknown';
+    }
+
     const msgs = document.querySelectorAll(MESSAGE_SELECTORS);
     const results = [];
     msgs.forEach(msg => {
-        const isMe = msg.classList.contains('is-self') || msg.classList.contains('message-self')
-            || msg.querySelector('.msg-self') !== null;
         const text = collectVisibleText(msg);
         if (text) {
             results.push({
-                sender: isMe ? 'me' : 'hr',
+                sender: senderOf(msg, text),
                 text: text.substring(0, 500),
                 kind: isResumeRequestCard(text) ? 'resume_request_card' : 'message'
             });
@@ -316,6 +340,79 @@ def _get_hr_messages_after_last_reply(messages: list[dict]) -> list[dict]:
     # Get HR messages after that point
     after = messages[last_my_idx + 1:] if last_my_idx >= 0 else messages
     return [m for m in after if m["sender"] == "hr"]
+
+
+def _normalized_message_text(text: str) -> str:
+    """Normalize chat text for conservative sender reconciliation."""
+    return " ".join(str(text or "").split())
+
+
+def _looks_like_system_message(text: str) -> bool:
+    """Identify BOSS UI notices that are not participant messages."""
+    normalized = _normalized_message_text(text)
+    normalized_lower = normalized.lower()
+    system_markers = (
+        "您正在与Boss",
+        "近30天过滤了",
+        "你与该职位竞争者PK情况",
+        "新岗位速递",
+        "VIP数据总结",
+        "根据你的历史开聊/收藏岗位",
+        "识别到以下新发布岗位你可能感兴趣",
+    )
+    assistant_markers = (
+        "我是你的求职助手",
+        "感谢您使用vip权益",
+        "您的权益已到期",
+        "vip权益已到期",
+        "点击续费vip",
+        "牛人vip怎么样",
+        "附件简历请求已发送",
+        "附件简历已发送给对方",
+    )
+    return (
+        any(marker in normalized for marker in system_markers)
+        or any(marker in normalized_lower for marker in assistant_markers)
+        or ("附件简历" in normalized and "已发送给Boss" in normalized)
+    )
+
+
+def _matches_own_greeting(message_text: str, greeting: str) -> bool:
+    """Return true when a chat bubble contains this job's saved greeting."""
+    message = _normalized_message_text(message_text)
+    expected = _normalized_message_text(greeting)
+    if len(expected) < 8 or not message:
+        return False
+    if expected in message:
+        return True
+    prefix_length = min(len(expected), 48)
+    return prefix_length >= 24 and expected[:prefix_length] in message
+
+
+def _reconcile_conversation_messages(messages: list[dict], job: dict) -> list[dict]:
+    """Correct known own/system messages without guessing unknown as HR."""
+    greeting = str(job.get("greeting") or "")
+    reconciled = []
+    for raw_message in messages:
+        message = dict(raw_message) if isinstance(raw_message, dict) else {}
+        text = str(message.get("text") or "")
+        sender = str(message.get("sender") or "unknown")
+        strong_resume_request = (
+            message.get("kind") == "resume_request_card"
+            or _looks_like_resume_request_card(text)
+        )
+        if _looks_like_system_message(text) and not strong_resume_request:
+            sender = "system"
+        elif _matches_own_greeting(text, greeting):
+            sender = "me"
+        elif strong_resume_request and sender in {"unknown", "system"}:
+            sender = "hr"
+        elif sender not in {"me", "hr", "system"}:
+            sender = "unknown"
+        message["sender"] = sender
+        message["text"] = text
+        reconciled.append(message)
+    return reconciled
 
 
 def _truncate_text(text: str, limit: int) -> str:
@@ -899,6 +996,10 @@ def _handle_conversation(job: dict, config: dict) -> str:
     except (json.JSONDecodeError, TypeError):
         close_tab(target_id)
         return "failed"
+    if not isinstance(messages, list):
+        close_tab(target_id)
+        return "failed"
+    messages = _reconcile_conversation_messages(messages, job)
 
     # Check if I already replied after the last HR message
     if _check_if_i_already_replied(messages):

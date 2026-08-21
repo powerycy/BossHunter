@@ -178,6 +178,56 @@ class MonitorReplyDismissTests(unittest.TestCase):
                 ]
                 self.assertFalse(monitor._detect_resume_request(messages))
 
+    def test_reconcile_marks_saved_greeting_as_own_and_filters_boss_notices(self):
+        from bosshunter.executor import monitor
+
+        greeting = "您好，我对这个岗位感兴趣，想进一步了解团队情况。"
+        messages = [
+            {"sender": "unknown", "text": f"送达 {greeting}"},
+            {"sender": "hr", "text": "你与该职位竞争者PK情况 查看详细分析"},
+            {"sender": "hr", "text": "方便介绍一下最近的相关经历吗？"},
+        ]
+
+        reconciled = monitor._reconcile_conversation_messages(
+            messages,
+            {"greeting": greeting},
+        )
+
+        self.assertEqual(
+            [message["sender"] for message in reconciled],
+            ["me", "system", "hr"],
+        )
+        self.assertEqual(
+            monitor._get_hr_messages_after_last_reply(reconciled),
+            [reconciled[-1]],
+        )
+
+    def test_job_recommendations_are_not_classified_as_hr_replies(self):
+        from bosshunter.executor import monitor
+
+        recommendations = (
+            "新岗位速递 根据你的历史开聊/收藏岗位，识别到以下新发布岗位你可能感兴趣",
+            "VIP数据总结 根据你的开聊/收藏岗位，已为你推荐70个新岗位",
+            "我是你的求职助手，感谢您使用VIP权益，您的权益已到期，点击续费vip",
+        )
+
+        for recommendation in recommendations:
+            with self.subTest(recommendation=recommendation):
+                reconciled = monitor._reconcile_conversation_messages(
+                    [{"sender": "hr", "text": recommendation}],
+                    {"greeting": ""},
+                )
+                self.assertEqual(reconciled[0]["sender"], "system")
+                self.assertEqual(monitor._get_hr_messages_after_last_reply(reconciled), [])
+
+    def test_chat_extractors_keep_unknown_direction_conservative(self):
+        from bosshunter.executor import monitor
+
+        self.assertIn("return 'unknown'", monitor.JS_EXTRACT_CONVERSATION)
+        self.assertIn("lastDirection !== 'me' && !isSystemMessage", monitor.JS_EXTRACT_CHAT_LIST)
+        self.assertIn("新岗位速递", monitor.JS_EXTRACT_CHAT_LIST)
+        self.assertIn("我是你的求职助手", monitor.JS_EXTRACT_CHAT_LIST)
+
     def test_short_positive_hr_reply_generates_tailored_resume(self):
         from bosshunter.executor import monitor
 
