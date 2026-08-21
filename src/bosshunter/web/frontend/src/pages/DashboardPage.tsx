@@ -25,6 +25,7 @@ import {
   MessageCircle,
   Play,
   RefreshCw,
+  Send,
   Square,
   Trash2,
   XCircle,
@@ -974,6 +975,20 @@ function JobsPoolView() {
     }
   }
 
+  const deliverSelectedJobs = async () => {
+    if (!selectedIds.length) return
+    const count = selectedIds.length
+    if (!window.confirm(`确认一键投递已选择的 ${count} 个岗位吗？确认后将进入投递/打招呼队列。`)) return
+    try {
+      const result = await postJobAction('/api/workbench/deliver', { job_ids: selectedIds })
+      setSelectedIds([])
+      refreshJobs()
+      setNotice(result.queued_count ? `已将 ${result.queued_count} 个岗位加入投递队列。` : `已确认投递 ${count} 个岗位。`)
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : '一键投递失败')
+    }
+  }
+
   const restoreJobs = async (jobIds: string[]) => {
     if (!jobIds.length || !window.confirm(`确认恢复 ${jobIds.length} 个岗位吗？恢复后不会自动评分或投递。`)) return
     try {
@@ -1141,6 +1156,9 @@ function JobsPoolView() {
         <span className="rounded-full bg-[#FFF0E5] px-3 py-2 font-bold text-primary">已选择 {selectedIds.length} 条</span>
         {selectedIds.length > 0 && <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])}>清空选择</Button>}
         <Button variant="destructive" size="sm" disabled={!selectedIds.length} onClick={() => void softDelete(selectedIds)}>移入回收站</Button>
+        <Button size="sm" disabled={!selectedIds.length} onClick={() => void deliverSelectedJobs()}>
+          <Send className="mr-1 h-4 w-4" />一键投递已选
+        </Button>
         <Button size="sm" onClick={() => void startQuickScoring()} disabled={quickScoring || !total}>
           {quickScoring ? '启动评分中...' : '一键 AI 评分'}
         </Button>

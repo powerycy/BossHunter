@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
@@ -38,7 +38,21 @@ function statusVariant(status: string) {
 
 export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedIds, onToggleSelected, onSoftDelete, loading = false }: JobsTableProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [pageInput, setPageInput] = useState(String(page + 1))
   const totalPages = Math.ceil(total / pageSize)
+
+  useEffect(() => {
+    setPageInput(String(page + 1))
+  }, [page])
+
+  const jumpToPage = () => {
+    const requested = Number.parseInt(pageInput, 10)
+    if (!Number.isFinite(requested) || totalPages < 1) {
+      setPageInput(String(page + 1))
+      return
+    }
+    onPageChange(Math.min(totalPages - 1, Math.max(0, requested - 1)))
+  }
 
   const getScoreColor = (score: number) => {
     if (score >= 80) return 'text-success'
@@ -174,22 +188,50 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
           </table>
         </div>
 
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between border-t border-card-border px-4 py-3">
+        {totalPages > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-3 border-t border-card-border px-4 py-3 text-xs">
+            <button
+              onClick={() => onPageChange(0)}
+              disabled={page === 0}
+              className="font-bold text-muted transition hover:text-foreground disabled:opacity-30"
+            >
+              首页
+            </button>
             <button
               onClick={() => onPageChange(Math.max(0, page - 1))}
               disabled={page === 0}
-              className="text-xs font-bold text-muted transition hover:text-foreground disabled:opacity-30"
+              className="font-bold text-muted transition hover:text-foreground disabled:opacity-30"
             >
               上一页
             </button>
-            <span className="text-xs text-muted">{page + 1} / {totalPages}</span>
+            <label className="flex items-center gap-1 text-muted">
+              第
+              <input
+                type="number"
+                min={1}
+                max={Math.max(1, totalPages)}
+                value={pageInput}
+                onChange={event => setPageInput(event.target.value)}
+                onKeyDown={event => { if (event.key === 'Enter') jumpToPage() }}
+                onBlur={jumpToPage}
+                aria-label="跳转页码"
+                className="w-14 rounded-md border border-card-border bg-[#FFFCFA] px-2 py-1 text-center text-foreground outline-none focus:border-primary"
+              />
+              页 / {totalPages} 页
+            </label>
             <button
               onClick={() => onPageChange(Math.min(totalPages - 1, page + 1))}
               disabled={page >= totalPages - 1}
-              className="text-xs font-bold text-muted transition hover:text-foreground disabled:opacity-30"
+              className="font-bold text-muted transition hover:text-foreground disabled:opacity-30"
             >
               下一页
+            </button>
+            <button
+              onClick={() => onPageChange(totalPages - 1)}
+              disabled={page >= totalPages - 1}
+              className="font-bold text-muted transition hover:text-foreground disabled:opacity-30"
+            >
+              尾页
             </button>
           </div>
         )}
