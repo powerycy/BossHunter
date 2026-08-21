@@ -103,6 +103,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                 <th className="w-10 px-3 py-3 text-center font-bold">选</th>
                 <th className="px-4 py-3 text-left font-bold">公司</th>
                 <th className="px-4 py-3 text-left font-bold">职位</th>
+                <th className="px-4 py-3 text-left font-bold">城市</th>
                 <th className="px-4 py-3 text-left">{sortableHeader('薪资', 'salary')}</th>
                 <th className="px-4 py-3 text-left">{sortableHeader('学历 / 招聘类型', 'education')}</th>
                 <th className="px-4 py-3 text-left">{sortableHeader('评分', 'score')}</th>
@@ -139,6 +140,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                         </div>
                       </td>
                       <td className="max-w-[220px] truncate px-4 py-3 font-bold text-foreground">{job.title}</td>
+                      <td className="px-4 py-3 text-muted">{job.city || '未识别'}</td>
                       <td className="px-4 py-3 text-muted">{job.salary || '-'}</td>
                       <td className="px-4 py-3 text-xs">
                         <div className="font-bold text-foreground">{job.education || '未识别'}</div>
@@ -167,7 +169,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-card-border bg-[#FFFCFA]">
-                        <td colSpan={onSoftDelete ? 10 : 9} className="px-6 py-4">
+                        <td colSpan={onSoftDelete ? 11 : 10} className="px-6 py-4">
                           <div className="grid grid-cols-1 gap-4 text-sm lg:grid-cols-3">
                             <div className="rounded-2xl border border-card-border bg-white p-4">
                               <p className="mb-2 text-xs font-black text-primary">学历 / 招聘类型</p>
@@ -194,7 +196,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
               })}
               {!jobs.length && (
                 <tr>
-                  <td colSpan={onSoftDelete ? 10 : 9} className="px-4 py-10 text-center text-sm text-muted">
+                  <td colSpan={onSoftDelete ? 11 : 10} className="px-4 py-10 text-center text-sm text-muted">
                     {loading ? '正在读取岗位…' : '没有符合当前条件的岗位'}
                   </td>
                 </tr>

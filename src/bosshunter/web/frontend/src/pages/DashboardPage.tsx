@@ -902,6 +902,10 @@ function JobsPoolView() {
   const [permanentDeleteIds, setPermanentDeleteIds] = useState<string[]>([])
   const [permanentDeleteAcknowledged, setPermanentDeleteAcknowledged] = useState(false)
   const { items, total, allTotal, loading, error, refresh: refreshJobs } = useJobSearch(filters, page, pageSize, sortBy, sortOrder)
+  const { workbench: deliveryWorkbench } = useDashboard('workbench')
+  const deliveryTask = deliveryWorkbench.task?.mode === 'deliver'
+    ? deliveryWorkbench.task
+    : deliveryWorkbench.last_task?.mode === 'deliver' ? deliveryWorkbench.last_task : null
 
   useEffect(() => {
     setPage(0)
@@ -1179,6 +1183,23 @@ function JobsPoolView() {
         <ExportMenu onExport={exportJobs} hasSelection={selectedIds.length > 0} hasFiltered={total > 0} />
       </div>
       {notice && <div className="mb-4 rounded-xl bg-[#FFF0E5] px-4 py-3 text-sm text-primary">{notice}</div>}
+      {deliveryTask && (
+        <div className="mb-4 rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-black">投递队列</div>
+              <p className="mt-1 text-xs text-muted">投递和招呼语发送会在后台按队列推进，可在这里查看最新状态。</p>
+            </div>
+            <span className="rounded-full bg-[#FFF0E5] px-3 py-1 text-xs font-black text-primary">
+              {deliveryTask.status === 'running' ? '处理中' : deliveryTask.status === 'completed' ? '已完成' : deliveryTask.status === 'failed' ? '失败' : deliveryTask.status}
+            </span>
+          </div>
+          <div className="mt-3 rounded-xl border border-card-border bg-white px-3 py-2 text-sm">
+            <div className="font-bold">{deliveryTask.logs?.[deliveryTask.logs.length - 1] || '队列已创建，等待执行'}</div>
+            <div className="mt-1 text-xs text-muted">任务 ID：{deliveryTask.id}</div>
+          </div>
+        </div>
+      )}
       {error && <div className="mb-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-danger">{error}</div>}
       <JobsTable
         jobs={items}
