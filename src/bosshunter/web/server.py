@@ -747,6 +747,9 @@ def api_job_search():
 		created_within = request.params.get("created_within", "").strip()
 		if created_within and created_within not in {"today", "3d", "7d"}:
 			raise ValueError("created_within 参数无效")
+		recruitment_type = request.params.get("recruitment_type", "").strip()
+		if recruitment_type and recruitment_type not in {"campus", "experienced", "unknown"}:
+			raise ValueError("recruitment_type 参数无效")
 	except ValueError as exc:
 		return _json_response({"error": str(exc)}, 400)
 
@@ -755,6 +758,7 @@ def api_job_search():
 	params = []
 	keyword = (request.query.getunicode("q") or "").strip()
 	status_filter = request.params.get("status", "").strip()
+	recruitment_type_filter = request.params.get("recruitment_type", "").strip()
 	if keyword:
 		conditions.append("(title LIKE ? OR company LIKE ? OR jd LIKE ? OR score_reason LIKE ?)")
 		keyword_param = f"%{keyword}%"
@@ -765,6 +769,13 @@ def api_job_search():
 	if status_filter:
 		conditions.append("status = ?")
 		params.append(status_filter)
+	if recruitment_type_filter:
+		conditions.append("COALESCE(recruitment_type, 'unknown') = ?")
+		params.append(recruitment_type_filter)
+	education_filter = (request.query.getunicode("education") or "").strip()
+	if education_filter:
+		conditions.append("education LIKE ?")
+		params.append(f"%{education_filter}%")
 	if created_within == "today":
 		conditions.append("created_at >= datetime('now', 'localtime', 'start of day', 'utc')")
 	elif created_within == "3d":

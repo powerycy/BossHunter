@@ -386,6 +386,33 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(payload["limit"], 15)
         self.assertEqual(payload["offset"], 0)
 
+    def test_job_search_filters_education_and_recruitment_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                campus = _job("campus-bachelor")
+                campus.update({"education": "本科及以上", "recruitment_type": "campus"})
+                insert_job(db, campus)
+                experienced = _job("experienced-master")
+                experienced.update({"education": "硕士", "recruitment_type": "experienced"})
+                insert_job(db, experienced)
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            campus_status, _, campus_body = self._request(
+                "/api/jobs/search?education=%E6%9C%AC%E7%A7%91&recruitment_type=campus"
+            )
+            experienced_status, _, experienced_body = self._request(
+                "/api/jobs/search?education=%E7%A1%95%E5%A3%AB&recruitment_type=experienced"
+            )
+
+        self.assertTrue(campus_status.startswith("200"), campus_body)
+        self.assertEqual([job["id"] for job in json.loads(campus_body)["items"]], ["campus-bachelor"])
+        self.assertTrue(experienced_status.startswith("200"), experienced_body)
+        self.assertEqual([job["id"] for job in json.loads(experienced_body)["items"]], ["experienced-master"])
+
     def test_job_search_salary_overlap_excludes_unparseable_and_paginates(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)

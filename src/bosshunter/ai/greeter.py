@@ -22,6 +22,8 @@ GREETING_PROMPT = """你是一位求职者，需要在BOSS直聘上给HR发送�
 - 职位：{title}
 - 公司：{company}
 - 薪资：{salary}
+- 学历要求：{education}
+- 招聘类型：{recruitment_type}
 - 岗位要求摘要：{jd_summary}
 - 匹配分析：{match_reason}
 
@@ -276,6 +278,10 @@ def _generate_greeting_once(
         title=job["title"],
         company=job["company"],
         salary=job["salary"] or "面议",
+        education=job.get("education", "") or "未识别",
+        recruitment_type={"campus": "校招", "experienced": "社招"}.get(
+            job.get("recruitment_type", ""), "未识别"
+        ),
         jd_summary=jd_summary,
         match_reason=_truncate_prompt_text(job.get("score_reason", ""), 240),
         critique_section=critique_section,

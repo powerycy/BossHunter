@@ -42,6 +42,8 @@ RESUME_TAILOR_PROMPT = """你是一位专业简历顾问。请输出一份正常
 - 职位：{title}
 - 公司：{company}
 - 薪资：{salary}
+- 学历要求：{education}
+- 招聘类型：{recruitment_type}
 - 核心要求：
 {jd}
 
@@ -541,6 +543,10 @@ def generate_tailored_resume(job_id: str, config: dict) -> Path | None:
         title=job["title"],
         company=job["company"],
         salary=job["salary"] or "面议",
+        education=job.get("education", "") or "未识别",
+        recruitment_type={"campus": "校招", "experienced": "社招"}.get(
+            job.get("recruitment_type", ""), "未识别"
+        ),
         jd=job["jd"][:2000] if job["jd"] else "无详细描述",
         resume=resume_text,
         resume_max_pages=resume_max_pages,

@@ -48,6 +48,8 @@ def _init_tables(conn: sqlite3.Connection) -> None:
             salary TEXT,
             city TEXT,
             experience TEXT,
+            education TEXT,
+            recruitment_type TEXT DEFAULT 'unknown',
             jd TEXT,
             hr_name TEXT,
             hr_title TEXT,
@@ -87,6 +89,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
     _migrate_v1_1(conn)
     _migrate_v1_2(conn)
+    _migrate_v1_3(conn)
     _init_scoring_runs(conn)
 
 
@@ -300,12 +303,16 @@ def permanent_delete_jobs(
 
 def insert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
     """Insert a new job record."""
+    values = dict(job)
+    values.setdefault("education", "")
+    values.setdefault("recruitment_type", "unknown")
     conn.execute("""
         INSERT OR IGNORE INTO jobs (id, title, company, salary, city, experience, jd,
-            hr_name, hr_title, hr_active, company_size, company_industry, url)
+            education, recruitment_type, hr_name, hr_title, hr_active, company_size, company_industry, url)
         VALUES (:id, :title, :company, :salary, :city, :experience, :jd,
+            :education, :recruitment_type,
             :hr_name, :hr_title, :hr_active, :company_size, :company_industry, :url)
-    """, job)
+    """, values)
     conn.commit()
 
 
@@ -426,6 +433,42 @@ def _migrate_v1_2(conn: sqlite3.Connection) -> None:
     if "deleted_reason" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN deleted_reason TEXT NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_deleted_at ON jobs(deleted_at)")
+    conn.commit()
+
+
+def _migrate_v1_3(conn: sqlite3.Connection) -> None:
+    """Add structured education and recruitment-type fields."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "education" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN education TEXT")
+    if "recruitment_type" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN recruitment_type TEXT DEFAULT 'unknown'")
+    conn.execute("UPDATE jobs SET recruitment_type = 'unknown' WHERE recruitment_type IS NULL OR TRIM(recruitment_type) = ''")
+    # Backfill historical rows using information already stored in title/JD/experience.
+    searchable = "LOWER(COALESCE(title, '') || ' ' || COALESCE(jd, '') || ' ' || COALESCE(experience, ''))"
+    conn.execute(f"""
+        UPDATE jobs SET education = CASE
+            WHEN {searchable} LIKE '%博士%' THEN '博士'
+            WHEN {searchable} LIKE '%硕士%' THEN '硕士'
+            WHEN {searchable} LIKE '%本科%' THEN '本科'
+            WHEN {searchable} LIKE '%大专%' OR {searchable} LIKE '%专科%' THEN '大专'
+            WHEN {searchable} LIKE '%学历不限%' OR {searchable} LIKE '%不限学历%' THEN '不限'
+            ELSE education
+        END
+        WHERE education IS NULL OR TRIM(education) = ''
+    """)
+    conn.execute(f"""
+        UPDATE jobs SET recruitment_type = CASE
+            WHEN {searchable} LIKE '%校招%' OR {searchable} LIKE '%校园招聘%'
+              OR {searchable} LIKE '%应届%' OR {searchable} LIKE '%毕业生%'
+              OR {searchable} LIKE '%管培生%' OR {searchable} LIKE '%实习生%' THEN 'campus'
+            WHEN {searchable} LIKE '%社招%' OR {searchable} LIKE '%社会招聘%'
+              OR {searchable} GLOB '*[0-9]年*' THEN 'experienced'
+            ELSE 'unknown'
+        END
+        WHERE recruitment_type = 'unknown'
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_recruitment_type ON jobs(recruitment_type)")
     conn.commit()
 
 

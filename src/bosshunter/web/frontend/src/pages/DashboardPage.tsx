@@ -163,6 +163,12 @@ function jobSubtitle(job: Job) {
   return [job.score ? `匹配 ${job.score}` : '', job.salary, job.hr_active || '活跃度未知', getStatusLabel(job.status)].filter(Boolean).join(' · ')
 }
 
+function recruitmentTypeLabel(value: string) {
+  if (value === 'campus') return '校招'
+  if (value === 'experienced') return '社招'
+  return '招聘类型未识别'
+}
+
 async function parsePreflightResponse(res: Response) {
   const rawText = await res.text()
   let data: { ok?: boolean; messages?: unknown; checks?: unknown; error?: string } = {}
@@ -810,10 +816,14 @@ function JobActionCard({ job, selected, onToggle, onDetail, onReject }: { job: J
   return (
     <div className={`rounded-2xl border p-4 ${selected ? 'border-primary bg-[#FFFCFA]' : 'border-card-border bg-[#FFFCFA]'}`}>
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="font-black">{job.company}｜{job.title}</div>
-          <div className="mt-1 text-xs text-muted">{jobSubtitle(job)}</div>
-        </div>
+          <div>
+            <div className="font-black">{job.company}｜{job.title}</div>
+            <div className="mt-1 text-xs text-muted">{jobSubtitle(job)}</div>
+            <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-bold">
+              <span className="rounded-full bg-[#FFF0E5] px-2 py-1 text-primary">学历：{job.education || '未识别'}</span>
+              <span className="rounded-full bg-[#F3F4F6] px-2 py-1 text-muted">{recruitmentTypeLabel(job.recruitment_type)}</span>
+            </div>
+          </div>
         <input type="checkbox" checked={selected} onChange={onToggle} className="mt-1 h-4 w-4 accent-primary" />
       </div>
       <p className="mt-3 line-clamp-2 text-sm leading-6 text-muted">{job.score_reason || job.greeting || '等待继续推进。'}</p>
@@ -842,6 +852,8 @@ function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void }) {
           <InfoBlock label="HR" value={[job.hr_name, job.hr_title].filter(Boolean).join(' · ') || '-'} />
           <InfoBlock label="招聘者活跃" value={job.hr_active || '活跃度未知'} />
           <InfoBlock label="公司" value={[job.company_size, job.company_industry].filter(Boolean).join(' · ') || '-'} />
+          <InfoBlock label="学历要求" value={job.education || '未识别'} />
+          <InfoBlock label="招聘类型" value={recruitmentTypeLabel(job.recruitment_type)} />
           <InfoBlock label="匹配分" value={String(job.score || '-')} />
           <InfoBlock label="定制简历" value={job.resume_path || '未生成'} />
         </div>
@@ -888,7 +900,7 @@ function JobsPoolView() {
 
   useEffect(() => {
     setPage(0)
-  }, [filters.query, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin])
+  }, [filters.query, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.education, filters.recruitmentType])
 
   const toggleSelected = (jobId: string) => {
     setSelectedIds(previous => previous.includes(jobId) ? previous.filter(id => id !== jobId) : [...previous, jobId])
@@ -1014,6 +1026,8 @@ function JobsPoolView() {
             salary_max: filters.salaryMax,
             status: filters.status,
             created_within: filters.createdWithin,
+            education: filters.education,
+            recruitment_type: filters.recruitmentType,
           } : {},
         }),
       })
