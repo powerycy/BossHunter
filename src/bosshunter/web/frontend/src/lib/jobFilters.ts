@@ -100,7 +100,9 @@ export function filterJobs(jobs: Job[], filters: JobFilters) {
     }
     if (minimumScore !== null && Number(job.score || 0) < minimumScore) return false
     if (filters.status && job.status !== filters.status) return false
-    if (filters.education && !(job.education || '').includes(filters.education)) return false
+    if (filters.education === '未识别') {
+      if (job.education && job.education.trim()) return false
+    } else if (filters.education && !(job.education || '').includes(filters.education)) return false
     if (filters.recruitmentType && (job.recruitment_type || 'unknown') !== filters.recruitmentType) return false
     if (salaryEnabled) {
       const salaryRange = parseMonthlySalaryK(job.salary || '')

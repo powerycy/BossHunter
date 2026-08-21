@@ -773,7 +773,9 @@ def api_job_search():
 		conditions.append("COALESCE(recruitment_type, 'unknown') = ?")
 		params.append(recruitment_type_filter)
 	education_filter = (request.query.getunicode("education") or "").strip()
-	if education_filter:
+	if education_filter == "未识别":
+		conditions.append("(education IS NULL OR TRIM(education) = '')")
+	elif education_filter:
 		conditions.append("education LIKE ?")
 		params.append(f"%{education_filter}%")
 	if created_within == "today":
