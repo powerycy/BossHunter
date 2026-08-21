@@ -66,6 +66,8 @@ DEFAULTS: dict[str, Any] = {
         "resume_path": "./resume.md",
         "resume_output_dir": "./data/resumes",
         "target_cities": ["北京"],
+        "education": "",
+        "recruitment_type": "",
         "salary_min": 0,
         "salary_max": 0,
         "allow_internship": False,

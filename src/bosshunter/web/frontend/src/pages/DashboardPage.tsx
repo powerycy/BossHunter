@@ -891,6 +891,7 @@ function JobsPoolView() {
   const [notice, setNotice] = useState('')
   const [showRecycleBin, setShowRecycleBin] = useState(false)
   const [showScoreDialog, setShowScoreDialog] = useState(false)
+  const [quickScoring, setQuickScoring] = useState(false)
   const [recycleJobs, setRecycleJobs] = useState<Job[]>([])
   const [recycleSelectedIds, setRecycleSelectedIds] = useState<string[]>([])
   const [recycleLoading, setRecycleLoading] = useState(false)
@@ -1070,6 +1071,18 @@ function JobsPoolView() {
     setNotice(`独立评分已启动，共 ${data.run?.remaining_job_ids?.length || 0} 个岗位。`)
   }
 
+  const startQuickScoring = async () => {
+    if (!window.confirm('将对岗位池中所有未评分或评分失败的岗位启动 AI 评分，是否继续？')) return
+    setQuickScoring(true)
+    try {
+      await startScoring({ scope: 'pending', limit: null, job_ids: [], force_rescore: false })
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '启动 AI 评分失败')
+    } finally {
+      setQuickScoring(false)
+    }
+  }
+
   if (showRecycleBin) {
     return (
       <div className="space-y-3">
@@ -1128,7 +1141,10 @@ function JobsPoolView() {
         <span className="rounded-full bg-[#FFF0E5] px-3 py-2 font-bold text-primary">已选择 {selectedIds.length} 条</span>
         {selectedIds.length > 0 && <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])}>清空选择</Button>}
         <Button variant="destructive" size="sm" disabled={!selectedIds.length} onClick={() => void softDelete(selectedIds)}>移入回收站</Button>
-        <Button size="sm" onClick={() => setShowScoreDialog(true)}>单独 AI 评分</Button>
+        <Button size="sm" onClick={() => void startQuickScoring()} disabled={quickScoring || !total}>
+          {quickScoring ? '启动评分中...' : '一键 AI 评分'}
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => setShowScoreDialog(true)}>评分选项</Button>
         <ExportMenu onExport={exportJobs} hasSelection={selectedIds.length > 0} hasFiltered={total > 0} />
       </div>
       {notice && <div className="mb-4 rounded-xl bg-[#FFF0E5] px-4 py-3 text-sm text-primary">{notice}</div>}
