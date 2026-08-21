@@ -76,6 +76,7 @@ DEFAULTS: dict[str, Any] = {
         "keywords": [],
         "cities": [],  # Empty = fallback to profile.target_cities
         "max_pages": 3,
+        "company_sizes": [],  # Empty = no filter; otherwise filter by company size
     },
     "scoring": {
         "threshold": 71,

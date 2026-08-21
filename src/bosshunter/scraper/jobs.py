@@ -13,10 +13,62 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from bosshunter.browser import (
     new_tab, close_tab, evaluate, scroll, wait_for_load
 )
+from bosshunter.cancellation import stop_requested
 from bosshunter.config import CITY_CODES
-from bosshunter.db import get_db, job_exists, insert_job
+from bosshunter.db import get_db, job_exists, insert_job, update_job_company_info
 from bosshunter.job_filters import matching_deal_breaker
 from bosshunter.throttle import PageThrottle
+
+
+def _normalize_company_size(value: str) -> str:
+    """Normalize scraped company size strings to BOSS filter categories."""
+    value = (value or "").strip().replace(" ", "")
+
+    # Exact standard labels first (handles the normal BOSS display text)
+    for label in ["10000人以上", "1000-9999人", "500-999人", "100-499人", "20-99人", "0-20人"]:
+        if value == label or value == f"{label}及以上":
+            return label
+
+    # Variants with 万 -> 10000人以上
+    if "万" in value and "人" in value:
+        nums = re.findall(r"\d+", value)
+        if nums and int(nums[0]) >= 1:
+            return "10000人以上"
+
+    # Extract numbers and classify by the largest value
+    nums = [int(n) for n in re.findall(r"\d+", value)]
+    if not nums:
+        return value
+
+    max_num = max(nums)
+    min_num = min(nums)
+
+    if max_num >= 10000:
+        return "10000人以上"
+    if max_num >= 1000:
+        return "1000-9999人"
+    if max_num >= 500:
+        return "500-999人"
+    if max_num >= 100:
+        return "100-499人"
+    if max_num >= 20:
+        # 0-20 vs 20-99 overlap; prefer 0-20 when the range clearly starts at 0
+        if min_num < 20:
+            return "0-20人"
+        return "20-99人"
+    return "0-20人"
+
+
+def _match_company_size(company_size: str | None, allowed: list[str]) -> bool:
+    """Return True if company_size matches one of the configured size filters."""
+    if not allowed:
+        return True
+    company_size = (company_size or "").strip()
+    if not company_size:
+        return False
+    normalized = _normalize_company_size(company_size)
+    return normalized in allowed or company_size in allowed
+
 
 console = Console()
 
@@ -24,7 +76,7 @@ console = Console()
 SEARCH_URL = "https://www.zhipin.com/web/geek/job?query={keyword}&city={city_code}"
 
 # JS: 从搜索列表页提取岗位卡片数据
-JS_EXTRACT_LIST = """
+JS_EXTRACT_LIST = r"""
 (() => {
     const wraps = document.querySelectorAll('.job-card-wrap');
     const jobs = [];
@@ -54,7 +106,7 @@ JS_EXTRACT_LIST = """
 """
 
 # JS: 从详情页提取完整岗位信息
-JS_EXTRACT_DETAIL = """
+JS_EXTRACT_DETAIL = r"""
 (() => {
     const info = {};
     // Title and salary
@@ -90,14 +142,35 @@ JS_EXTRACT_DETAIL = """
     }
 
     // Company details
-    const companyTags = document.querySelectorAll('.sider-company .res-industry-item, .company-info-item');
     info.company_size = '';
     info.company_industry = '';
-    companyTags.forEach(tag => {
-        const text = tag.textContent.trim();
-        if (text.includes('人')) info.company_size = text;
-        else if (!info.company_industry) info.company_industry = text;
-    });
+
+    // Strategy 1: BOSS's own structured tags
+    const companyItems = Array.from(document.querySelectorAll('.sider-company .res-industry-item, .company-info-item'))
+        .map(el => (el.textContent || '').trim())
+        .filter(t => t && t.length <= 32);
+    for (const t of companyItems) {
+        if (!info.company_size && /人/.test(t)) info.company_size = t;
+        else if (!info.company_industry && !/人/.test(t) && t !== info.company) info.company_industry = t;
+    }
+
+    // Strategy 2: fallback - scan the company sidebar text for size patterns
+    if (!info.company_size) {
+        const companySection = document.querySelector('.sider-company') || document.querySelector('.company-info');
+        if (companySection) {
+            const sizeRegex = /(\d+-\d+人|\d+人以上|\d+人及以上|少于\d+人|\d+~\d+人|\d+到\d+人|\d+人)/;
+            const candidates = Array.from(companySection.querySelectorAll('p, span, a, li, div, h3, h4'))
+                .map(el => (el.textContent || '').trim())
+                .filter(t => t && t.length <= 32);
+            for (const t of candidates) {
+                const m = t.match(sizeRegex);
+                if (m) {
+                    info.company_size = m[0];
+                    break;
+                }
+            }
+        }
+    }
 
     // HR info
     const bossSection = document.querySelector('.boss-info-attr') || document.querySelector('.job-boss-info');
@@ -129,6 +202,45 @@ def _generate_job_id(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:16]
 
 
+def _notify(config: dict, message: str) -> None:
+    """Forward log messages to the workbench log callback if available."""
+    callback = config.get("_workbench_log")
+    if callable(callback):
+        callback(message)
+
+
+def _backfill_company_info(db, job_id: str, job_url: str, throttle: PageThrottle) -> None:
+    """Re-open a detail page for an already-stored job to fill missing company info."""
+    VALID_SIZES = {"10000人以上", "1000-9999人", "500-999人", "100-499人", "20-99人", "0-20人"}
+    row = db.execute("SELECT company_size FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        return
+    existing = (row[0] or "").strip()
+    if existing in VALID_SIZES:
+        return
+    throttle.wait()
+    detail_url = f"https://www.zhipin.com{job_url}"
+    detail_target = new_tab(detail_url, background=True)
+    if not detail_target:
+        return
+    try:
+        time.sleep(2)
+        wait_for_load(detail_target, timeout=10)
+        detail_result = evaluate(detail_target, JS_EXTRACT_DETAIL)
+        if detail_result:
+            try:
+                detail = json.loads(detail_result)
+                update_job_company_info(
+                    db, job_id,
+                    detail.get("company_size", ""),
+                    detail.get("company_industry", ""),
+                )
+            except (json.JSONDecodeError, TypeError):
+                pass
+    finally:
+        close_tab(detail_target)
+
+
 def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> int:
     """Scrape jobs from BOSS直聘 and store in database.
 
@@ -139,6 +251,7 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
     db = get_db()
     throttle = PageThrottle(delay_min=2.0, delay_max=5.0)
     deal_breakers = config.get("profile", {}).get("deal_breakers", [])
+    company_size_filters = config.get("search", {}).get("company_sizes", [])
     new_count = 0
 
     # Pagination config
@@ -175,6 +288,9 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
         for city, city_code, keyword in search_combos:
             if limit is not None and new_count >= limit:
                 break
+            if stop_requested(config):
+                _notify(config, "用户已请求停止，正在结束采集...")
+                break
 
             label = f"{city}/{keyword}" if len(cities) > 1 else keyword
             task = progress.add_task(f"搜索: {label}", total=None)
@@ -182,6 +298,9 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
 
             for page in range(1, max_pages + 1):
                 if limit is not None and new_count >= limit:
+                    break
+                if stop_requested(config):
+                    _notify(config, "用户已请求停止，正在结束采集...")
                     break
 
                 # Build paginated URL
@@ -232,12 +351,16 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                 for job_data in jobs_list:
                     if limit is not None and new_count >= limit:
                         break
+                    if stop_requested(config):
+                        _notify(config, "用户已请求停止，正在结束采集...")
+                        break
 
                     job_url = job_data.get("url", "")
                     job_id = _generate_job_id(job_url)
 
-                    # Skip if already exists
+                    # Skip if already exists, but backfill missing company info
                     if job_exists(db, job_id):
+                        _backfill_company_info(db, job_id, job_url, throttle)
                         continue
 
                     # Skip deal breakers
@@ -283,6 +406,10 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
                         "url": detail_url,
                     }
 
+                    # Apply company size filter
+                    if not _match_company_size(job_record.get("company_size", ""), company_size_filters):
+                        continue
+
                     insert_job(db, job_record)
                     new_count += 1
                     keyword_new += 1
@@ -294,5 +421,7 @@ def scrape_jobs(config: dict, keywords: list[str], limit: int | None = None) -> 
 
             progress.update(task, description=f"搜索: {label} (新增 {keyword_new})")
 
+    if stop_requested(config):
+        _notify(config, "采集已停止")
     db.close()
     return new_count

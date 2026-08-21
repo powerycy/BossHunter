@@ -32,6 +32,7 @@ from bosshunter.db import (
 	get_stats,
 	get_top_companies,
 	update_job_status,
+	delete_jobs,
 )
 from bosshunter.web.preflight import check_ai_connection, collect_preflight_checks, error_messages
 from bosshunter.web.resume_upload import ResumeUploadError, prepare_resume_content
@@ -214,7 +215,10 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 
 	keywords = config.get("search", {}).get("keywords", [])
 	_log(task, "开始采集岗位")
-	scrape_jobs(config, keywords)
+	scrape_config = dict(config)
+	scrape_config["_workbench_stop_event"] = task.stop_requested
+	scrape_config["_workbench_log"] = lambda message: _log(task, message)
+	scrape_jobs(scrape_config, keywords)
 	if task.stop_requested.is_set():
 		return
 	_log(task, "开始 AI 评分")
@@ -494,6 +498,26 @@ def api_jobs():
 		return _json_response(jobs)
 	finally:
 		db.close()
+
+
+@app.route("/api/jobs/delete", method="POST")
+def api_jobs_delete():
+	"""Delete one or more jobs by id."""
+	try:
+		body = request.json or {}
+		job_ids = [str(job_id) for job_id in body.get("ids", []) if str(job_id)]
+		if not job_ids:
+			return _json_response({"error": "请选择要删除的岗位"}, 400)
+
+		db = _get_web_db()
+		try:
+			deleted = delete_jobs(db, job_ids)
+		finally:
+			db.close()
+
+		return _json_response({"success": True, "deleted": deleted})
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
 
 
 @app.route("/api/top-companies")
@@ -870,8 +894,10 @@ def api_resume_get():
 		if resume_path and Path(resume_path).exists():
 			p = Path(resume_path)
 			stat = p.stat()
+			original = config.get("profile", {}).get("resume_original_filename", "") or p.name
 			return _json_response({
 				"filename": p.name,
+				"original_filename": original,
 				"size": stat.st_size,
 				"uploaded_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime)),
 				"path": str(p)
@@ -905,12 +931,14 @@ def api_resume_upload():
 		# Update config
 		config = load_config(CONFIG_PATH)
 		config.setdefault("profile", {})["resume_path"] = str(dest)
+		config.setdefault("profile", {})["resume_original_filename"] = raw_name
 		with open(CONFIG_PATH, "w", encoding="utf-8") as f:
 			yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 		return _json_response({
 			"success": True,
 			"filename": safe_name,
+			"original_filename": raw_name,
 			"size": len(stored_content),
 			"path": str(dest)
 		})
@@ -952,6 +980,11 @@ _STATIC_MIME_TYPES = {
 def _serve_static(filename: str, root: Path):
 	"""Serve static assets with stable MIME types while retaining range/cache support."""
 	mimetype = _STATIC_MIME_TYPES.get(Path(filename).suffix.lower(), "auto")
+	# Disable cache for index.html so SPA updates are visible after rebuilds.
+	if filename == "index.html":
+		response.set_header("Cache-Control", "no-cache, no-store, must-revalidate")
+		response.set_header("Pragma", "no-cache")
+		response.set_header("Expires", "0")
 	return static_file(filename, root=str(root), mimetype=mimetype)
 
 

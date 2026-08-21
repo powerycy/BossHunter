@@ -104,6 +104,26 @@ def update_job_greeting(conn: sqlite3.Connection, job_id: str, greeting: str) ->
     conn.commit()
 
 
+def update_job_company_info(conn: sqlite3.Connection, job_id: str, company_size: str, company_industry: str) -> None:
+    """Backfill company size/industry for an already-inserted job (re-scrape)."""
+    conn.execute(
+        "UPDATE jobs SET company_size = ?, company_industry = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (company_size, company_industry, job_id)
+    )
+    conn.commit()
+
+
+def delete_jobs(conn: sqlite3.Connection, job_ids: list[str]) -> int:
+    """Delete jobs by id. Returns the number of rows deleted."""
+    job_ids = [str(job_id) for job_id in job_ids if str(job_id)]
+    if not job_ids:
+        return 0
+    placeholders = ",".join("?" for _ in job_ids)
+    cursor = conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", job_ids)
+    conn.commit()
+    return cursor.rowcount
+
+
 def update_job_status(conn: sqlite3.Connection, job_id: str, status: str) -> None:
     """Update job status."""
     conn.execute(

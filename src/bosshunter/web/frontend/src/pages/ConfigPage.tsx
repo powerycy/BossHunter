@@ -16,6 +16,15 @@ const CITIES = [
   '合肥', '厦门', '青岛', '大连'
 ]
 
+const COMPANY_SIZES = [
+  '0-20人',
+  '20-99人',
+  '100-499人',
+  '500-999人',
+  '1000-9999人',
+  '10000人以上',
+]
+
 const AI_SERVICES = {
   anthropic: {
     label: 'Claude / Anthropic',
@@ -54,6 +63,7 @@ export default function ConfigPage() {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({ profile: true, search: true })
   const [resumeInfo, setResumeInfo] = useState<any>(null)
   const [resumeUploadError, setResumeUploadError] = useState('')
+  const [isDragging, setIsDragging] = useState(false)
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
 
   useEffect(() => {
@@ -64,9 +74,12 @@ export default function ConfigPage() {
     setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }))
   }
 
-  const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+  const uploadResumeFile = async (file: File) => {
+    const lower = file.name.toLowerCase()
+    if (!lower.endsWith('.md') && !lower.endsWith('.docx')) {
+      setResumeUploadError('仅支持 .md 或 .docx 格式')
+      return
+    }
     setResumeUploadError('')
     const form = new FormData()
     form.append('file', file)
@@ -77,13 +90,25 @@ export default function ConfigPage() {
         setResumeUploadError(data.error || '简历上传失败')
         return
       }
-      setResumeInfo({ filename: data.filename, size: data.size, path: data.path })
+      setResumeInfo({ filename: file.name, original_filename: data.original_filename || file.name, size: data.size, path: data.path })
       updateConfig('profile.resume_path', data.path)
     } catch {
       setResumeUploadError('网络错误，简历上传失败')
-    } finally {
-      e.target.value = ''
     }
+  }
+
+  const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) await uploadResumeFile(file)
+    e.target.value = ''
+  }
+
+  const handleResumeDrop = async (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) await uploadResumeFile(file)
   }
 
   const handleResumeDelete = async () => {
@@ -178,16 +203,33 @@ export default function ConfigPage() {
               <label className="block text-xs text-foreground mb-2">简历文件</label>
               {resumeInfo ? (
                 <div className="flex items-center gap-3 rounded-md border border-card-border bg-[#FFFCFA] p-3">
-                  <span className="text-sm font-bold text-foreground">📄 {resumeInfo.filename}</span>
+                  <span className="text-sm font-bold text-foreground">📄 {resumeInfo.original_filename || resumeInfo.filename}</span>
                   <span className="text-xs text-muted">({(resumeInfo.size / 1024).toFixed(1)} KB)</span>
                   <button onClick={handleResumeDelete} className="ml-auto text-red-400 hover:text-red-300">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               ) : (
-                <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-card-border p-6 transition-colors hover:border-primary/50 hover:bg-[#FFFCFA]">
+                <label
+                  className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 transition-colors ${
+                    isDragging
+                      ? 'border-primary bg-primary/10'
+                      : 'border-card-border hover:border-primary/50 hover:bg-[#FFFCFA]'
+                  }`}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    if (!isDragging) setIsDragging(true)
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsDragging(false)
+                  }}
+                  onDrop={handleResumeDrop}
+                >
                   <Upload className="mb-2 h-6 w-6 text-muted" />
-                  <span className="text-sm text-muted">拖拽或点击上传 (.md、.docx)</span>
+                  <span className="text-sm text-muted">拖拽文件到此处，或点击选择 (.md、.docx)</span>
                   <input type="file" accept=".md,.docx" onChange={handleResumeUpload} className="hidden" />
                 </label>
               )}
@@ -236,6 +278,27 @@ export default function ConfigPage() {
                       className={`px-2 py-1 text-xs rounded border transition-colors ${selected ? 'bg-primary/20 border-primary/50 text-primary' : 'border-card-border bg-[#FFFCFA] text-muted hover:border-primary/40 hover:text-foreground'}`}
                     >
                       {city}
+                    </button>
+                  )
+                })}
+              </div>
+            </Field>
+            <Field label="公司规模（多选，空=不限）">
+              <div className="flex flex-wrap gap-2">
+                {COMPANY_SIZES.map(size => {
+                  const selected = (config.search?.company_sizes || []).includes(size)
+                  return (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() => {
+                        const current = config.search?.company_sizes || []
+                        const next = selected ? current.filter((s: string) => s !== size) : [...current, size]
+                        updateConfig('search.company_sizes', next)
+                      }}
+                      className={`px-2 py-1 text-xs rounded border transition-colors ${selected ? 'bg-primary/20 border-primary/50 text-primary' : 'border-card-border bg-[#FFFCFA] text-muted hover:border-primary/40 hover:text-foreground'}`}
+                    >
+                      {size}
                     </button>
                   )
                 })}

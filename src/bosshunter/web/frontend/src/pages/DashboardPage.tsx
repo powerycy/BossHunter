@@ -119,7 +119,7 @@ const modes: Array<{ mode: WorkbenchMode; title: string; description: string }> 
   {
     mode: 'collect',
     title: '单独采集',
-    description: '采集岗位、AI评分、确认投递、发送招呼语；完成后不进入持续监测。',
+    description: '采集岗位并 AI 评分，确认投递与发送招呼语需单独操作。',
   },
   {
     mode: 'monitor',
@@ -137,7 +137,7 @@ const statItems = [
 ]
 
 function jobSubtitle(job: Job) {
-  return [job.score ? `匹配 ${job.score}` : '', job.salary, getStatusLabel(job.status)].filter(Boolean).join(' · ')
+  return [job.score ? `匹配 ${job.score}` : '', job.company_size, job.salary, getStatusLabel(job.status)].filter(Boolean).join(' · ')
 }
 
 async function parsePreflightResponse(res: Response) {
@@ -433,7 +433,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   }
 
   if (view === 'jobs') {
-    return <JobsPoolView jobs={jobs} />
+    return <JobsPoolView jobs={jobs} onDeleted={refresh} />
   }
 
   if (view === 'monitor') {
@@ -735,17 +735,176 @@ function InfoBlock({ label, value }: { label: string; value: string }) {
   )
 }
 
-function JobsPoolView({ jobs }: { jobs: Job[] }) {
+function JobsPoolView({ jobs, onDeleted }: { jobs: Job[]; onDeleted: () => Promise<void> }) {
+  const [sizeFilter, setSizeFilter] = useState<string[]>([])
+  const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [query, setQuery] = useState('')
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [deleting, setDeleting] = useState(false)
+  const [notice, setNotice] = useState('')
+
+  const SIZES = ['0-20人', '20-99人', '100-499人', '500-999人', '1000-9999人', '10000人以上']
+
+  const filtered = useMemo(() => jobs.filter(job => {
+    const selectedSizes = sizeFilter.filter(s => s !== 'unknown')
+    const wantUnknown = sizeFilter.includes('unknown')
+    if (selectedSizes.length > 0 || wantUnknown) {
+      const ok = (wantUnknown && !job.company_size) || (job.company_size && selectedSizes.includes(job.company_size))
+      if (!ok) return false
+    }
+    if (statusFilter !== 'all' && job.status !== statusFilter) return false
+    if (query.trim()) {
+      const q = query.trim().toLowerCase()
+      const hay = `${job.company} ${job.title}`.toLowerCase()
+      if (!hay.includes(q)) return false
+    }
+    return true
+  }), [jobs, sizeFilter, statusFilter, query])
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+  const toggleSize = (value: string) => {
+    setSizeFilter(prev => prev.includes(value) ? prev.filter(x => x !== value) : [...prev, value])
+  }
+  const toggleAll = (ids: string[]) => {
+    const allSelected = ids.length > 0 && ids.every(id => selectedIds.includes(id))
+    setSelectedIds(prev => allSelected ? prev.filter(id => !ids.includes(id)) : Array.from(new Set([...prev, ...ids])))
+  }
+  const clearSelection = () => setSelectedIds([])
+
+  const deleteJobs = async (ids: string[]) => {
+    if (!ids.length) return
+    if (!window.confirm(`确定删除选中的 ${ids.length} 个岗位吗？删除后不可恢复，且不会撤销已发出的投递。`)) return
+    setDeleting(true)
+    setNotice('')
+    try {
+      const res = await fetch('/api/jobs/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || '删除失败')
+      }
+      setSelectedIds([])
+      await onDeleted()
+      setNotice(`已删除 ${ids.length} 个岗位。`)
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '删除失败')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const statusOptions = [
+    { key: 'all', label: '全部状态' },
+    { key: 'pending', label: '待确认' },
+    { key: 'scored', label: '已评分' },
+    { key: 'filtered', label: '初筛未过' },
+    { key: 'ready', label: '待发送' },
+    { key: 'approved', label: '已确认' },
+    { key: 'sent', label: '已发送' },
+    { key: 'rejected', label: '已拒绝' },
+  ]
+
   return (
     <div className="rounded-3xl border border-card-border bg-white p-5">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-black">岗位池</h2>
-          <p className="mt-1 text-sm text-muted">集中查看已采集岗位、AI 分数、状态和详情入口。</p>
+          <p className="mt-1 text-sm text-muted">集中查看已采集岗位、AI 分数、状态和详情入口，支持按公司规模（多选）、状态筛选与批量删除。</p>
         </div>
         <BriefcaseBusiness className="h-6 w-6 text-primary" />
       </div>
-      <JobsTable jobs={jobs} />
+
+      <div className="mb-4 space-y-3 rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-muted">公司规模</span>
+          <button
+            type="button"
+            onClick={() => setSizeFilter([])}
+            className={`rounded-full px-3 py-1 text-xs font-bold transition ${sizeFilter.length === 0 ? 'bg-primary text-white' : 'border border-card-border text-muted hover:border-primary/60 hover:text-primary'}`}
+          >
+            全部规模
+          </button>
+          {SIZES.map(s => {
+            const active = sizeFilter.includes(s)
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => toggleSize(s)}
+                className={`rounded-full px-3 py-1 text-xs font-bold transition ${active ? 'bg-primary text-white' : 'border border-card-border text-muted hover:border-primary/60 hover:text-primary'}`}
+              >
+                {s}
+              </button>
+            )
+          })}
+          <button
+            type="button"
+            onClick={() => toggleSize('unknown')}
+            className={`rounded-full px-3 py-1 text-xs font-bold transition ${sizeFilter.includes('unknown') ? 'bg-primary text-white' : 'border border-card-border text-muted hover:border-primary/60 hover:text-primary'}`}
+          >
+            未填写
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-muted">状态</span>
+          {statusOptions.map(opt => {
+            const active = statusFilter === opt.key
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => setStatusFilter(opt.key)}
+                className={`rounded-full px-3 py-1 text-xs font-bold transition ${active ? 'bg-primary text-white' : 'border border-card-border text-muted hover:border-primary/60 hover:text-primary'}`}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="搜索公司或职位…"
+            className="min-w-[200px] flex-1 rounded-2xl border border-card-border bg-white px-4 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+          />
+          <span className="text-xs text-muted">共 {filtered.length} / {jobs.length} 条</span>
+        </div>
+      </div>
+
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-card-border bg-white px-4 py-3">
+        <div className="text-xs font-bold text-muted">
+          已选 <span className="text-primary">{selectedIds.length}</span> 个
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" size="sm" onClick={() => toggleAll(filtered.map(j => j.id))}>全选筛选结果</Button>
+          <Button variant="secondary" size="sm" onClick={clearSelection} disabled={!selectedIds.length}>清空选择</Button>
+          <button
+            type="button"
+            onClick={() => deleteJobs(selectedIds)}
+            disabled={!selectedIds.length || deleting}
+            className="rounded-2xl bg-danger px-4 py-2 text-xs font-bold text-white transition hover:bg-danger/90 disabled:opacity-40"
+          >
+            {deleting ? '删除中…' : `删除已选 ${selectedIds.length} 个`}
+          </button>
+        </div>
+      </div>
+
+      {notice && <div className="mb-3 rounded-2xl bg-[#FFF0E5] px-4 py-3 text-sm text-primary">{notice}</div>}
+
+      <JobsTable
+        jobs={filtered}
+        selectable
+        selectedIds={selectedIds}
+        onToggleSelect={toggleSelect}
+        onToggleAll={toggleAll}
+        onDelete={job => deleteJobs([job.id])}
+      />
     </div>
   )
 }

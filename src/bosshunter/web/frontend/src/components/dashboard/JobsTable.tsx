@@ -1,12 +1,17 @@
 import { Fragment, useState } from 'react'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { getStatusLabel } from '@/lib/status'
 import type { Job } from '@/hooks/useDashboard'
 
 interface JobsTableProps {
   jobs: Job[]
+  selectable?: boolean
+  selectedIds?: string[]
+  onToggleSelect?: (id: string) => void
+  onToggleAll?: (ids: string[]) => void
+  onDelete?: (job: Job) => void
 }
 
 function statusVariant(status: string) {
@@ -28,12 +33,23 @@ function statusVariant(status: string) {
   return variants.has(status) ? status : 'default'
 }
 
-export function JobsTable({ jobs }: JobsTableProps) {
+export function JobsTable({
+  jobs,
+  selectable = false,
+  selectedIds = [],
+  onToggleSelect,
+  onToggleAll,
+  onDelete,
+}: JobsTableProps) {
   const [page, setPage] = useState(0)
   const [expanded, setExpanded] = useState<string | null>(null)
   const pageSize = 15
   const totalPages = Math.ceil(jobs.length / pageSize)
   const displayed = jobs.slice(page * pageSize, (page + 1) * pageSize)
+  const colCount = (selectable ? 1 : 0) + 7
+
+  const allVisibleSelected =
+    displayed.length > 0 && displayed.every(job => selectedIds.includes(job.id))
 
   const getScoreColor = (score: number) => {
     if (score >= 80) return 'text-success'
@@ -61,32 +77,59 @@ export function JobsTable({ jobs }: JobsTableProps) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-card-border bg-[#FFF0E5] text-xs text-muted">
+                {selectable && (
+                  <th className="w-10 px-2 py-3 text-center">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={() => onToggleAll?.(displayed.map(j => j.id))}
+                      className="h-4 w-4 accent-primary"
+                      aria-label="全选当前页"
+                    />
+                  </th>
+                )}
                 <th className="px-4 py-3 text-left font-bold">公司</th>
+                <th className="px-4 py-3 text-left font-bold">规模</th>
                 <th className="px-4 py-3 text-left font-bold">职位</th>
                 <th className="px-4 py-3 text-left font-bold">薪资</th>
                 <th className="px-4 py-3 text-left font-bold">评分</th>
                 <th className="px-4 py-3 text-left font-bold">状态</th>
                 <th className="px-4 py-3 text-left font-bold">时间</th>
+                <th className="px-2 py-3 text-center font-bold">操作</th>
               </tr>
             </thead>
             <tbody>
               {displayed.map(job => {
                 const isExpanded = expanded === job.id
+                const isSelected = selectedIds.includes(job.id)
                 return (
                   <Fragment key={job.id}>
                     <tr
-                      className="cursor-pointer border-b border-card-border bg-white transition-colors hover:bg-[#FFFCFA]"
+                      className={`cursor-pointer border-b border-card-border transition-colors hover:bg-[#FFFCFA] ${isSelected ? 'bg-primary/5' : 'bg-white'}`}
                       onClick={() => setExpanded(isExpanded ? null : job.id)}
                     >
+                      {selectable && (
+                        <td className="px-2 text-center" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => onToggleSelect?.(job.id)}
+                            className="h-4 w-4 accent-primary"
+                            aria-label={`选择 ${job.company}`}
+                          />
+                        </td>
+                      )}
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="max-w-[160px] truncate font-black text-foreground">{job.company}</span>
-                          {job.company_size && (
-                            <span className="rounded-full bg-[#FFFCFA] px-2 py-0.5 text-[10px] font-bold text-muted">{job.company_size}</span>
-                          )}
-                        </div>
+                        <span className="max-w-[180px] truncate font-black text-foreground">{job.company}</span>
                       </td>
-                      <td className="max-w-[220px] truncate px-4 py-3 font-bold text-foreground">{job.title}</td>
+                      <td className="px-4 py-3">
+                        {job.company_size ? (
+                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary whitespace-nowrap">{job.company_size}</span>
+                        ) : (
+                          <span className="text-xs text-muted">-</span>
+                        )}
+                      </td>
+                      <td className="max-w-[200px] truncate px-4 py-3 font-bold text-foreground">{job.title}</td>
                       <td className="px-4 py-3 text-muted">{job.salary || '-'}</td>
                       <td className="px-4 py-3">
                         <span className={`font-mono font-black ${getScoreColor(job.score)}`}>{job.score || '-'}</span>
@@ -100,10 +143,21 @@ export function JobsTable({ jobs }: JobsTableProps) {
                           {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                         </div>
                       </td>
+                      <td className="px-2 text-center" onClick={e => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => onDelete?.(job)}
+                          className="rounded-lg p-2 text-muted transition hover:bg-red-50 hover:text-danger"
+                          aria-label={`删除 ${job.company}`}
+                          title="删除岗位"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-card-border bg-[#FFFCFA]">
-                        <td colSpan={6} className="px-6 py-4">
+                        <td colSpan={colCount} className="px-6 py-4">
                           <div className="grid grid-cols-1 gap-4 text-sm lg:grid-cols-3">
                             <div className="rounded-2xl border border-card-border bg-white p-4">
                               <p className="mb-2 text-xs font-black text-primary">JD摘要</p>
