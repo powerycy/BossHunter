@@ -86,6 +86,7 @@ export function JobFilterBar({
           <option value="本科">本科</option>
           <option value="大专">大专</option>
           <option value="不限">不限</option>
+          <option value="未识别">未识别</option>
         </Select>
         <Select className="min-w-0" value={filters.recruitmentType} onChange={event => update('recruitmentType', event.target.value)} aria-label="招聘类型">
           <option value="">招聘类型：全部</option>

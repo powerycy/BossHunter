@@ -397,6 +397,9 @@ class WebApiRouteTests(unittest.TestCase):
                 experienced = _job("experienced-master")
                 experienced.update({"education": "硕士", "recruitment_type": "experienced"})
                 insert_job(db, experienced)
+                unknown = _job("unknown-education")
+                unknown.update({"education": "", "recruitment_type": "unknown"})
+                insert_job(db, unknown)
             finally:
                 db.close()
             server.set_base_dir(base_dir)
@@ -407,11 +410,16 @@ class WebApiRouteTests(unittest.TestCase):
             experienced_status, _, experienced_body = self._request(
                 "/api/jobs/search?education=%E7%A1%95%E5%A3%AB&recruitment_type=experienced"
             )
+            unknown_status, _, unknown_body = self._request(
+                "/api/jobs/search?education=%E6%9C%AA%E8%AF%86%E5%88%AB"
+            )
 
         self.assertTrue(campus_status.startswith("200"), campus_body)
         self.assertEqual([job["id"] for job in json.loads(campus_body)["items"]], ["campus-bachelor"])
         self.assertTrue(experienced_status.startswith("200"), experienced_body)
         self.assertEqual([job["id"] for job in json.loads(experienced_body)["items"]], ["experienced-master"])
+        self.assertTrue(unknown_status.startswith("200"), unknown_body)
+        self.assertEqual([job["id"] for job in json.loads(unknown_body)["items"]], ["unknown-education"])
 
     def test_job_search_salary_overlap_excludes_unparseable_and_paginates(self):
         with tempfile.TemporaryDirectory() as tmp:

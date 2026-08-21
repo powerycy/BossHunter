@@ -102,7 +102,9 @@ def _filtered_rows(conn: sqlite3.Connection, filters: dict[str, Any] | None = No
 		conditions.append("COALESCE(recruitment_type, 'unknown') = ?")
 		params.append(recruitment_type)
 	education = str(filters.get("education") or "").strip()
-	if education:
+	if education == "未识别":
+		conditions.append("(education IS NULL OR TRIM(education) = '')")
+	elif education:
 		conditions.append("education LIKE ?")
 		params.append(f"%{education}%")
 	minimum_score = filters.get("min_score")
