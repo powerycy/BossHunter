@@ -65,6 +65,9 @@ export function useConfig() {
       const data = await res.json()
       if (data.success) {
         await fetchConfig()
+        // Notify the workbench immediately so quota/status cards do not wait
+        // for the next polling interval after a configuration change.
+        window.dispatchEvent(new Event('bosshunter-config-saved'))
         setMessage({ type: 'success', text: '配置已保存' })
         setDirty(false)
       } else {

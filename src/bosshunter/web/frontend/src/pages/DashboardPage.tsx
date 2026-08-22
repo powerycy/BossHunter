@@ -332,6 +332,13 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       return next.length === previous.length ? previous : next
     })
   }, [visibleJobIds])
+
+  useEffect(() => {
+    const handleConfigSaved = () => { void refresh() }
+    window.addEventListener('bosshunter-config-saved', handleConfigSaved)
+    return () => window.removeEventListener('bosshunter-config-saved', handleConfigSaved)
+  }, [refresh])
+
   const pendingGreetingJobs = workbench.pending_greetings
   const activeTask = workbench.task
   const visibleTask = activeTask || workbench.last_task
