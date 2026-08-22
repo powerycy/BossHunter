@@ -45,7 +45,12 @@ type AiService = keyof typeof AI_SERVICES
 
 export default function ConfigPage() {
   const { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig } = useConfig()
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({ profile: true, search: true })
+  const requestedSection = new URLSearchParams(window.location.search).get('section')
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => ({
+    profile: true,
+    search: true,
+    ...(requestedSection ? { [requestedSection]: true } : {}),
+  }))
   const [resumeInfo, setResumeInfo] = useState<any>(null)
   const [resumeUploadError, setResumeUploadError] = useState('')
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
