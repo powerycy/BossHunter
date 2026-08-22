@@ -18,6 +18,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\install_desktop_short
 
 This creates a `BossHunter.lnk` shortcut on the current user's desktop. The shortcut uses repository-relative paths and does not store API keys, passwords, or recruitment-platform credentials.
 
+During normal use, the shortcut keeps the PowerShell launcher and local web process hidden in the background, so no terminal window needs to remain open. Running the launcher script directly still shows diagnostics.
+
 ## Use
 
 Double-click the shortcut. It will:

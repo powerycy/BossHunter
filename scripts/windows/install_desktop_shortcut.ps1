@@ -14,7 +14,7 @@ $IconPath = Join-Path $RepoRoot "assets\bosshunter.ico"
 $Shell = New-Object -ComObject WScript.Shell
 $Shortcut = $Shell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = $PowerShell
-$Shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$Launcher`""
+$Shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Launcher`""
 $Shortcut.WorkingDirectory = $RepoRoot
 $Shortcut.Description = "Start the BossHunter Chrome profile and local workbench"
 if (Test-Path -LiteralPath $IconPath) {

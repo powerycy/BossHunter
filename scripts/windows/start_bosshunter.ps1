@@ -72,7 +72,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Starting the local workbench..."
 $WebArguments = @($RunnerPrefix) + @("web", "--no-open")
-Start-Process -FilePath $Runner -ArgumentList $WebArguments -WorkingDirectory $RepoRoot
+Start-Process -FilePath $Runner -ArgumentList $WebArguments -WorkingDirectory $RepoRoot -WindowStyle Hidden
 
 for ($i = 0; $i -lt 20; $i++) {
 	Start-Sleep -Milliseconds 500
