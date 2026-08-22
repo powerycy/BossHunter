@@ -55,6 +55,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
             company_size TEXT,
             company_industry TEXT,
             url TEXT,
+            source TEXT,
             score INTEGER DEFAULT 0,
             score_reason TEXT,
             greeting TEXT,
@@ -87,7 +88,9 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
     _migrate_v1_1(conn)
     _migrate_v1_2(conn)
+    _migrate_v1_3(conn)
     _init_scoring_runs(conn)
+    _init_collect_progress(conn)
 
 
 def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
@@ -302,9 +305,9 @@ def insert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
     """Insert a new job record."""
     conn.execute("""
         INSERT OR IGNORE INTO jobs (id, title, company, salary, city, experience, jd,
-            hr_name, hr_title, hr_active, company_size, company_industry, url)
+            hr_name, hr_title, hr_active, company_size, company_industry, url, source)
         VALUES (:id, :title, :company, :salary, :city, :experience, :jd,
-            :hr_name, :hr_title, :hr_active, :company_size, :company_industry, :url)
+            :hr_name, :hr_title, :hr_active, :company_size, :company_industry, :url, :source)
     """, job)
     conn.commit()
 
@@ -429,6 +432,22 @@ def _migrate_v1_2(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_v1_3(conn: sqlite3.Connection) -> None:
+    """Add source column（boss/51job）and backfill from existing url."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "source" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN source TEXT NULL")
+    # 回填：根据 url 判断来源（boss / 51job）
+    conn.execute(
+        "UPDATE jobs SET source = '51job' WHERE source IS NULL AND url LIKE '%jobs.51job.com%'"
+    )
+    conn.execute(
+        "UPDATE jobs SET source = 'boss' WHERE source IS NULL AND url LIKE '%zhipin.com%'"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source)")
+    conn.commit()
+
+
 def _init_scoring_runs(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -447,6 +466,40 @@ def _init_scoring_runs(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_scoring_runs_status ON scoring_runs(status);
         """
+    )
+    conn.commit()
+
+
+def _init_collect_progress(conn: sqlite3.Connection) -> None:
+    """采集断点续采进度表：记录已完成的 (source, city, keyword) 组合。"""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS collect_progress (
+            source TEXT NOT NULL,
+            city TEXT NOT NULL,
+            keyword TEXT NOT NULL,
+            finished_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (source, city, keyword)
+        );
+        """
+    )
+    conn.commit()
+
+
+def get_collected_combos(conn: sqlite3.Connection, source: str) -> set[tuple[str, str]]:
+    """返回某来源已完成的 (city, keyword) 组合集合（用于断点续采跳过）。"""
+    rows = conn.execute(
+        "SELECT city, keyword FROM collect_progress WHERE source = ?",
+        (source,),
+    ).fetchall()
+    return {(str(r["city"]), str(r["keyword"])) for r in rows}
+
+
+def mark_combo_collected(conn: sqlite3.Connection, source: str, city: str, keyword: str) -> None:
+    """标记一个 (source, city, keyword) 组合已完成（INSERT OR IGNORE，幂等）。"""
+    conn.execute(
+        "INSERT OR IGNORE INTO collect_progress (source, city, keyword) VALUES (?, ?, ?)",
+        (source, city, keyword),
     )
     conn.commit()
 

@@ -5,6 +5,7 @@ import random
 import re
 import time
 import hashlib
+from pathlib import Path
 from urllib.parse import quote
 
 from rich.console import Console
@@ -158,7 +159,12 @@ def scrape_jobs(
     When limit is None, collection is bounded only by city × keyword × max_pages.
     Returns the number of new jobs added.
     """
-    db = get_db()
+    # 数据库路径：跟随 config 里的 _base_dir（看板注入），否则用默认相对路径
+    _base = config.get("_base_dir")
+    if _base:
+        db = get_db(Path(_base) / "data" / "bosshunter.db")
+    else:
+        db = get_db()
     stop_event = get_stop_event(config)
     throttle = PageThrottle(delay_min=2.0, delay_max=5.0)
     deal_breakers = config.get("profile", {}).get("deal_breakers", [])
@@ -168,10 +174,18 @@ def scrape_jobs(
     blocked_companies = config.get("profile", {}).get("blocked_companies", [])
     new_count = 0
     duplicate_count = 0
+    skipped_combos = 0  # 断点续采：已跳过的已完成组合数
+    total_combos = 0    # 断点续采：本次搜索组合总数
 
     def report_progress() -> None:
         if callable(progress_callback):
-            progress_callback({"seen": seen_count, "new": new_count, "duplicate": duplicate_count})
+            progress_callback({
+                "seen": seen_count,
+                "new": new_count,
+                "duplicate": duplicate_count,
+                "resume_skipped": skipped_combos,
+                "resume_total": total_combos,
+            })
 
     # Pagination config
     search_config = config.get("search", {})
@@ -192,8 +206,21 @@ def scrape_jobs(
         for keyword in keywords:
             search_combos.append((city, city_code, keyword))
 
+    # 断点续采：跳过已完成的 (city, keyword) 组合
+    from bosshunter.db import get_collected_combos, mark_combo_collected
+    collected = get_collected_combos(db, "boss")
+    pending_combos = [
+        combo for combo in search_combos
+        if (combo[0], combo[2]) not in collected
+    ]
+    skipped_combos = len(search_combos) - len(pending_combos)
+    total_combos = len(search_combos)
+    if collected:
+        console.print(f"[dim]断点续采：已跳过 {skipped_combos} 个已完成组合，剩余 {len(pending_combos)} 个[/dim]")
+    search_combos = pending_combos
+
     if not search_combos:
-        console.print("[red]没有有效的搜索组合（检查城市配置）[/red]")
+        console.print("[green]所有组合均已采集完成，无需续采[/green]")
         db.close()
         return 0
 
@@ -344,6 +371,7 @@ def scrape_jobs(
                         "company_size": detail.get("company_size", ""),
                         "company_industry": detail.get("company_industry", ""),
                         "url": detail_url,
+                        "source": "boss",
                     }
 
                     if matching_deal_breaker(job_record["jd"], jd_deal_breakers):
@@ -363,6 +391,8 @@ def scrape_jobs(
                         break
 
             progress.update(task, description=f"搜索: {label} (新增 {keyword_new})")
+            # 断点续采：标记本关键词已完成（下次启动跳过）
+            mark_combo_collected(db, "boss", city, keyword)
 
     report_progress()
     db.close()
