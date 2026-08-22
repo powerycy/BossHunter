@@ -892,7 +892,13 @@ def api_history_unresolved_replies_count():
 def api_workbench():
 	db = _get_web_db()
 	try:
-		threshold = load_config(CONFIG_PATH).get("scoring", {}).get("threshold", 60)
+		config = load_config(CONFIG_PATH)
+		threshold = config.get("scoring", {}).get("threshold", 60)
+		daily_limit = int(config.get("throttle", {}).get("daily_limit", 30) or 30)
+		today_sent_row = db.execute(
+			"SELECT COUNT(*) AS cnt FROM history WHERE action='sent' AND date(created_at)=date('now')"
+		).fetchone()
+		today_sent = int(today_sent_row["cnt"] if today_sent_row else 0)
 		status = task_runner.status()
 		return _json_response({
 			"funnel": get_funnel_stats(db),
@@ -904,6 +910,12 @@ def api_workbench():
 			"pending_greetings": get_jobs_ready_to_send(db),
 			"send_errors": get_jobs_with_send_errors(db),
 			"needs_resume": get_jobs_needing_resume(db),
+			"send_quota": {
+				"daily_limit": daily_limit,
+				"sent": today_sent,
+				"remaining": max(daily_limit - today_sent, 0),
+				"exhausted": today_sent >= daily_limit,
+			},
 			"task": status["active"],
 			"last_task": status["last_task"],
 		})

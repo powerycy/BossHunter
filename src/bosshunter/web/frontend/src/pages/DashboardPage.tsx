@@ -658,6 +658,22 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         )}
       </section>
 
+      {workbench.send_quota?.exhausted && (
+        <section className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-amber-800">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-black">今日发送额度已用完</h3>
+              <p className="mt-1 text-sm leading-6">
+                今日已发送 {workbench.send_quota.sent}/{workbench.send_quota.daily_limit} 条，未发送岗位已保留在“待发送招呼语”；明日额度恢复后再重试。
+              </p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => { window.location.href = '/config' }}>
+              去设置发送额度
+            </Button>
+          </div>
+        </section>
+      )}
+
       <section>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>

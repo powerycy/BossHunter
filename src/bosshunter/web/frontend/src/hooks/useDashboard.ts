@@ -64,6 +64,7 @@ interface WorkbenchData {
   pending_greetings: Job[]
   send_errors: Job[]
   needs_resume: Job[]
+  send_quota: { daily_limit: number; sent: number; remaining: number; exhausted: boolean }
   task: WorkbenchTask | null
   last_task: WorkbenchTask | null
 }
@@ -99,6 +100,7 @@ const emptyWorkbench: WorkbenchData = {
   pending_greetings: [],
   send_errors: [],
   needs_resume: [],
+  send_quota: { daily_limit: 30, sent: 0, remaining: 30, exhausted: false },
   task: null,
   last_task: null,
 }
