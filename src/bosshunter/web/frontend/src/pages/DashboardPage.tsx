@@ -630,8 +630,21 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             )}
             {visibleTask.stop_reason && (
               <div className={`mt-3 rounded-2xl px-3 py-3 text-sm ${visibleTask.stop_reason === 'daily_limit' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'bg-[#FFF0E5] text-primary'}`}>
-                <div className="font-black">{visibleTask.stop_reason === 'daily_limit' ? '本次未发送' : '任务说明'}</div>
-                <div className="mt-1">{taskStopReasonLabel(visibleTask.stop_reason)}</div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="font-black">{visibleTask.stop_reason === 'daily_limit' ? '本次未发送' : '任务说明'}</div>
+                    <div className="mt-1">{taskStopReasonLabel(visibleTask.stop_reason)}</div>
+                  </div>
+                  {visibleTask.stop_reason === 'daily_limit' && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => { window.location.href = '/config' }}
+                    >
+                      去设置发送额度
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
           </div>
