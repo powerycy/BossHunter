@@ -12,6 +12,7 @@ class WindowsLauncherTests(unittest.TestCase):
 		text = LAUNCHER.read_text(encoding="utf-8")
 		self.assertIn("$PSScriptRoot", text)
 		self.assertIn("bosshunter.main", text)
+		self.assertIn("$PythonPath", text)
 		self.assertIn("Get-Command", text)
 		self.assertIn("remote-debugging-port=9222", text)
 		self.assertIn("http://127.0.0.1:8686", text)

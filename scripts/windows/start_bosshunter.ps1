@@ -1,15 +1,24 @@
 [CmdletBinding()]
 param(
-	[switch]$SkipChrome
+	[switch]$SkipChrome,
+	[string]$PythonPath
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$Bosshunter = Get-Command "bosshunter" -ErrorAction SilentlyContinue
-if ($Bosshunter) {
-	$Runner = $Bosshunter.Source
-	$RunnerPrefix = @()
+
+if ($PythonPath) {
+	if (-not (Test-Path -LiteralPath $PythonPath)) {
+		throw "Configured Python was not found: $PythonPath"
+	}
+	$Runner = (Resolve-Path -LiteralPath $PythonPath).Path
+	$RunnerPrefix = @("-m", "bosshunter.main")
 } else {
+	$Bosshunter = Get-Command "bosshunter" -ErrorAction SilentlyContinue
+	if ($Bosshunter) {
+		$Runner = $Bosshunter.Source
+		$RunnerPrefix = @()
+	} else {
 	$Python = Get-Command "py" -ErrorAction SilentlyContinue
 	if (-not $Python) {
 		$Python = Get-Command "python" -ErrorAction SilentlyContinue
@@ -19,6 +28,7 @@ if ($Bosshunter) {
 	}
 	$Runner = $Python.Source
 	$RunnerPrefix = @("-m", "bosshunter.main")
+	}
 }
 
 $ChromeCandidates = @()
