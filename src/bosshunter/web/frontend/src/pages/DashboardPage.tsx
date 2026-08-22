@@ -739,6 +739,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             </div>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={() => sendReadyGreetings(pendingGreetingJobs.map(job => job.id))}>发送全部 {pendingGreetingJobs.length} 个</Button>
+              <Button variant="secondary" size="sm" onClick={() => sendReadyGreetings(pendingGreetingJobs.map(job => job.id))}>重新发送全部</Button>
               <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(pendingGreetingJobs.map(job => job.id))}>放弃全部</Button>
             </div>
           </div>
@@ -755,6 +756,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 <p className="mt-3 line-clamp-2 text-sm leading-6 text-muted">{job.greeting || '招呼语已生成，等待发送。'}</p>
                 <div className="mt-3 flex gap-2">
                   <Button size="sm" onClick={() => sendReadyGreetings([job.id])}>发送招呼语</Button>
+                  <Button variant="secondary" size="sm" onClick={() => sendReadyGreetings([job.id])}>重新发送</Button>
                   <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs([job.id])}>放弃</Button>
                   <Button variant="secondary" size="sm" onClick={() => openJobDetail(job)}><Eye className="mr-2 h-4 w-4" />查看详情</Button>
                   <Button variant="secondary" size="sm" disabled={!job.url} onClick={() => window.open(job.url, '_blank', 'noopener,noreferrer')}><ExternalLink className="mr-2 h-4 w-4" />跳转岗位链接</Button>
