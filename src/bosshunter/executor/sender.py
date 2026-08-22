@@ -922,6 +922,9 @@ def send_greetings(config: dict, force: bool = False) -> int:
         "failed_count": 0,
         "deferred_count": len(workbench_job_ids),
         "quota_deferred_count": 0,
+        "already_sent": 0,
+        "daily_limit": 0,
+        "remaining_quota": 0,
         "stop_reason": None,
     }
     # Keep the integer return value for CLI/backward compatibility while giving
@@ -976,6 +979,9 @@ def send_greetings(config: dict, force: bool = False) -> int:
     already_sent = today_sent["cnt"] if today_sent else 0
 
     remaining_quota = daily_limit - already_sent
+    send_report["already_sent"] = already_sent
+    send_report["daily_limit"] = daily_limit
+    send_report["remaining_quota"] = max(remaining_quota, 0)
     if remaining_quota <= 0:
         console.print(f"[yellow]今日已达发送上限 ({daily_limit})[/yellow]")
         send_report["quota_deferred_count"] = len(jobs)

@@ -615,6 +615,16 @@ def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
 		deferred_count,
 	)
 	paused_count = max(deferred_count - quota_deferred_count, 0)
+	task.metrics.update({
+		"send_requested": int(report.get("requested_count", len(selected_job_ids)) or 0),
+		"send_success": int(report.get("sent_count", sent_count) or 0),
+		"send_failed": failed_count,
+		"send_deferred": deferred_count,
+		"send_quota_deferred": quota_deferred_count,
+		"send_already_today": int(report.get("already_sent", 0) or 0),
+		"send_daily_limit": int(report.get("daily_limit", 0) or 0),
+		"send_remaining_quota": int(report.get("remaining_quota", 0) or 0),
+	})
 	total_count = len(selected_job_ids) or sent_count + failed_count + deferred_count
 	_log(
 		task,
@@ -628,6 +638,10 @@ def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
 		_log(task, f"{paused_count} 个岗位本轮未执行，已保留在“待发送招呼语”")
 
 	stop_reason = report.get("stop_reason")
+	if stop_reason:
+		# Preserve the machine-readable reason in the task snapshot so the UI can
+		# distinguish a completed-with-deferrals task from a real send failure.
+		task.stop_reason = str(stop_reason)
 	if stop_reason in {"captcha", "rate_limit", "blocked", "consecutive_errors"}:
 		reason_labels = {
 			"captcha": "验证码",

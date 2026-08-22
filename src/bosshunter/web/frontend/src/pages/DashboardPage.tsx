@@ -50,6 +50,9 @@ const TASK_STAGE_LABELS = [
 function currentTaskStage(logs: string[] = []) {
   for (const log of logs.slice().reverse()) {
     if (log.includes('AI 评分进度')) return log
+    if (log.includes('发送招呼语发送结果') || log.includes('招呼语发送结果')) return log
+    if (log.includes('发送招呼语')) return '发送招呼语'
+    if (log.includes('生成招呼语')) return '生成招呼语'
     const stage = TASK_STAGE_LABELS.find(label => log.includes(label))
     if (stage) return stage
   }
@@ -73,6 +76,13 @@ function taskStatusClass(status: string) {
 function taskStatusTitle(status: string) {
   if (status === 'completed' || status === 'stopped') return '最近任务状态'
   return '当前阶段'
+}
+
+function taskStopReasonLabel(reason?: string) {
+  if (reason === 'daily_limit') return '今日发送额度已用完，岗位已保留在“待发送招呼语”；明日额度恢复后再重试。'
+  if (reason === 'outside_window') return '当前不在发送时间窗口内，岗位已保留在“待发送招呼语”。'
+  if (reason === 'day_off') return '今日触发防检测休息策略，岗位已保留在“待发送招呼语”。'
+  return reason
 }
 
 function taskErrorFeedback(error: string) {
@@ -159,6 +169,9 @@ const taskMetricItems = [
   { key: 'ai_passed', label: 'AI通过' },
   { key: 'ai_filtered', label: 'AI过滤' },
   { key: 'ai_failed', label: 'AI失败' },
+  { key: 'send_success', label: '发送成功' },
+  { key: 'send_deferred', label: '待下次发送' },
+  { key: 'send_remaining_quota', label: '今日剩余额度' },
 ]
 
 function jobSubtitle(job: Job) {
@@ -615,7 +628,12 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 </details>
               </div>
             )}
-            {visibleTask.stop_reason && <div className="mt-3 rounded-2xl bg-[#FFF0E5] px-3 py-2 text-sm text-primary">{visibleTask.stop_reason}</div>}
+            {visibleTask.stop_reason && (
+              <div className={`mt-3 rounded-2xl px-3 py-3 text-sm ${visibleTask.stop_reason === 'daily_limit' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'bg-[#FFF0E5] text-primary'}`}>
+                <div className="font-black">{visibleTask.stop_reason === 'daily_limit' ? '本次未发送' : '任务说明'}</div>
+                <div className="mt-1">{taskStopReasonLabel(visibleTask.stop_reason)}</div>
+              </div>
+            )}
           </div>
         )}
       </section>
