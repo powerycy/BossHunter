@@ -97,6 +97,28 @@ class ResumeStudioApiTests(unittest.TestCase):
 		self.assertTrue(status.startswith("200"), body)
 		return json.loads(body)["source"]
 
+	def _star_extraction(self):
+		return json.dumps({
+			"stories": [{
+				"title": {"text": "项目 Alpha", "evidence": "项目 Alpha"},
+				"situation": None,
+				"task": None,
+				"action": {
+					"text": "使用 Python 开发工具，2024 年服务 20 名用户。",
+					"evidence": "使用 Python 开发工具，2024 年服务 20 名用户。",
+				},
+				"result": None,
+				"technologies": [{
+					"name": "Python",
+					"evidence": "使用 Python 开发工具，2024 年服务 20 名用户。",
+				}],
+				"professional_skills": [],
+				"ownership_level": "unknown",
+				"ownership_evidence": "",
+				"confidence": 0.95,
+			}]
+		}, ensure_ascii=False)
+
 	def test_source_upload_is_local_and_duplicate_safe(self):
 		first = self._upload_source()
 		status, _, duplicate_body = self._request(
@@ -116,22 +138,33 @@ class ResumeStudioApiTests(unittest.TestCase):
 		self.assertTrue(workspace_status.startswith("200"), workspace_body)
 		self.assertEqual(len(workspace["sources"]), 1)
 		self.assertEqual(workspace["sources"][0]["id"], first["id"])
-		self.assertTrue(Path(first["stored_path"]).is_relative_to(self.base_dir / "data" / "resume_sources"))
+		stored_path = Path(first["stored_path"]).resolve()
+		expected_root = (self.base_dir / "data" / "resume_sources").resolve()
+		self.assertTrue(stored_path.is_relative_to(expected_root))
+
+	def test_external_ai_calls_require_explicit_consent(self):
+		source = self._upload_source()
+		status, _, body = self._request(
+			f"/api/resume-studio/sources/{source['id']}/extract",
+			method="POST",
+			json_body={"source_kind": "technical_document"},
+		)
+		self.assertTrue(status.startswith("428"), body)
+		self.assertIn("外部 AI", json.loads(body)["error"])
+
+		status, _, body = self._request(
+			"/api/resume-studio/profile/compose", method="POST", json_body={}
+		)
+		self.assertTrue(status.startswith("428"), body)
 
 	def test_full_review_compose_and_activate_flow(self):
 		source = self._upload_source()
-		extraction = json.dumps({
-			"facts": [{
-				"category": "项目经历",
-				"content": "使用 Python 开发工具，2024 年服务 20 名用户。",
-				"evidence": "使用 Python 开发工具，2024 年服务 20 名用户。",
-				"confidence": 0.95,
-			}]
-		}, ensure_ascii=False)
+		extraction = self._star_extraction()
 		with patch.object(service, "call_anthropic_text", return_value=extraction):
 			status, _, body = self._request(
 				f"/api/resume-studio/sources/{source['id']}/extract",
 				method="POST",
+				json_body={"source_kind": "technical_document", "external_ai_consent": True},
 			)
 		self.assertTrue(status.startswith("200"), body)
 		fact = json.loads(body)["facts"][0]
@@ -153,7 +186,7 @@ class ResumeStudioApiTests(unittest.TestCase):
 			status, _, body = self._request(
 				"/api/resume-studio/compose",
 				method="POST",
-				json_body={"target_role": "Python 后端工程师"},
+				json_body={"target_role": "Python 后端工程师", "external_ai_consent": True},
 			)
 		self.assertTrue(status.startswith("200"), body)
 		version = json.loads(body)["version"]
@@ -172,16 +205,13 @@ class ResumeStudioApiTests(unittest.TestCase):
 
 	def test_referenced_source_delete_returns_conflict(self):
 		source = self._upload_source()
-		extraction = json.dumps({
-			"facts": [{
-				"category": "项目经历",
-				"content": "使用 Python 开发工具，2024 年服务 20 名用户。",
-				"evidence": "使用 Python 开发工具，2024 年服务 20 名用户。",
-				"confidence": 1,
-			}]
-		}, ensure_ascii=False)
+		extraction = self._star_extraction()
 		with patch.object(service, "call_anthropic_text", return_value=extraction):
-			_, _, body = self._request(f"/api/resume-studio/sources/{source['id']}/extract", method="POST")
+			_, _, body = self._request(
+				f"/api/resume-studio/sources/{source['id']}/extract",
+				method="POST",
+				json_body={"source_kind": "technical_document", "external_ai_consent": True},
+			)
 		fact = json.loads(body)["facts"][0]
 		self._request(
 			f"/api/resume-studio/facts/{fact['id']}",
@@ -195,7 +225,10 @@ class ResumeStudioApiTests(unittest.TestCase):
 			}]
 		}, ensure_ascii=False)
 		with patch.object(service, "call_anthropic_text", return_value=composition):
-			self._request("/api/resume-studio/compose", method="POST", json_body={})
+			self._request(
+				"/api/resume-studio/compose", method="POST",
+				json_body={"external_ai_consent": True},
+			)
 
 		status, _, body = self._request(
 			f"/api/resume-studio/sources/{source['id']}",
@@ -203,7 +236,161 @@ class ResumeStudioApiTests(unittest.TestCase):
 			json_body={"confirmed": True},
 		)
 		self.assertTrue(status.startswith("409"), body)
-		self.assertIn("主简历版本引用", json.loads(body)["error"])
+		self.assertIn("版本引用", json.loads(body)["error"])
+
+	def test_extract_api_rejects_invalid_source_kind(self):
+		source = self._upload_source()
+		status, _, body = self._request(
+			f"/api/resume-studio/sources/{source['id']}/extract",
+			method="POST",
+			json_body={"source_kind": "spreadsheet", "external_ai_consent": True},
+		)
+
+		self.assertTrue(status.startswith("400"), body)
+		self.assertIn("材料类型", json.loads(body)["error"])
+
+	def test_profile_clarification_compose_activate_and_download_flow(self):
+		source = self._upload_source()
+		with patch.object(service, "call_anthropic_text", return_value=self._star_extraction()):
+			_, _, body = self._request(
+				f"/api/resume-studio/sources/{source['id']}/extract",
+				method="POST",
+				json_body={"source_kind": "technical_document", "external_ai_consent": True},
+			)
+		fact = json.loads(body)["facts"][0]
+		self._request(
+			f"/api/resume-studio/facts/{fact['id']}",
+			method="PATCH",
+			json_body={"status": "accepted"},
+		)
+		status, _, body = self._request(
+			"/api/resume-studio/profile/clarifications/refresh",
+			method="POST",
+		)
+		self.assertTrue(status.startswith("200"), body)
+		ownership = next(
+			item for item in json.loads(body)["clarifications"] if item["kind"] == "ownership"
+		)
+		status, _, body = self._request(
+			f"/api/resume-studio/profile/clarifications/{ownership['id']}",
+			method="PATCH",
+			json_body={
+				"status": "answered",
+				"answer": "我参与 Python 模块实现，未负责整体技术方案。",
+			},
+		)
+		self.assertTrue(status.startswith("200"), body)
+
+		composition = json.dumps({
+			"sections": [],
+			"projects": [{
+				"title": "项目 Alpha",
+				"meta": "",
+				"fact_ids": [fact["id"]],
+				"clarification_ids": [],
+				"stars": [{
+					"heading": "Python 工具",
+					"situation": "",
+					"task": "开发工具",
+					"action": fact["content"],
+					"result": "2024 年服务 20 名用户",
+					"bullet": fact["content"],
+					"technologies": ["Python"],
+					"fact_ids": [fact["id"]],
+					"clarification_ids": [],
+				}],
+			}],
+			"known_gaps": [],
+			"approved_framings": [],
+		}, ensure_ascii=False)
+		with patch.object(service, "call_anthropic_text", return_value=composition):
+			status, _, body = self._request(
+				"/api/resume-studio/profile/compose",
+				method="POST",
+				json_body={"external_ai_consent": True},
+			)
+		self.assertTrue(status.startswith("200"), body)
+		profile = json.loads(body)["profile"]
+		self.assertEqual(profile["fact_count"], 1)
+		self.assertEqual(profile["quality_report"]["evidence_coverage"], 1)
+
+		status, _, body = self._request(
+			f"/api/resume-studio/profile/versions/{profile['id']}/activate",
+			method="POST",
+		)
+		self.assertTrue(status.startswith("200"), body)
+		self.assertEqual(json.loads(body)["profile"]["status"], "active")
+		config = yaml.safe_load((self.base_dir / "config.yaml").read_text(encoding="utf-8"))
+		self.assertEqual(config["profile"]["resume_path"], profile["markdown_path"])
+
+		status, headers, body = self._request(
+			f"/api/resume-studio/profile/versions/{profile['id']}/download",
+		)
+		self.assertTrue(status.startswith("200"), body)
+		self.assertIn("职业简历档案", body)
+		self.assertIn("attachment", headers["Content-Disposition"])
+
+	def test_download_and_activation_reject_paths_outside_managed_directories(self):
+		outside = self.base_dir / "outside.md"
+		outside.write_text("private", encoding="utf-8")
+		version_id = "a" * 32
+		profile_id = "b" * 32
+		db = server._get_web_db()
+		try:
+			db.execute(
+				"INSERT INTO resume_versions (id, name, markdown, file_path) VALUES (?, ?, ?, ?)",
+				(version_id, "tampered", "# tampered", str(outside)),
+			)
+			db.execute(
+				"""INSERT INTO resume_profile_versions
+				(id, name, profile_json, markdown, quality_report, json_path, markdown_path)
+				VALUES (?, ?, ?, ?, ?, ?, ?)""",
+				(profile_id, "tampered", "{}", "# tampered", "{}", str(outside), str(outside)),
+			)
+			db.commit()
+		finally:
+			db.close()
+
+		for path, method in (
+			(f"/api/resume-studio/versions/{version_id}/download", "GET"),
+			(f"/api/resume-studio/versions/{version_id}/activate", "POST"),
+			(f"/api/resume-studio/profile/versions/{profile_id}/download", "GET"),
+			(f"/api/resume-studio/profile/versions/{profile_id}/activate", "POST"),
+		):
+			status, _, body = self._request(path, method=method)
+			self.assertTrue(status.startswith("409"), body)
+			self.assertIn("受管目录", json.loads(body)["error"])
+
+	def test_clear_resume_studio_requires_typed_confirmation_and_removes_only_workspace_data(self):
+		source = self._upload_source()
+		stored_path = Path(source["stored_path"])
+		manual_resume = self.base_dir / "data" / "resumes" / "manual_resume.md"
+		manual_resume.parent.mkdir(parents=True, exist_ok=True)
+		manual_resume.write_text("# manual", encoding="utf-8")
+		(self.base_dir / "config.yaml").write_text(
+			yaml.safe_dump({"profile": {"resume_path": str(manual_resume)}}, allow_unicode=True),
+			encoding="utf-8",
+		)
+		status, _, body = self._request(
+			"/api/resume-studio", method="DELETE",
+			json_body={"confirmed": True, "confirmation_text": "delete"},
+		)
+		self.assertTrue(status.startswith("409"), body)
+		self.assertTrue(stored_path.exists())
+
+		status, _, body = self._request(
+			"/api/resume-studio", method="DELETE",
+			json_body={"confirmed": True, "confirmation_text": "清空"},
+		)
+		self.assertTrue(status.startswith("200"), body)
+		self.assertFalse(stored_path.exists())
+		self.assertTrue(manual_resume.exists())
+		config = yaml.safe_load((self.base_dir / "config.yaml").read_text(encoding="utf-8"))
+		self.assertEqual(config["profile"]["resume_path"], str(manual_resume))
+		_, _, workspace_body = self._request("/api/resume-studio")
+		workspace = json.loads(workspace_body)
+		self.assertEqual(workspace["sources"], [])
+		self.assertEqual(workspace["facts"], [])
 
 
 if __name__ == "__main__":

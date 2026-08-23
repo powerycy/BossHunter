@@ -1,0 +1,6 @@
+interface:
+  display_name: "Career Profile 整理器"
+  short_description: "从已审核事实生成可追溯职业档案与高价值追问"
+  default_prompt: "Use $resume-profile-curator to build a traceable Career Profile from my accepted Resume Studio facts."
+policy:
+  allow_implicit_invocation: true

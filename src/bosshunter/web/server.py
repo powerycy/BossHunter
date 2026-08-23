@@ -50,13 +50,27 @@ from bosshunter.job_filters import parse_monthly_salary_k
 from bosshunter.job_export import InvalidJobSelectionError, export_jobs, export_row_count
 from bosshunter.resume_builder import (
 	ResumeBuilderError,
+	activate_career_profile,
 	activate_resume_version,
+	clear_resume_workspace,
+	compose_career_profile,
 	compose_resume_version,
 	delete_resume_source,
 	extract_source_facts,
 	ingest_resume_source,
+	refresh_profile_clarifications,
 )
-from bosshunter.resume_builder.store import get_version, list_facts, list_sources, list_versions, update_fact
+from bosshunter.resume_builder.store import (
+	get_profile_version,
+	get_version,
+	list_clarifications,
+	list_facts,
+	list_profile_versions,
+	list_sources,
+	list_versions,
+	update_clarification,
+	update_fact,
+)
 from bosshunter.scoring_run_store import (
 	create_scoring_run,
 	get_scoring_run,
@@ -113,16 +127,18 @@ BASE_DIR = _default_base_dir()
 DATA_DIR = BASE_DIR / "data"
 RESUME_DIR = DATA_DIR / "resumes"
 RESUME_SOURCE_DIR = DATA_DIR / "resume_sources"
+CAREER_PROFILE_DIR = DATA_DIR / "career_profiles"
 CONFIG_PATH = BASE_DIR / "config.yaml"
 
 
 def set_base_dir(base_dir: Path | str) -> None:
 	"""Set the runtime directory used for config.yaml, data, and uploads."""
-	global BASE_DIR, DATA_DIR, RESUME_DIR, RESUME_SOURCE_DIR, CONFIG_PATH
+	global BASE_DIR, DATA_DIR, RESUME_DIR, RESUME_SOURCE_DIR, CAREER_PROFILE_DIR, CONFIG_PATH
 	BASE_DIR = Path(base_dir).resolve()
 	DATA_DIR = BASE_DIR / "data"
 	RESUME_DIR = DATA_DIR / "resumes"
 	RESUME_SOURCE_DIR = DATA_DIR / "resume_sources"
+	CAREER_PROFILE_DIR = DATA_DIR / "career_profiles"
 	CONFIG_PATH = BASE_DIR / "config.yaml"
 	mark_orphaned_scoring_runs_paused(DATA_DIR / "bosshunter.db")
 
@@ -1688,6 +1704,8 @@ def _resume_studio_payload(db):
 		"sources": list_sources(db),
 		"facts": list_facts(db),
 		"versions": list_versions(db),
+		"clarifications": list_clarifications(db),
+		"profile_versions": list_profile_versions(db),
 	}
 
 
@@ -1696,11 +1714,66 @@ def _public_resume_source(source: dict) -> dict:
 	return {key: value for key, value in source.items() if key != "normalized_text"}
 
 
+def _require_external_ai_consent(body: dict) -> None:
+	if body.get("external_ai_consent") is not True:
+		raise ResumeBuilderError("发送个人材料到当前配置的外部 AI 服务前必须明确告知并取得同意")
+
+
+def _managed_generated_file(raw_path: object, root: Path, expected_name: str) -> Path:
+	"""Resolve a generated file and require an exact direct child/name match."""
+	resolved_root = root.resolve()
+	path = Path(str(raw_path)).resolve()
+	if path.parent != resolved_root or path.name != expected_name:
+		raise ResumeBuilderError("版本文件路径不在受管目录内")
+	if not path.is_file():
+		raise ResumeBuilderError("版本文件不存在")
+	return path
+
+
 @app.route("/api/resume-studio")
 def api_resume_studio_get():
 	db = _get_web_db()
 	try:
 		return _json_response(_resume_studio_payload(db))
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio", method="DELETE")
+def api_resume_studio_clear():
+	body = request.json if isinstance(request.json, dict) else {}
+	db = _get_web_db()
+	try:
+		confirmed = body.get("confirmed") is True and body.get("confirmation_text") == "清空"
+		result = clear_resume_workspace(
+			db,
+			source_dir=RESUME_SOURCE_DIR,
+			resume_dir=RESUME_DIR,
+			profile_dir=CAREER_PROFILE_DIR,
+			confirmed=confirmed,
+		)
+		config = load_config(CONFIG_PATH)
+		resume_path = str(config.get("profile", {}).get("resume_path", "")).strip()
+		if resume_path:
+			resolved = Path(resume_path).resolve()
+			is_generated_resume = (
+				resolved.parent == RESUME_DIR.resolve()
+				and resolved.name.startswith("master_resume_")
+				and resolved.suffix == ".md"
+			)
+			is_generated_profile = (
+				resolved.parent == CAREER_PROFILE_DIR.resolve()
+				and resolved.name.startswith("career_profile_")
+				and resolved.suffix == ".md"
+			)
+			if is_generated_resume or is_generated_profile:
+				config.setdefault("profile", {})["resume_path"] = ""
+				_write_config(config)
+		return _json_response({"success": True, **result})
+	except ResumeBuilderError as exc:
+		return _json_response({"error": str(exc)}, 409)
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
 	finally:
 		db.close()
 
@@ -1731,12 +1804,21 @@ def api_resume_studio_source_upload():
 
 @app.route("/api/resume-studio/sources/<source_id>/extract", method="POST")
 def api_resume_studio_source_extract(source_id):
+	body = request.json if isinstance(request.json, dict) else {}
+	requested_kind = body.get("source_kind")
 	db = _get_web_db()
 	try:
-		facts = extract_source_facts(db, source_id, load_config(CONFIG_PATH))
+		_require_external_ai_consent(body)
+		facts = extract_source_facts(
+			db,
+			source_id,
+			load_config(CONFIG_PATH),
+			source_kind=str(requested_kind) if requested_kind is not None else None,
+		)
 		return _json_response({"success": True, "facts": facts})
 	except ResumeBuilderError as exc:
-		return _json_response({"error": str(exc)}, 400)
+		status = 428 if "外部 AI" in str(exc) else 400
+		return _json_response({"error": str(exc)}, status)
 	except AIRequestError as exc:
 		return _json_response({"error": str(exc)}, 502)
 	except Exception as exc:
@@ -1793,6 +1875,7 @@ def api_resume_studio_compose():
 	target_role = str(body.get("target_role", "")).strip()[:100]
 	db = _get_web_db()
 	try:
+		_require_external_ai_consent(body)
 		version = compose_resume_version(
 			db,
 			load_config(CONFIG_PATH),
@@ -1801,11 +1884,113 @@ def api_resume_studio_compose():
 		)
 		return _json_response({"success": True, "version": version})
 	except ResumeBuilderError as exc:
-		return _json_response({"error": str(exc)}, 400)
+		status = 428 if "外部 AI" in str(exc) else 400
+		return _json_response({"error": str(exc)}, status)
 	except AIRequestError as exc:
 		return _json_response({"error": str(exc)}, 502)
 	except Exception as exc:
 		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/profile/clarifications/refresh", method="POST")
+def api_resume_studio_profile_clarifications_refresh():
+	db = _get_web_db()
+	try:
+		items = refresh_profile_clarifications(db)
+		return _json_response({"success": True, "clarifications": items})
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/profile/clarifications/<clarification_id>", method="PATCH")
+def api_resume_studio_profile_clarification_update(clarification_id):
+	body = request.json if isinstance(request.json, dict) else {}
+	db = _get_web_db()
+	try:
+		item = update_clarification(
+			db,
+			clarification_id,
+			status=str(body.get("status", "")),
+			answer=body.get("answer") if isinstance(body.get("answer"), str) else None,
+		)
+		if not item:
+			return _json_response({"error": "确认问题不存在"}, 404)
+		return _json_response({"success": True, "clarification": item})
+	except ValueError as exc:
+		return _json_response({"error": str(exc)}, 400)
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/profile/compose", method="POST")
+def api_resume_studio_profile_compose():
+	body = request.json if isinstance(request.json, dict) else {}
+	db = _get_web_db()
+	try:
+		_require_external_ai_consent(body)
+		profile = compose_career_profile(
+			db,
+			load_config(CONFIG_PATH),
+			output_dir=CAREER_PROFILE_DIR,
+		)
+		return _json_response({"success": True, "profile": profile})
+	except ResumeBuilderError as exc:
+		status = 428 if "外部 AI" in str(exc) else 400
+		return _json_response({"error": str(exc)}, status)
+	except AIRequestError as exc:
+		return _json_response({"error": str(exc)}, 502)
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/profile/versions/<profile_id>/activate", method="POST")
+def api_resume_studio_profile_activate(profile_id):
+	db = _get_web_db()
+	try:
+		profile = get_profile_version(db, profile_id)
+		if not profile:
+			return _json_response({"error": "Career Profile 版本不存在"}, 404)
+		prefix = "career_profile_" + profile_id[:12]
+		markdown_path = _managed_generated_file(
+			profile["markdown_path"], CAREER_PROFILE_DIR, prefix + ".md"
+		)
+		_managed_generated_file(profile["json_path"], CAREER_PROFILE_DIR, prefix + ".json")
+		config = load_config(CONFIG_PATH)
+		config.setdefault("profile", {})["resume_path"] = str(markdown_path)
+		_write_config(config)
+		profile = activate_career_profile(db, profile_id)
+		return _json_response({"success": True, "profile": profile})
+	except ResumeBuilderError as exc:
+		return _json_response({"error": str(exc)}, 409)
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/profile/versions/<profile_id>/download")
+def api_resume_studio_profile_download(profile_id):
+	db = _get_web_db()
+	try:
+		profile = get_profile_version(db, profile_id)
+		if not profile:
+			return _json_response({"error": "Career Profile 版本不存在"}, 404)
+		path_key = "json_path" if request.query.get("format") == "json" else "markdown_path"
+		suffix = ".json" if path_key == "json_path" else ".md"
+		path = _managed_generated_file(
+			profile[path_key], CAREER_PROFILE_DIR, "career_profile_" + profile_id[:12] + suffix
+		)
+		return static_file(path.name, root=str(path.parent), download=path.name)
+	except ResumeBuilderError as exc:
+		return _json_response({"error": str(exc)}, 409)
 	finally:
 		db.close()
 
@@ -1817,15 +2002,16 @@ def api_resume_studio_version_activate(version_id):
 		version = get_version(db, version_id)
 		if not version:
 			return _json_response({"error": "主简历版本不存在"}, 404)
-		if not Path(version["file_path"]).exists():
-			return _json_response({"error": "主简历版本文件不存在"}, 409)
+		path = _managed_generated_file(
+			version["file_path"], RESUME_DIR, "master_resume_" + version_id[:12] + ".md"
+		)
 		config = load_config(CONFIG_PATH)
-		config.setdefault("profile", {})["resume_path"] = version["file_path"]
+		config.setdefault("profile", {})["resume_path"] = str(path)
 		_write_config(config)
 		active = activate_resume_version(db, version_id)
 		return _json_response({"success": True, "version": active})
 	except ResumeBuilderError as exc:
-		return _json_response({"error": str(exc)}, 400)
+		return _json_response({"error": str(exc)}, 409)
 	except Exception as exc:
 		return _json_response({"error": str(exc)}, 500)
 	finally:
@@ -1839,10 +2025,12 @@ def api_resume_studio_version_download(version_id):
 		version = get_version(db, version_id)
 		if not version:
 			return _json_response({"error": "主简历版本不存在"}, 404)
-		path = Path(version["file_path"])
-		if not path.exists():
-			return _json_response({"error": "主简历版本文件不存在"}, 404)
+		path = _managed_generated_file(
+			version["file_path"], RESUME_DIR, "master_resume_" + version_id[:12] + ".md"
+		)
 		return static_file(path.name, root=str(path.parent), download=path.name)
+	except ResumeBuilderError as exc:
+		return _json_response({"error": str(exc)}, 409)
 	finally:
 		db.close()
 

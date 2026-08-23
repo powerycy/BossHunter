@@ -101,6 +101,10 @@ def _init_resume_studio(conn: sqlite3.Connection) -> None:
             stored_path TEXT NOT NULL,
             content_hash TEXT NOT NULL UNIQUE,
             normalized_text TEXT NOT NULL,
+            detected_kind TEXT NOT NULL DEFAULT 'unknown',
+            detected_kind_confidence REAL NOT NULL DEFAULT 0,
+            detected_kind_evidence TEXT,
+            selected_kind TEXT,
             status TEXT NOT NULL DEFAULT 'ready',
             error TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -115,10 +119,27 @@ def _init_resume_studio(conn: sqlite3.Connection) -> None:
             edited_content TEXT,
             evidence TEXT NOT NULL,
             confidence REAL NOT NULL DEFAULT 0,
+            fact_type TEXT NOT NULL DEFAULT 'legacy',
+            entity_type TEXT,
+            field_name TEXT,
+            group_id TEXT,
+            structured_data TEXT,
+            completeness REAL NOT NULL DEFAULT 1,
+            needs_clarification INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (source_id) REFERENCES resume_sources(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS resume_fact_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fact_id TEXT NOT NULL,
+            component TEXT NOT NULL,
+            quote TEXT NOT NULL,
+            start_offset INTEGER,
+            end_offset INTEGER,
+            FOREIGN KEY (fact_id) REFERENCES resume_facts(id)
         );
 
         CREATE TABLE IF NOT EXISTS resume_versions (
@@ -140,11 +161,88 @@ def _init_resume_studio(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (fact_id) REFERENCES resume_facts(id)
         );
 
+        CREATE TABLE IF NOT EXISTS resume_clarifications (
+            id TEXT PRIMARY KEY,
+            fact_id TEXT,
+            dedupe_key TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL,
+            question TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT,
+            answer TEXT,
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            answered_at TIMESTAMP,
+            FOREIGN KEY (fact_id) REFERENCES resume_facts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS resume_profile_versions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            profile_json TEXT NOT NULL,
+            markdown TEXT NOT NULL,
+            quality_report TEXT NOT NULL,
+            json_path TEXT NOT NULL,
+            markdown_path TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            activated_at TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS resume_profile_facts (
+            profile_id TEXT NOT NULL,
+            fact_id TEXT NOT NULL,
+            PRIMARY KEY (profile_id, fact_id),
+            FOREIGN KEY (profile_id) REFERENCES resume_profile_versions(id),
+            FOREIGN KEY (fact_id) REFERENCES resume_facts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS resume_profile_clarifications (
+            profile_id TEXT NOT NULL,
+            clarification_id TEXT NOT NULL,
+            PRIMARY KEY (profile_id, clarification_id),
+            FOREIGN KEY (profile_id) REFERENCES resume_profile_versions(id),
+            FOREIGN KEY (clarification_id) REFERENCES resume_clarifications(id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_resume_facts_source ON resume_facts(source_id);
         CREATE INDEX IF NOT EXISTS idx_resume_facts_status ON resume_facts(status);
+        CREATE INDEX IF NOT EXISTS idx_resume_fact_evidence_fact ON resume_fact_evidence(fact_id);
+        CREATE INDEX IF NOT EXISTS idx_resume_clarifications_status ON resume_clarifications(status);
+        CREATE INDEX IF NOT EXISTS idx_resume_profile_versions_status ON resume_profile_versions(status);
         CREATE INDEX IF NOT EXISTS idx_resume_versions_status ON resume_versions(status);
     """)
+    _migrate_resume_studio(conn)
     conn.commit()
+
+
+def _migrate_resume_studio(conn: sqlite3.Connection) -> None:
+    """Add typed extraction metadata without rewriting existing resume data."""
+    source_columns = {row[1] for row in conn.execute("PRAGMA table_info(resume_sources)").fetchall()}
+    source_additions = {
+        "detected_kind": "TEXT NOT NULL DEFAULT 'unknown'",
+        "detected_kind_confidence": "REAL NOT NULL DEFAULT 0",
+        "detected_kind_evidence": "TEXT",
+        "selected_kind": "TEXT",
+    }
+    for name, declaration in source_additions.items():
+        if name not in source_columns:
+            conn.execute(f"ALTER TABLE resume_sources ADD COLUMN {name} {declaration}")
+
+    fact_columns = {row[1] for row in conn.execute("PRAGMA table_info(resume_facts)").fetchall()}
+    fact_additions = {
+        "fact_type": "TEXT NOT NULL DEFAULT 'legacy'",
+        "entity_type": "TEXT",
+        "field_name": "TEXT",
+        "group_id": "TEXT",
+        "structured_data": "TEXT",
+        "completeness": "REAL NOT NULL DEFAULT 1",
+        "needs_clarification": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for name, declaration in fact_additions.items():
+        if name not in fact_columns:
+            conn.execute(f"ALTER TABLE resume_facts ADD COLUMN {name} {declaration}")
 
 
 def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
