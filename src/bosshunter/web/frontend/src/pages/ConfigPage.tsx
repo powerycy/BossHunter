@@ -439,8 +439,18 @@ export default function ConfigPage() {
             <Field label="检查间隔 (分钟)">
               <Input type="number" value={config.monitor?.interval || 30} onChange={e => updateConfig('monitor.interval', Number(e.target.value))} min={1} max={120} />
             </Field>
+            <Field label="全流程首次监测冷却 (分钟)">
+              <Input type="number" value={config.monitor?.initial_cooldown_minutes ?? 10} onChange={e => updateConfig('monitor.initial_cooldown_minutes', Number(e.target.value))} min={0} max={120} />
+              <p className="mt-1 text-xs text-muted">仅运行全流程发送结束后生效；单独监测立即检查，停止任务可取消等待。</p>
+            </Field>
             <Field label="聊天页 URL">
               <Input value={config.monitor?.chat_url || ''} onChange={e => updateConfig('monitor.chat_url', e.target.value)} />
+            </Field>
+            <Field label="每轮最多处理对话数">
+              <Input type="number" value={config.monitor?.max_conversations_per_cycle ?? 5} onChange={e => updateConfig('monitor.max_conversations_per_cycle', Number(e.target.value))} min={1} max={20} />
+            </Field>
+            <Field label="连续页面失败停止阈值">
+              <Input type="number" value={config.monitor?.max_consecutive_page_failures ?? 3} onChange={e => updateConfig('monitor.max_consecutive_page_failures', Number(e.target.value))} min={1} max={10} />
             </Field>
             <Field label="每轮最多发简历数">
               <Input type="number" value={config.monitor?.max_resume_sends_per_cycle || 5} onChange={e => updateConfig('monitor.max_resume_sends_per_cycle', Number(e.target.value))} min={1} />

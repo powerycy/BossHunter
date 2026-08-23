@@ -73,7 +73,10 @@
       "icon": "Eye",
       "fields": [
         {"key": "interval", "label": "检查间隔 (分钟)", "type": "number", "min": 1, "max": 120, "default": 30},
+        {"key": "initial_cooldown_minutes", "label": "全流程首次监测冷却 (分钟)", "type": "number", "min": 0, "max": 120, "default": 10, "description": "仅运行全流程发送结束后生效；单独监测立即执行首轮，停止任务可取消冷却"},
         {"key": "chat_url", "label": "聊天页 URL", "type": "text", "default": "https://www.zhipin.com/web/geek/chat"},
+        {"key": "max_conversations_per_cycle", "label": "每轮最多处理对话数", "type": "number", "min": 1, "max": 20, "default": 5},
+        {"key": "max_consecutive_page_failures", "label": "连续页面失败停止阈值", "type": "number", "min": 1, "max": 10, "default": 3},
         {"key": "max_resume_sends_per_cycle", "label": "每轮最多发简历数", "type": "number", "min": 1, "max": 20, "default": 5},
         {"key": "auto_reply_hr_questions", "label": "检测到 HR 问题时自动回复", "type": "switch", "default": false, "description": "关闭时只生成回复建议，需要在监测执行中确认后发送"}
       ]

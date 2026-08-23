@@ -1152,7 +1152,7 @@ class WebApiRouteTests(unittest.TestCase):
                 config.get("throttle", {}).get("daily_limit"),
             ))
 
-        def fake_monitor(task, config):
+        def fake_monitor(task, config, **kwargs):
             calls.append("monitor")
 
         runner = WorkbenchTaskRunner()
@@ -1216,7 +1216,7 @@ class WebApiRouteTests(unittest.TestCase):
                      "_execute_deliver",
                      side_effect=lambda _task, config: calls.append(("deliver", config["_workbench_job_ids"])),
                  ), \
-                 patch.object(server, "_execute_monitor", side_effect=lambda *_: calls.append("monitor")), \
+                 patch.object(server, "_execute_monitor", side_effect=lambda *_, **__: calls.append("monitor")), \
                  patch.object(server, "load_config", return_value={}):
                 server._execute_full(task, {})
 

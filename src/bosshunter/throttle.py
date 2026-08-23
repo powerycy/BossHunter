@@ -42,6 +42,11 @@ class RequestThrottle:
         self._last_request_time = now
         self._recent_times.append(now)
 
+    @property
+    def has_marked_request(self) -> bool:
+        """Return whether at least one request has been recorded."""
+        return self._last_request_time > 0
+
     def _burst_penalty(self) -> float:
         """Extra delay when requests arrive in bursts."""
         if not self._recent_times:

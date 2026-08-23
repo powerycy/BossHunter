@@ -275,6 +275,8 @@ def monitor(ctx: click.Context, once: bool, interval: int | None) -> None:
         if summary.get("rejected"):
             parts.append(f"拒绝{summary['rejected']}条")
         console.print(f"\n[bold]本次: {', '.join(parts)}[/bold]")
+        if summary.get("stop_reason"):
+            console.print("[red]检测到平台风险信号，本次监测已安全停止[/red]")
     else:
         console.print(f"[bold cyan]═══ 持续监听模式 (间隔 {interval_min} 分钟) ═══[/bold cyan]\n")
         console.print("[dim]按 Ctrl+C 停止[/dim]\n")
@@ -282,6 +284,9 @@ def monitor(ctx: click.Context, once: bool, interval: int | None) -> None:
             while True:
                 try:
                     summary = monitor_and_send_resumes(config)
+                    if summary.get("stop_reason"):
+                        console.print("[red]检测到平台风险信号，持续监测已安全停止[/red]")
+                        break
                 except Exception as e:
                     console.print(f"[red]本轮监听出错: {e}[/red]")
                     console.print("[dim]将在下一轮重试...[/dim]")

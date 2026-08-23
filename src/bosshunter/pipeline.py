@@ -72,6 +72,16 @@ def run_pipeline(config: dict) -> None:
     from bosshunter.executor.monitor import monitor_and_send_resumes
 
     try:
+        raw_cooldown = config.get("monitor", {}).get("initial_cooldown_minutes", 10)
+        try:
+            initial_cooldown_sec = max(float(raw_cooldown), 0) * 60
+        except (TypeError, ValueError):
+            initial_cooldown_sec = 10 * 60
+        if initial_cooldown_sec > 0:
+            console.print(
+                f"[dim]发送结束后先冷却 {initial_cooldown_sec / 60:g} 分钟；按 Ctrl+C 可取消[/dim]\n"
+            )
+            time.sleep(initial_cooldown_sec)
         while True:
             try:
                 summary = monitor_and_send_resumes(config)
@@ -84,6 +94,9 @@ def run_pipeline(config: dict) -> None:
                     parts.append(f"[bold yellow]待手动发简历{summary['needs_resume']}份[/bold yellow]")
                 if parts:
                     console.print(f"  本轮: {', '.join(parts)}")
+                if summary.get("stop_reason"):
+                    console.print("[red]监测检测到风险信号，已安全停止[/red]")
+                    break
             except Exception as e:
                 console.print(f"[red]  监测出错: {e}[/red]")
             console.print(f"[dim]  下次检查: {interval_min} 分钟后...[/dim]\n")

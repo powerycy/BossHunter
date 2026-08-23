@@ -65,6 +65,26 @@ class WorkbenchTask:
 Executor = Callable[[WorkbenchTask, dict], None]
 
 
+def wait_for_initial_monitor_cooldown(
+    task: WorkbenchTask,
+    config: dict,
+    log: Callable[[WorkbenchTask, str], None],
+) -> bool:
+    """Wait for the full-flow monitor cooldown; return true when cancellation wins."""
+    raw_cooldown = config.get("monitor", {}).get("initial_cooldown_minutes", 10)
+    try:
+        cooldown_sec = max(float(raw_cooldown), 0) * 60
+    except (TypeError, ValueError):
+        cooldown_sec = 10 * 60
+    if cooldown_sec <= 0:
+        return False
+    log(task, f"发送结束，首次监测将在 {cooldown_sec / 60:g} 分钟冷却后开始")
+    if task.stop_requested.wait(cooldown_sec):
+        log(task, "首次监测冷却已取消")
+        return True
+    return False
+
+
 class WorkbenchTaskRunner:
     def __init__(self, executors: dict[str, Executor] | None = None):
         self._executors = executors or {}

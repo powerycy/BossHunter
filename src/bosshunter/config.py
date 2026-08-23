@@ -112,7 +112,10 @@ DEFAULTS: dict[str, Any] = {
     },
     "monitor": {
         "interval": 30,  # 分钟
+        "initial_cooldown_minutes": 10,
         "chat_url": "https://www.zhipin.com/web/geek/chat",
+        "max_conversations_per_cycle": 5,
+        "max_consecutive_page_failures": 3,
         "max_resume_sends_per_cycle": 5,
         "auto_reply_hr_questions": False,
     },

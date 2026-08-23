@@ -59,7 +59,12 @@ from bosshunter.scoring_selection import preview_scoring, select_scoring_jobs, v
 from bosshunter.web.preflight import check_ai_connection, collect_preflight_checks, error_messages
 from bosshunter.web.resume_upload import ResumeUploadError, prepare_resume_content
 from bosshunter.web.city_lookup import CityLookupError, lookup_city
-from bosshunter.web.tasks import TaskAlreadyRunningError, WorkbenchTask, WorkbenchTaskRunner
+from bosshunter.web.tasks import (
+	TaskAlreadyRunningError,
+	WorkbenchTask,
+	WorkbenchTaskRunner,
+	wait_for_initial_monitor_cooldown,
+)
 
 mimetypes.add_type("application/javascript", ".js", strict=True)
 mimetypes.add_type("application/javascript", ".mjs", strict=True)
@@ -415,7 +420,7 @@ def _take_monitor_deliveries(task: WorkbenchTask) -> list[dict]:
 	return pending
 
 
-def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
+def _execute_monitor(task: WorkbenchTask, config: dict, *, initial_cooldown: bool = False) -> None:
 	from bosshunter.executor.monitor import monitor_and_send_resumes
 
 	monitor_config = dict(config)
@@ -426,6 +431,8 @@ def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
 	wakeup_event = task.context.setdefault("monitor_wakeup_event", Event())
 	task.context["monitoring"] = True
 	try:
+		if initial_cooldown and wait_for_initial_monitor_cooldown(task, config, _log):
+			return
 		while not task.stop_requested.is_set():
 			for batch in _take_monitor_deliveries(task):
 				deliver_config = dict(config)
@@ -437,8 +444,21 @@ def _execute_monitor(task: WorkbenchTask, config: dict) -> None:
 				if task.stop_requested.is_set():
 					return
 			_log(task, "执行一轮监测")
-			monitor_and_send_resumes(monitor_config)
+			summary = monitor_and_send_resumes(monitor_config)
 			if task.stop_requested.is_set():
+				return
+			stop_reason = summary.get("stop_reason")
+			if stop_reason:
+				reason_labels = {
+					"captcha": "验证码",
+					"rate_limit": "频率限制",
+					"blocked": "账号或请求被拦截",
+					"consecutive_page_failures": "连续页面失败",
+				}
+				reason = f"监测已安全停止：检测到{reason_labels.get(stop_reason, '风险信号')}"
+				task.stop_reason = reason
+				task.stop_requested.set()
+				_log(task, reason)
 				return
 			_log(task, f"本轮监测完成，{interval_min} 分钟后再次检查")
 			wakeup_event.wait(interval_sec)
@@ -510,7 +530,7 @@ def _execute_full(task: WorkbenchTask, config: dict) -> None:
 	_execute_deliver(task, deliver_config)
 	if task.stop_requested.is_set():
 		return
-	_execute_monitor(task, load_config(CONFIG_PATH))
+	_execute_monitor(task, load_config(CONFIG_PATH), initial_cooldown=True)
 
 
 def _queue_active_delivery(
