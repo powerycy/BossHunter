@@ -79,6 +79,13 @@ DEFAULTS: dict[str, Any] = {
         "city_codes": {},
         "max_pages": 3,
     },
+    "collection": {
+        "daily_new_jobs_limit": 100,
+        "daily_search_page_limit": 30,
+        "daily_detail_page_limit": 150,
+        "max_consecutive_page_failures": 3,
+        "delivery_cooldown_minutes": 30,
+    },
     "scoring": {
         "threshold": 71,
         "max_candidates": 20,
@@ -126,6 +133,10 @@ DEFAULTS: dict[str, Any] = {
     },
     "dedup": {
         "history_file": "./data/history.jsonl",
+    },
+    "safety": {
+        "daily_platform_page_limit": 500,
+        "risk_lock_minutes": 1440,
     },
     "browser": {
         "runtime": "builtin",

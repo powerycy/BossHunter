@@ -81,10 +81,16 @@ class ScraperBackgroundTests(unittest.TestCase):
         }
 
         with patch("bosshunter.scraper.jobs.get_db", return_value=db), \
+             patch("bosshunter.scraper.jobs.count_jobs_created_today", return_value=0), \
+             patch("bosshunter.scraper.jobs.PlatformAccessGuard") as guard_cls, \
              patch("bosshunter.scraper.jobs.Progress", return_value=progress_context), \
              patch("bosshunter.scraper.jobs.PageThrottle") as throttle_cls, \
-             patch("bosshunter.scraper.jobs.new_tab", side_effect=["search-target", "detail-target"]), \
-             patch("bosshunter.scraper.jobs.evaluate", side_effect=[json.dumps(jobs), json.dumps(detail)]), \
+             patch("bosshunter.scraper.jobs.new_tab", return_value="worker-target"), \
+             patch("bosshunter.scraper.jobs.navigate", return_value=True), \
+             patch("bosshunter.scraper.jobs.evaluate", side_effect=[
+                 json.dumps({"risk": None}), json.dumps(jobs),
+                 json.dumps({"risk": None}), json.dumps(detail),
+             ]), \
              patch("bosshunter.scraper.jobs.wait_for_load"), \
              patch("bosshunter.scraper.jobs.scroll"), \
              patch("bosshunter.scraper.jobs.close_tab"), \
@@ -93,13 +99,16 @@ class ScraperBackgroundTests(unittest.TestCase):
              patch("bosshunter.scraper.jobs.insert_job"), \
              patch("bosshunter.scraper.jobs.time.sleep"):
             throttle_cls.return_value.wait.return_value = None
+            guard_cls.return_value.ensure_unlocked.return_value = None
             count = scrape_jobs(config, ["AI"], collected_job_ids=collected_job_ids)
 
         self.assertEqual(count, 1)
         self.assertEqual(len(collected_job_ids), 1)
-        self.assertEqual(updates[-1], {"seen": 2, "new": 1, "duplicate": 1})
+        self.assertEqual(updates[-1], {
+            "seen": 2, "new": 1, "duplicate": 1, "filtered": 0, "search_pages": 1,
+        })
 
-    def test_search_and_detail_pages_open_in_background(self):
+    def test_search_and_detail_pages_reuse_one_visible_worker_tab(self):
         db = Mock()
         progress = Mock()
         progress.add_task.return_value = "task-1"
@@ -128,15 +137,21 @@ class ScraperBackgroundTests(unittest.TestCase):
         }
 
         with patch("bosshunter.scraper.jobs.get_db", return_value=db), \
+             patch("bosshunter.scraper.jobs.count_jobs_created_today", return_value=0), \
+             patch("bosshunter.scraper.jobs.PlatformAccessGuard") as guard_cls, \
              patch("bosshunter.scraper.jobs.Progress", return_value=progress_context), \
              patch("bosshunter.scraper.jobs.PageThrottle") as throttle_cls, \
              patch(
                  "bosshunter.scraper.jobs.new_tab",
-                 side_effect=["search-target", "detail-target"],
+                 return_value="worker-target",
              ) as new_tab, \
+             patch("bosshunter.scraper.jobs.navigate", return_value=True) as navigate, \
              patch(
                  "bosshunter.scraper.jobs.evaluate",
-                 side_effect=[json.dumps(jobs), json.dumps(detail)],
+                 side_effect=[
+                     json.dumps({"risk": None}), json.dumps(jobs),
+                     json.dumps({"risk": None}), json.dumps(detail),
+                 ],
              ), \
              patch("bosshunter.scraper.jobs.wait_for_load"), \
              patch("bosshunter.scraper.jobs.scroll"), \
@@ -146,21 +161,17 @@ class ScraperBackgroundTests(unittest.TestCase):
              patch("bosshunter.scraper.jobs.insert_job"), \
              patch("bosshunter.scraper.jobs.time.sleep"):
             throttle_cls.return_value.wait.return_value = None
+            guard_cls.return_value.ensure_unlocked.return_value = None
             count = scrape_jobs(config, ["AI"])
 
         self.assertEqual(count, 1)
-        self.assertEqual(
-            new_tab.call_args_list,
-            [
-                call(
-                    "https://www.zhipin.com/web/geek/job?query=AI&city=101010100",
-                    background=True,
-                ),
-                call(
-                    "https://www.zhipin.com/job_detail/background-job.html",
-                    background=True,
-                ),
-            ],
+        new_tab.assert_called_once_with(
+            "https://www.zhipin.com/web/geek/job?query=AI&city=101010100",
+            background=False,
+        )
+        navigate.assert_called_once_with(
+            "worker-target",
+            "https://www.zhipin.com/job_detail/background-job.html",
         )
 
 

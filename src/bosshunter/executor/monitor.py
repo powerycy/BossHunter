@@ -15,9 +15,14 @@ from bosshunter.cancellation import (
 )
 from bosshunter.db import (
     get_db, get_jobs_by_status,
-    update_job_status, add_history, add_risk_event,
+    update_job_status, add_history, add_risk_event, set_platform_safety_lock,
 )
 from bosshunter.throttle import RequestThrottle, SendWindowChecker
+from bosshunter.platform_safety import (
+    PlatformAccessGuard,
+    PlatformSafetyStop,
+    TransientPlatformAccessGuard,
+)
 
 console = Console()
 
@@ -97,6 +102,7 @@ class MonitorSafetyGuard:
     """Track consecutive monitor page failures and stop at a conservative threshold."""
 
     def __init__(self, config: dict) -> None:
+        self.config = config
         raw_limit = config.get("monitor", {}).get("max_consecutive_page_failures", 3)
         try:
             self.limit = max(int(raw_limit), 1)
@@ -107,7 +113,7 @@ class MonitorSafetyGuard:
     def record_page_failure(self) -> None:
         self.consecutive_page_failures += 1
         if self.consecutive_page_failures >= self.limit:
-            _raise_monitor_risk("consecutive_page_failures")
+            _raise_monitor_risk("consecutive_page_failures", self.config)
 
     def record_page_success(self) -> None:
         self.consecutive_page_failures = 0
@@ -281,7 +287,7 @@ def _record_page_failure_unless_stopped(config: dict) -> None:
         _monitor_safety_guard(config).record_page_failure()
 
 
-def _record_monitor_risk(kind: str) -> None:
+def _record_monitor_risk(kind: str, config: dict | None = None) -> None:
     """Persist a safe risk event without page text, URLs, or account data."""
     labels = {
         "captcha": "监测检测到验证码，已停止",
@@ -293,6 +299,12 @@ def _record_monitor_risk(kind: str) -> None:
     try:
         db = get_db()
         add_risk_event(db, f"monitor_{kind}", labels.get(kind, "监测检测到风险信号，已停止"))
+        raw_minutes = (config or {}).get("safety", {}).get("risk_lock_minutes", 1440)
+        try:
+            lock_minutes = max(int(raw_minutes), 1)
+        except (TypeError, ValueError):
+            lock_minutes = 1440
+        set_platform_safety_lock(db, kind, minutes=lock_minutes)
     except Exception:
         # Failure to persist telemetry must never allow risky browsing to continue.
         pass
@@ -301,12 +313,12 @@ def _record_monitor_risk(kind: str) -> None:
             db.close()
 
 
-def _raise_monitor_risk(kind: str) -> None:
-    _record_monitor_risk(kind)
+def _raise_monitor_risk(kind: str, config: dict | None = None) -> None:
+    _record_monitor_risk(kind, config)
     raise MonitorRiskDetected(kind)
 
 
-def _inspect_monitor_page(target_id: str) -> None:
+def _inspect_monitor_page(target_id: str, config: dict) -> None:
     """Stop immediately when the current platform page exposes a risk signal."""
     raw = evaluate(target_id, JS_DETECT_MONITOR_RISK)
     try:
@@ -317,7 +329,7 @@ def _inspect_monitor_page(target_id: str) -> None:
         return
     kind = result.get("risk")
     if kind in {"captcha", "rate_limit", "blocked"}:
-        _raise_monitor_risk(kind)
+        _raise_monitor_risk(kind, config)
 
 
 def _open_monitor_tab(url: str, config: dict) -> str | None:
@@ -329,6 +341,12 @@ def _open_monitor_tab(url: str, config: dict) -> str | None:
     if throttle is not None and bool(getattr(throttle, "has_marked_request", False)):
         if throttle.wait(stop_event):
             return None
+    access_guard = config.get("_platform_access_guard")
+    if isinstance(access_guard, (PlatformAccessGuard, TransientPlatformAccessGuard)):
+        try:
+            access_guard.reserve("monitor_page")
+        except PlatformSafetyStop as exc:
+            raise MonitorRiskDetected(exc.reason) from exc
     target_id = new_tab(url, background=True)
     if throttle is not None and hasattr(throttle, "mark"):
         # Record attempts as well as successful opens so retries cannot become a burst.
@@ -660,7 +678,7 @@ def _open_conversation(job: dict, config: dict) -> str | None:
                 _record_page_failure_unless_stopped(config)
                 return None
             try:
-                _inspect_monitor_page(target_id)
+                _inspect_monitor_page(target_id, config)
             except MonitorRiskDetected:
                 close_tab(target_id)
                 raise
@@ -675,7 +693,7 @@ def _open_conversation(job: dict, config: dict) -> str | None:
                     _record_page_failure_unless_stopped(config)
                     return None
                 try:
-                    _inspect_monitor_page(target_id)
+                    _inspect_monitor_page(target_id, config)
                 except MonitorRiskDetected:
                     close_tab(target_id)
                     raise
@@ -717,7 +735,7 @@ def _open_conversation_from_chat_list(job: dict, config: dict) -> str | None:
         _record_page_failure_unless_stopped(config)
         return None
     try:
-        _inspect_monitor_page(target_id)
+        _inspect_monitor_page(target_id, config)
     except MonitorRiskDetected:
         close_tab(target_id)
         raise
@@ -798,7 +816,7 @@ def _open_conversation_from_chat_list(job: dict, config: dict) -> str | None:
                 close_tab(target_id)
                 return None
             try:
-                _inspect_monitor_page(target_id)
+                _inspect_monitor_page(target_id, config)
             except MonitorRiskDetected:
                 close_tab(target_id)
                 raise
@@ -827,7 +845,7 @@ def _open_conversation_from_chat_list(job: dict, config: dict) -> str | None:
                     close_tab(target_id)
                     return None
                 try:
-                    _inspect_monitor_page(target_id)
+                    _inspect_monitor_page(target_id, config)
                 except MonitorRiskDetected:
                     close_tab(target_id)
                     raise
@@ -934,7 +952,7 @@ def check_replies(config: dict) -> list[dict]:
             _monitor_safety_guard(config).record_page_failure()
         return []
     try:
-        _inspect_monitor_page(target_id)
+        _inspect_monitor_page(target_id, config)
     except MonitorRiskDetected:
         close_tab(target_id)
         db.close()
@@ -1583,6 +1601,11 @@ def monitor_and_send_resumes(config: dict) -> dict:
     monitor_config = dict(config)
     monitor_config["_monitor_request_throttle"] = throttle
     monitor_config["_monitor_safety_guard"] = MonitorSafetyGuard(config)
+    monitor_config["_platform_access_guard"] = TransientPlatformAccessGuard(
+        config,
+        "monitor",
+        get_db,
+    )
 
     summary = {"skipped": 0, "replied": 0, "needs_resume": 0, "rejected": 0, "failed": 0}
 

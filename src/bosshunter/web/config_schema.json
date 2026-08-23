@@ -36,6 +36,18 @@
       ]
     },
     {
+      "key": "collection",
+      "label": "采集安全设置",
+      "icon": "Shield",
+      "fields": [
+        {"key": "daily_new_jobs_limit", "label": "单日新增唯一岗位上限", "type": "number", "min": 1, "max": 500, "default": 100, "description": "重复岗位不计入"},
+        {"key": "daily_search_page_limit", "label": "单日搜索页上限", "type": "number", "min": 1, "max": 200, "default": 30},
+        {"key": "daily_detail_page_limit", "label": "单日详情页尝试上限", "type": "number", "min": 1, "max": 500, "default": 150},
+        {"key": "max_consecutive_page_failures", "label": "连续页面失败停止阈值", "type": "number", "min": 1, "max": 10, "default": 3},
+        {"key": "delivery_cooldown_minutes", "label": "采集后投递冷却（分钟）", "type": "number", "min": 0, "max": 240, "default": 30}
+      ]
+    },
+    {
       "key": "throttle",
       "label": "反检测设置",
       "icon": "Shield",

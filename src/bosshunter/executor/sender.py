@@ -17,8 +17,12 @@ from bosshunter.browser import (
     press_key,
     type_text,
 )
-from bosshunter.db import get_db, get_jobs_ready_to_send, update_job_status, add_history, add_risk_event
+from bosshunter.db import (
+    get_db, get_jobs_ready_to_send, update_job_status, add_history, add_risk_event,
+    set_platform_safety_lock,
+)
 from bosshunter.throttle import RequestThrottle, SendWindowChecker, ProgressiveBackoff, should_take_day_off
+from bosshunter.platform_safety import PlatformAccessGuard, PlatformSafetyStop
 
 console = Console()
 
@@ -684,6 +688,16 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
         for target in get_page_targets()
         if target.get("targetId")
     }
+    access_guard = throttle_config.get("_platform_access_guard")
+    if isinstance(access_guard, PlatformAccessGuard):
+        try:
+            access_guard.reserve("job_page")
+        except PlatformSafetyStop as exc:
+            return {
+                "success": False,
+                "error": exc.reason,
+                "history_detail": "为了账户安全，已达到平台页面访问上限或仍处于风险冷却",
+            }, None
     target_id = new_tab(job["url"], background=True)
     if not target_id:
         return {"success": False, "error": "open_page_failed", "history_detail": "无法打开页面", "skip_backoff": True}, None
@@ -910,7 +924,7 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
 def send_greetings(config: dict, force: bool = False) -> int:
     """Send generated greetings. Returns count of successfully sent."""
     db = get_db()
-    throttle_config = config.get("throttle", {})
+    throttle_config = dict(config.get("throttle", {}))
     stop_event = config.get("_workbench_stop_event")
     workbench_job_ids = {str(job_id) for job_id in config.get("_workbench_job_ids", [])}
     send_report = {
@@ -928,8 +942,16 @@ def send_greetings(config: dict, force: bool = False) -> int:
     # the web workflow enough detail to distinguish failures from quota deferrals.
     config["_workbench_send_report"] = send_report
     if isinstance(stop_event, Event):
-        throttle_config = dict(throttle_config)
         throttle_config["_workbench_stop_event"] = stop_event
+    access_guard = PlatformAccessGuard(db, config, "send")
+    throttle_config["_platform_access_guard"] = access_guard
+    try:
+        access_guard.ensure_unlocked()
+    except PlatformSafetyStop as exc:
+        send_report["stop_reason"] = exc.reason
+        console.print("[yellow]为了账户安全，平台风险冷却尚未结束，已停止投递[/yellow]")
+        db.close()
+        return 0
 
     # Anti-ban: random day off (可通过 --force 跳过)
     day_off_prob = throttle_config.get("day_off_probability", 0.05)
@@ -1056,6 +1078,10 @@ def send_greetings(config: dict, force: bool = False) -> int:
                 backoff.record_success()
             else:
                 error = result_data.get("error", "unknown")
+                if error in {"daily_platform_page_limit", "persistent_risk_lock"}:
+                    send_report["stop_reason"] = error
+                    console.print("[yellow]为了账户安全，已达到平台页面访问上限或仍处于风险冷却，停止投递[/yellow]")
+                    break
                 send_report["failed_count"] += 1
                 update_job_status(db, job["id"], "error")
                 add_history(db, job["id"], "error", result_data.get("history_detail", f"发送失败: {error}"))
@@ -1073,6 +1099,12 @@ def send_greetings(config: dict, force: bool = False) -> int:
                 if error in ["captcha", "rate_limit", "blocked"]:
                     console.print(f"\n[red]⚠ 检测到风控信号: {error}，安全暂停[/red]")
                     add_risk_event(db, error, f"触发风控: {error}")
+                    lock_minutes = config.get("safety", {}).get("risk_lock_minutes", 1440)
+                    try:
+                        lock_minutes = max(int(lock_minutes), 1)
+                    except (TypeError, ValueError):
+                        lock_minutes = 1440
+                    set_platform_safety_lock(db, error, minutes=lock_minutes)
                     send_report["stop_reason"] = error
                     break
 
@@ -1080,6 +1112,12 @@ def send_greetings(config: dict, force: bool = False) -> int:
                 if backoff.should_pause_long:
                     console.print(f"\n[red]⚠ 连续错误过多，暂停 {int(pause_duration/60)} 分钟[/red]")
                     add_risk_event(db, "backoff_pause", f"暂停{int(pause_duration)}秒")
+                    lock_minutes = config.get("safety", {}).get("risk_lock_minutes", 1440)
+                    try:
+                        lock_minutes = max(int(lock_minutes), 1)
+                    except (TypeError, ValueError):
+                        lock_minutes = 1440
+                    set_platform_safety_lock(db, "consecutive_errors", minutes=lock_minutes)
                     send_report["stop_reason"] = "consecutive_errors"
                     break
                 elif pause_duration > 0:
