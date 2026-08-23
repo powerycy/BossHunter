@@ -22,7 +22,7 @@ import yaml
 from bottle import Bottle, request, response, static_file, abort
 
 from bosshunter import __version__
-from bosshunter.ai.credentials import get_ai_api_key
+from bosshunter.ai.credentials import AIRequestError, get_ai_api_key
 from bosshunter.cities import CityRefreshError, get_city_map, load_city_snapshot, refresh_city_cache
 from bosshunter.config import AI_SERVICE_PRESETS, load_config
 from bosshunter.db import (
@@ -48,6 +48,15 @@ from bosshunter.db import (
 )
 from bosshunter.job_filters import parse_monthly_salary_k
 from bosshunter.job_export import InvalidJobSelectionError, export_jobs, export_row_count
+from bosshunter.resume_builder import (
+	ResumeBuilderError,
+	activate_resume_version,
+	compose_resume_version,
+	delete_resume_source,
+	extract_source_facts,
+	ingest_resume_source,
+)
+from bosshunter.resume_builder.store import get_version, list_facts, list_sources, list_versions, update_fact
 from bosshunter.scoring_run_store import (
 	create_scoring_run,
 	get_scoring_run,
@@ -103,15 +112,17 @@ def _default_base_dir() -> Path:
 BASE_DIR = _default_base_dir()
 DATA_DIR = BASE_DIR / "data"
 RESUME_DIR = DATA_DIR / "resumes"
+RESUME_SOURCE_DIR = DATA_DIR / "resume_sources"
 CONFIG_PATH = BASE_DIR / "config.yaml"
 
 
 def set_base_dir(base_dir: Path | str) -> None:
 	"""Set the runtime directory used for config.yaml, data, and uploads."""
-	global BASE_DIR, DATA_DIR, RESUME_DIR, CONFIG_PATH
+	global BASE_DIR, DATA_DIR, RESUME_DIR, RESUME_SOURCE_DIR, CONFIG_PATH
 	BASE_DIR = Path(base_dir).resolve()
 	DATA_DIR = BASE_DIR / "data"
 	RESUME_DIR = DATA_DIR / "resumes"
+	RESUME_SOURCE_DIR = DATA_DIR / "resume_sources"
 	CONFIG_PATH = BASE_DIR / "config.yaml"
 	mark_orphaned_scoring_runs_paused(DATA_DIR / "bosshunter.db")
 
@@ -1668,6 +1679,172 @@ def api_resume_delete():
 		return _json_response({"success": True})
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
+
+
+# ─── Resume Studio APIs ──────────────────────────────────
+
+def _resume_studio_payload(db):
+	return {
+		"sources": list_sources(db),
+		"facts": list_facts(db),
+		"versions": list_versions(db),
+	}
+
+
+def _public_resume_source(source: dict) -> dict:
+	"""Keep normalized source text in local storage instead of echoing it to upload clients."""
+	return {key: value for key, value in source.items() if key != "normalized_text"}
+
+
+@app.route("/api/resume-studio")
+def api_resume_studio_get():
+	db = _get_web_db()
+	try:
+		return _json_response(_resume_studio_payload(db))
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/sources", method="POST")
+def api_resume_studio_source_upload():
+	upload = request.files.get("file")
+	if not upload:
+		return _json_response({"error": "未上传材料文件"}, 400)
+	content = upload.file.read()
+	raw_name = upload.raw_filename or upload.filename
+	db = _get_web_db()
+	try:
+		source, duplicate = ingest_resume_source(
+			db,
+			filename=raw_name,
+			content=content,
+			storage_dir=RESUME_SOURCE_DIR,
+		)
+		return _json_response({"success": True, "duplicate": duplicate, "source": _public_resume_source(source)})
+	except (ResumeBuilderError, ResumeUploadError) as exc:
+		return _json_response({"error": str(exc)}, 400)
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/sources/<source_id>/extract", method="POST")
+def api_resume_studio_source_extract(source_id):
+	db = _get_web_db()
+	try:
+		facts = extract_source_facts(db, source_id, load_config(CONFIG_PATH))
+		return _json_response({"success": True, "facts": facts})
+	except ResumeBuilderError as exc:
+		return _json_response({"error": str(exc)}, 400)
+	except AIRequestError as exc:
+		return _json_response({"error": str(exc)}, 502)
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/sources/<source_id>", method="DELETE")
+def api_resume_studio_source_delete(source_id):
+	body = request.json if isinstance(request.json, dict) else {}
+	db = _get_web_db()
+	try:
+		delete_resume_source(
+			db,
+			source_id,
+			storage_dir=RESUME_SOURCE_DIR,
+			confirmed=body.get("confirmed") is True,
+		)
+		return _json_response({"success": True})
+	except ResumeBuilderError as exc:
+		return _json_response({"error": str(exc)}, 409)
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/facts/<fact_id>", method="PATCH")
+def api_resume_studio_fact_update(fact_id):
+	body = request.json if isinstance(request.json, dict) else {}
+	db = _get_web_db()
+	try:
+		fact = update_fact(
+			db,
+			fact_id,
+			status=str(body.get("status", "")),
+			edited_content=body.get("content") if isinstance(body.get("content"), str) else None,
+		)
+		if not fact:
+			return _json_response({"error": "事实不存在"}, 404)
+		return _json_response({"success": True, "fact": fact})
+	except ValueError as exc:
+		return _json_response({"error": str(exc)}, 400)
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/compose", method="POST")
+def api_resume_studio_compose():
+	body = request.json if isinstance(request.json, dict) else {}
+	target_role = str(body.get("target_role", "")).strip()[:100]
+	db = _get_web_db()
+	try:
+		version = compose_resume_version(
+			db,
+			load_config(CONFIG_PATH),
+			target_role=target_role,
+			output_dir=RESUME_DIR,
+		)
+		return _json_response({"success": True, "version": version})
+	except ResumeBuilderError as exc:
+		return _json_response({"error": str(exc)}, 400)
+	except AIRequestError as exc:
+		return _json_response({"error": str(exc)}, 502)
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/versions/<version_id>/activate", method="POST")
+def api_resume_studio_version_activate(version_id):
+	db = _get_web_db()
+	try:
+		version = get_version(db, version_id)
+		if not version:
+			return _json_response({"error": "主简历版本不存在"}, 404)
+		if not Path(version["file_path"]).exists():
+			return _json_response({"error": "主简历版本文件不存在"}, 409)
+		config = load_config(CONFIG_PATH)
+		config.setdefault("profile", {})["resume_path"] = version["file_path"]
+		_write_config(config)
+		active = activate_resume_version(db, version_id)
+		return _json_response({"success": True, "version": active})
+	except ResumeBuilderError as exc:
+		return _json_response({"error": str(exc)}, 400)
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/resume-studio/versions/<version_id>/download")
+def api_resume_studio_version_download(version_id):
+	db = _get_web_db()
+	try:
+		version = get_version(db, version_id)
+		if not version:
+			return _json_response({"error": "主简历版本不存在"}, 404)
+		path = Path(version["file_path"])
+		if not path.exists():
+			return _json_response({"error": "主简历版本文件不存在"}, 404)
+		return static_file(path.name, root=str(path.parent), download=path.name)
+	finally:
+		db.close()
 
 
 # ─── Static Files + SPA Fallback ─────────────────────────

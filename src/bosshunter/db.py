@@ -88,6 +88,63 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_v1_1(conn)
     _migrate_v1_2(conn)
     _init_scoring_runs(conn)
+    _init_resume_studio(conn)
+
+
+def _init_resume_studio(conn: sqlite3.Connection) -> None:
+    """Create the local Resume Studio evidence and version tables."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS resume_sources (
+            id TEXT PRIMARY KEY,
+            filename TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            stored_path TEXT NOT NULL,
+            content_hash TEXT NOT NULL UNIQUE,
+            normalized_text TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ready',
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS resume_facts (
+            id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            category TEXT NOT NULL,
+            content TEXT NOT NULL,
+            edited_content TEXT,
+            evidence TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (source_id) REFERENCES resume_sources(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS resume_versions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            target_role TEXT,
+            markdown TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            activated_at TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS resume_version_facts (
+            version_id TEXT NOT NULL,
+            fact_id TEXT NOT NULL,
+            PRIMARY KEY (version_id, fact_id),
+            FOREIGN KEY (version_id) REFERENCES resume_versions(id),
+            FOREIGN KEY (fact_id) REFERENCES resume_facts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_resume_facts_source ON resume_facts(source_id);
+        CREATE INDEX IF NOT EXISTS idx_resume_facts_status ON resume_facts(status);
+        CREATE INDEX IF NOT EXISTS idx_resume_versions_status ON resume_versions(status);
+    """)
+    conn.commit()
 
 
 def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
