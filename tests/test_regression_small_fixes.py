@@ -342,6 +342,54 @@ class PrefilterHardGateTests(unittest.TestCase):
         self.assertEqual(score, 0)
         self.assertEqual(reason, "薪资低于硬性要求: 12K < 100K")
 
+    def test_salary_above_maximum_is_filtered(self):
+        from bosshunter.ai.prefilter import quick_score
+
+        config = {"profile": {"deal_breakers": [], "salary_min": 8, "salary_max": 10}}
+        job = {"title": "AI产品经理", "jd": "", "salary": "15-20K"}
+
+        score, reason = quick_score(job, config)
+
+        self.assertEqual(score, 0)
+        self.assertEqual(reason, "薪资高于预期范围: 15K > 10K")
+
+    def test_salary_range_intersecting_passes(self):
+        from bosshunter.ai.prefilter import quick_score
+
+        config = {"profile": {"deal_breakers": [], "salary_min": 8, "salary_max": 10}}
+        job = {"title": "AI产品经理", "jd": "", "salary": "6-12K"}
+
+        score, reason = quick_score(job, config)
+
+        self.assertEqual(score, 100)
+        self.assertEqual(reason, "预筛通过")
+
+    def test_salary_exact_range_passes(self):
+        from bosshunter.ai.prefilter import quick_score
+
+        config = {"profile": {"deal_breakers": [], "salary_min": 8, "salary_max": 10}}
+        job = {"title": "AI产品经理", "jd": "", "salary": "8-10K"}
+
+        score, reason = quick_score(job, config)
+
+        self.assertEqual(score, 100)
+        self.assertEqual(reason, "预筛通过")
+
+    def test_salary_max_only_filters_high(self):
+        from bosshunter.ai.prefilter import quick_score
+
+        config = {"profile": {"deal_breakers": [], "salary_min": 0, "salary_max": 10}}
+
+        high_job = {"title": "AI产品经理", "jd": "", "salary": "15-20K"}
+        score, reason = quick_score(high_job, config)
+        self.assertEqual(score, 0)
+        self.assertEqual(reason, "薪资高于预期范围: 15K > 10K")
+
+        low_job = {"title": "AI产品经理", "jd": "", "salary": "5-8K"}
+        score, reason = quick_score(low_job, config)
+        self.assertEqual(score, 100)
+        self.assertEqual(reason, "预筛通过")
+
     def test_passing_job_returns_hard_gate_pass(self):
         from bosshunter.ai.prefilter import quick_score
 
