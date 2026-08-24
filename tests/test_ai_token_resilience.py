@@ -175,7 +175,7 @@ class ScorerTokenResilienceTests(unittest.TestCase):
             patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
             patch("bosshunter.ai.scorer._call_claude", side_effect=[first, review]) as call_ai,
             patch("bosshunter.ai.scorer.update_job_quick_score"),
-            patch("bosshunter.ai.scorer.update_job_score") as update_score,
+            patch("bosshunter.ai.scorer.persist_job_score_and_trace") as persist_score,
             patch("bosshunter.ai.scorer.update_job_status"),
         ):
             scored, filtered = scorer.score_jobs(
@@ -187,8 +187,8 @@ class ScorerTokenResilienceTests(unittest.TestCase):
 
         self.assertEqual((scored, filtered), (1, 0))
         self.assertEqual(call_ai.call_count, 2)
-        self.assertEqual(update_score.call_args.args[2], 71)
-        self.assertIn("二次复核", update_score.call_args.args[3])
+        self.assertEqual(persist_score.call_args.args[2], 71)
+        self.assertIn("二次复核", persist_score.call_args.args[3])
 
     def test_ai_calls_run_with_configured_concurrency_but_db_writes_stay_on_main_thread(self):
         db = MagicMock()

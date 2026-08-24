@@ -24,6 +24,7 @@ from bottle import Bottle, request, response, static_file, abort
 
 from bosshunter import __version__
 from bosshunter.ai.credentials import get_ai_api_key
+from bosshunter.ai.scorer import sanitize_score_trace
 from bosshunter.cities import CityRefreshError, get_city_map, load_city_snapshot, refresh_city_cache
 from bosshunter.config import AI_SERVICE_PRESETS, load_config, remove_retired_collection_settings
 from bosshunter.db import (
@@ -40,6 +41,7 @@ from bosshunter.db import (
 	get_jobs_ready_to_send,
 	get_jobs_with_send_errors,
 	get_recent_history,
+	get_score_trace,
 	get_unresolved_resume_failures,
 	get_stats,
 	get_top_companies,
@@ -934,6 +936,28 @@ def _integer_param(name: str, default: int, *, minimum: int, maximum: int | None
 	return value
 
 
+def _score_trace_missing_state(job: dict) -> str:
+	"""Classify a missing trace without inferring an AI failure from incomplete evidence."""
+	reason = str(job.get("score_reason") or "").strip()
+	if reason.startswith("预筛不通过:"):
+		return "prefilter_only"
+	if reason.startswith(("AI评分失败:", "AI 评分失败:", "评分失败:")):
+		return "failed"
+	if reason or str(job.get("status") or "") in {
+		"scored",
+		"ready",
+		"approved",
+		"rejected",
+		"sent",
+		"replied",
+		"resume_sent",
+		"needs_resume",
+		"follow_up_sent",
+	}:
+		return "legacy_missing"
+	return "unavailable"
+
+
 @app.route("/api/jobs/search")
 def api_job_search():
 	try:
@@ -1578,6 +1602,27 @@ def api_job_detail(job_id):
 		if not row:
 			return _json_response({"error": "岗位不存在"}, 404)
 		return _json_response(dict(row))
+	finally:
+		db.close()
+
+
+@app.route("/api/jobs/<job_id>/score-trace")
+def api_job_score_trace(job_id):
+	"""Expose the latest validated score explanation without changing job-list payloads."""
+	db = _get_web_db()
+	try:
+		job = db.execute(
+			"SELECT id, status, score_reason FROM jobs WHERE id = ? AND deleted_at IS NULL",
+			(job_id,),
+		).fetchone()
+		if not job:
+			return _json_response({"error": "job_not_found"}, 404)
+		found, stored_trace = get_score_trace(db, job_id)
+		trace = sanitize_score_trace(stored_trace) if found else None
+		if trace is not None:
+			return _json_response({"job_id": job_id, "state": "available", "trace": trace})
+		state = "unavailable" if found else _score_trace_missing_state(dict(job))
+		return _json_response({"job_id": job_id, "state": state})
 	finally:
 		db.close()
 

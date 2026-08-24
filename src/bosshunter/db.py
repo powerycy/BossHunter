@@ -122,6 +122,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
     _init_collection_runs(conn)
+    _init_score_traces(conn)
 
 
 def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
@@ -403,6 +404,7 @@ def permanent_delete_jobs(
     with conn:
         placeholders = ",".join("?" for _ in ids)
         conn.execute(f"DELETE FROM history WHERE job_id IN ({placeholders})", ids)
+        conn.execute(f"DELETE FROM score_traces WHERE job_id IN ({placeholders})", ids)
         cursor = conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders}) AND deleted_at IS NOT NULL", ids)
         if cursor.rowcount != len(ids):
             raise JobDeletionConflictError("永久删除数量校验失败，事务已回滚")
@@ -466,6 +468,48 @@ def update_job_score(conn: sqlite3.Connection, job_id: str, score: int, reason: 
         (score, reason, job_id)
     )
     conn.commit()
+
+
+def persist_job_score_and_trace(
+    conn: sqlite3.Connection,
+    job_id: str,
+    score: int,
+    reason: str,
+    trace: dict[str, Any],
+) -> None:
+    """Atomically persist a completed structured score and its safe explanation trace."""
+    trace_json = json.dumps(trace, ensure_ascii=False, separators=(",", ":"))
+    with conn:
+        cursor = conn.execute(
+            "UPDATE jobs SET score = ?, score_reason = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND deleted_at IS NULL",
+            (score, reason, job_id),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError("岗位不存在或已进入回收站，未保存评分追踪")
+        conn.execute(
+            """
+            INSERT INTO score_traces (job_id, schema_version, trace_json)
+            VALUES (?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                schema_version = excluded.schema_version,
+                trace_json = excluded.trace_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (job_id, int(trace.get("schema_version", 1)), trace_json),
+        )
+
+
+def get_score_trace(conn: sqlite3.Connection, job_id: str) -> tuple[bool, dict[str, Any] | None]:
+    """Return whether a trace row exists and its parsed object, if it is valid JSON."""
+    row = conn.execute("SELECT trace_json FROM score_traces WHERE job_id = ?", (job_id,)).fetchone()
+    if row is None:
+        return False, None
+    try:
+        trace = json.loads(row["trace_json"])
+    except (TypeError, json.JSONDecodeError):
+        return True, None
+    return True, trace if isinstance(trace, dict) else None
 
 
 def update_job_greeting(conn: sqlite3.Connection, job_id: str, greeting: str) -> None:
@@ -687,6 +731,23 @@ def _init_collection_runs(conn: sqlite3.Connection) -> None:
             finished_at TIMESTAMP NULL
         );
         CREATE INDEX IF NOT EXISTS idx_collection_runs_status ON collection_runs(status);
+        """
+    )
+    conn.commit()
+
+
+def _init_score_traces(conn: sqlite3.Connection) -> None:
+    """Create the current-score explanation store without rewriting existing jobs."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS score_traces (
+            job_id TEXT PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            trace_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES jobs(id)
+        );
         """
     )
     conn.commit()
