@@ -1702,7 +1702,7 @@ def api_resume_upload():
 		# Bottle's normalized `filename` strips non-ASCII characters. Use the
 		# raw browser filename and apply our own Unicode-safe sanitization.
 		raw_name = upload.raw_filename or upload.filename
-		safe_name, stored_content = prepare_resume_content(raw_name, content)
+		safe_name, stored_content, warning = prepare_resume_content(raw_name, content)
 		RESUME_DIR.mkdir(parents=True, exist_ok=True)
 		dest = RESUME_DIR / safe_name
 		dest.write_bytes(stored_content)
@@ -1712,12 +1712,15 @@ def api_resume_upload():
 		config.setdefault("profile", {})["resume_path"] = str(dest)
 		_write_config(config)
 
-		return _json_response({
+		payload = {
 			"success": True,
 			"filename": safe_name,
 			"size": len(stored_content),
 			"path": str(dest)
-		})
+		}
+		if warning:
+			payload["warning"] = warning
+		return _json_response(payload)
 	except ResumeUploadError as e:
 		return _json_response({"error": str(e)}, 400)
 	except Exception as e:

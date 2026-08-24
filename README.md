@@ -162,8 +162,11 @@ cd BossHunter
 # 2. 安装 Python 依赖
 pip install -e .
 
-# 可选：仅在需要 xhtml2pdf fallback 渲染时安装
+# 可选：需要 xhtml2pdf fallback 渲染时安装
 pip install -e ".[pdf]"
+
+# 可选：需要读取扫描版或图片式 PDF 简历时安装（全程本机 OCR）
+pip install -e ".[ocr]"
 ```
 
 ### 二、启动 Google Chrome 远程控制并登录
@@ -338,7 +341,7 @@ A: 存在风险。本项目通过低频、随机间隔、时间窗口和人工�
 A: 支持官方 Anthropic、Anthropic Messages 兼容接口和 OpenAI 兼容的 Chat Completions 接口。兼容服务需要自行填写 Base URL、API Key 与模型名。
 
 ### Q: 简历是什么格式？
-A: 支持 Markdown（`.md`）、Word（`.docx`）和带文字层的 PDF（`.pdf`）简历；Word 与 PDF 会在本地转换为 Markdown 后使用。加密、损坏、扫描版或无文字层 PDF 会给出明确提示，扫描版请先 OCR。旧版二进制 `.doc` 暂不支持。AI 会根据具体岗位 JD 动态生成定制简历，并输出 PDF。
+A: 支持 Markdown（`.md`）、Word（`.docx`）和 PDF（`.pdf`）简历；Word 与 PDF 会在本地转换为 Markdown 后使用。带文字层的 PDF 直接提取；安装 `.[ocr]` 后，扫描版或图片式 PDF 会自动在本机 OCR，并提示你核对识别结果。OCR 不调用云端。加密、损坏或识别文字过少的 PDF 会给出明确提示。旧版二进制 `.doc` 暂不支持。AI 会根据具体岗位 JD 动态生成定制简历，并输出 PDF。
 
 ### Q: 为什么需要 Chrome 远程调试？
 A: 项目通过 CDP (Chrome DevTools Protocol) 直连你日常使用的浏览器，天然携带登录态，无需保存招聘平台账号密码。

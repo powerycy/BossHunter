@@ -48,6 +48,7 @@ export default function ConfigPage() {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({ profile: true, search: true })
   const [resumeInfo, setResumeInfo] = useState<any>(null)
   const [resumeUploadError, setResumeUploadError] = useState('')
+  const [resumeUploadWarning, setResumeUploadWarning] = useState('')
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
   const [cityOptions, setCityOptions] = useState<CityOption[]>([])
   const [cityRefreshing, setCityRefreshing] = useState(false)
@@ -72,6 +73,7 @@ export default function ConfigPage() {
     const file = e.target.files?.[0]
     if (!file) return
     setResumeUploadError('')
+    setResumeUploadWarning('')
     const form = new FormData()
     form.append('file', file)
     try {
@@ -82,6 +84,7 @@ export default function ConfigPage() {
         return
       }
       setResumeInfo({ filename: data.filename, size: data.size, path: data.path })
+      setResumeUploadWarning(data.warning || '')
       updateConfig('profile.resume_path', data.path)
     } catch {
       setResumeUploadError('网络错误，简历上传失败')
@@ -93,6 +96,7 @@ export default function ConfigPage() {
   const handleResumeDelete = async () => {
     await fetch('/api/resume', { method: 'DELETE' })
     setResumeInfo(null)
+    setResumeUploadWarning('')
     updateConfig('profile.resume_path', '')
   }
 
@@ -224,11 +228,15 @@ export default function ConfigPage() {
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-card-border p-6 transition-colors hover:border-primary/50 hover:bg-[#FFFCFA]">
                   <Upload className="mb-2 h-6 w-6 text-muted" />
                   <span className="text-sm text-muted">拖拽或点击上传 (.md、.docx、.pdf)</span>
+                  <span className="mt-1 text-xs text-muted">扫描或图片式 PDF 使用可选的本机 OCR 组件</span>
                   <input type="file" accept=".md,.docx,.pdf,application/pdf" onChange={handleResumeUpload} className="hidden" />
                 </label>
               )}
               {resumeUploadError && (
                 <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-500">{resumeUploadError}</p>
+              )}
+              {resumeUploadWarning && (
+                <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{resumeUploadWarning}</p>
               )}
             </div>
             <div className="grid grid-cols-2 gap-4">

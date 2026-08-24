@@ -1578,7 +1578,34 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(status.startswith("400"), body)
         self.assertEqual(json.loads(body), {"error": "PDF 文件无效或已损坏"})
 
-    def test_web_api_resume_upload_rejects_scanned_pdf_without_text_layer(self):
+    @patch("bosshunter.web.resume_upload._ocr_pdf_to_markdown", return_value="# OCR Candidate\n\nLocal OCR result\n")
+    def test_web_api_resume_upload_uses_local_ocr_for_scanned_pdf(self, ocr_pdf):
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        pdf = io.BytesIO()
+        writer.write(pdf)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+            status, _, body = self._upload_resume("scanned.pdf", pdf.getvalue(), "application/pdf")
+            payload = json.loads(body)
+            stored_text = Path(payload["path"]).read_text(encoding="utf-8")
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(payload["filename"], "scanned.md")
+        self.assertIn("OCR Candidate", stored_text)
+        self.assertIn("已在本机 OCR", payload["warning"])
+        ocr_pdf.assert_called_once()
+
+    @patch(
+        "bosshunter.web.resume_upload._ocr_pdf_to_markdown",
+        side_effect=server.ResumeUploadError(
+            'PDF 没有可用文字层；请安装本地 OCR 组件后重试：pip install -e ".[ocr]"'
+        ),
+    )
+    def test_web_api_resume_upload_explains_missing_local_ocr_component(self, ocr_pdf):
         writer = PdfWriter()
         writer.add_blank_page(width=612, height=792)
         pdf = io.BytesIO()
@@ -1591,7 +1618,9 @@ class WebApiRouteTests(unittest.TestCase):
             status, _, body = self._upload_resume("scanned.pdf", pdf.getvalue(), "application/pdf")
 
         self.assertTrue(status.startswith("400"), body)
-        self.assertIn("扫描版或无文字层", json.loads(body)["error"])
+        self.assertIn("pip install -e", json.loads(body)["error"])
+        self.assertIn(".[ocr]", json.loads(body)["error"])
+        ocr_pdf.assert_called_once()
 
     def test_web_api_resume_upload_rejects_legacy_doc_format(self):
         # Arrange

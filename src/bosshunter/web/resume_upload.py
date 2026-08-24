@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
@@ -13,6 +15,9 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 MAX_DOCX_XML_SIZE = 20 * 1024 * 1024
+MAX_PDF_PAGES = 10
+OCR_RENDER_SCALE = 2.0
+MIN_OCR_TEXT_CHARS = 20
 SUPPORTED_RESUME_EXTENSIONS = {".md", ".docx", ".pdf"}
 _WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _W = f"{{{_WORD_NAMESPACE}}}"
@@ -46,24 +51,37 @@ def safe_resume_filename(raw_filename: str) -> str:
 	return f"{_truncate_utf8(stem, 200 - len(suffix.encode('utf-8')))}{suffix}"
 
 
-def prepare_resume_content(filename: str, content: bytes) -> tuple[str, bytes]:
-	"""Return the Markdown storage filename and UTF-8 content for an upload."""
+def prepare_resume_content(filename: str, content: bytes) -> tuple[str, bytes, str | None]:
+	"""Return the storage filename, UTF-8 content, and any review warning."""
 	safe_name = safe_resume_filename(filename)
 	suffix = Path(safe_name).suffix.lower()
 	if suffix == ".md":
-		return safe_name, content
+		return safe_name, content, None
 
-	markdown = docx_to_markdown(content) if suffix == ".docx" else pdf_to_markdown(content)
+	if suffix == ".docx":
+		markdown = docx_to_markdown(content)
+		warning = None
+	else:
+		markdown, used_ocr = _convert_pdf_to_markdown(content)
+		warning = "该 PDF 没有可用文字层，已在本机 OCR；请核对识别结果后再使用。" if used_ocr else None
 	output_name = f"{Path(safe_name).stem}.md"
-	return output_name, markdown.encode("utf-8")
+	return output_name, markdown.encode("utf-8"), warning
 
 
 def pdf_to_markdown(content: bytes) -> str:
-	"""Extract text-layer content from a PDF resume as Markdown-like text."""
+	"""Extract a PDF resume as Markdown-like text, with local OCR fallback."""
+	markdown, _ = _convert_pdf_to_markdown(content)
+	return markdown
+
+
+def _convert_pdf_to_markdown(content: bytes) -> tuple[str, bool]:
+	"""Return converted text and whether the optional local OCR path was used."""
 	try:
 		reader = PdfReader(BytesIO(content))
 		if reader.is_encrypted:
 			raise ResumeUploadError("PDF 已加密，请上传未加密的简历")
+		if len(reader.pages) > MAX_PDF_PAGES:
+			raise ResumeUploadError(f"PDF 页数超过 {MAX_PDF_PAGES} 页限制")
 		pages = [page.extract_text() or "" for page in reader.pages]
 	except ResumeUploadError:
 		raise
@@ -71,9 +89,162 @@ def pdf_to_markdown(content: bytes) -> str:
 		raise ResumeUploadError("PDF 文件无效或已损坏") from exc
 
 	text = "\n\n".join(page.strip() for page in pages if page.strip()).strip()
-	if not text:
-		raise ResumeUploadError("未能从 PDF 提取文字；扫描版或无文字层简历请先 OCR 后再上传")
+	if text:
+		return f"{text}\n", False
+	return _ocr_pdf_to_markdown(content), True
+
+
+def _load_ocr_runtime():
+	"""Load optional OCR dependencies only when a PDF has no text layer."""
+	try:
+		import numpy as np
+		import pypdfium2 as pdfium
+		from rapidocr import RapidOCR
+	except ImportError as exc:
+		raise ResumeUploadError(
+			'PDF 没有可用文字层；请安装本地 OCR 组件后重试：pip install -e ".[ocr]"'
+		) from exc
+	return np, pdfium, RapidOCR
+
+
+def _ocr_pdf_to_markdown(content: bytes) -> str:
+	"""Recognize an image-only PDF locally without sending it to a remote service."""
+	np, pdfium, rapid_ocr_class = _load_ocr_runtime()
+	document = None
+	try:
+		document = pdfium.PdfDocument(content)
+		if len(document) > MAX_PDF_PAGES:
+			raise ResumeUploadError(f"PDF 页数超过 {MAX_PDF_PAGES} 页限制")
+		engine = rapid_ocr_class()
+		page_texts: list[str] = []
+		for page_index in range(len(document)):
+			page = document[page_index]
+			bitmap = page.render(scale=OCR_RENDER_SCALE)
+			image = np.asarray(bitmap.to_pil().convert("RGB"))
+			result = engine(image)
+			page_text = _ocr_result_to_text(result.boxes, result.txts, image.shape[1])
+			if page_text:
+				page_texts.append(page_text)
+	except ResumeUploadError:
+		raise
+	except Exception as exc:
+		raise ResumeUploadError("PDF 本地 OCR 失败，请确认文件完整且页面图像清晰") from exc
+	finally:
+		if document is not None:
+			document.close()
+
+	text = "\n\n".join(page_texts).strip()
+	if len(re.sub(r"\s+", "", text)) < MIN_OCR_TEXT_CHARS:
+		raise ResumeUploadError("未能从 PDF 识别到足够文字，请确认页面清晰或改用 .docx / .md 简历")
 	return f"{text}\n"
+
+
+def _ocr_result_to_text(boxes: Any, texts: Any, page_width: float) -> str:
+	"""Rebuild OCR lines while keeping two-column resumes in column order."""
+	if boxes is None or texts is None:
+		return ""
+
+	items: list[dict[str, float | str]] = []
+	for box, raw_text in zip(boxes, texts):
+		text = str(raw_text).strip()
+		if not text:
+			continue
+		xs = [float(point[0]) for point in box]
+		ys = [float(point[1]) for point in box]
+		left, right = min(xs), max(xs)
+		top, bottom = min(ys), max(ys)
+		items.append({
+			"text": text,
+			"left": left,
+			"right": right,
+			"top": top,
+			"bottom": bottom,
+			"center_x": (left + right) / 2,
+			"center_y": (top + bottom) / 2,
+			"height": max(1.0, bottom - top),
+		})
+	if not items:
+		return ""
+
+	split = _detect_ocr_column_split(items, float(page_width))
+	if split is None:
+		return _format_ocr_column(items)
+
+	left_items = [item for item in items if float(item["center_x"]) < split]
+	right_items = [item for item in items if float(item["center_x"]) >= split]
+	return "\n\n".join(
+		part for part in (_format_ocr_column(left_items), _format_ocr_column(right_items)) if part
+	)
+
+
+def _detect_ocr_column_split(items: list[dict[str, float | str]], page_width: float) -> float | None:
+	"""Find a broad vertical whitespace band that separates two text columns."""
+	if len(items) < 8 or page_width <= 0:
+		return None
+	minimum_side = max(3, math.ceil(len(items) * 0.18))
+	maximum_crossing = max(1, math.floor(len(items) * 0.12))
+	best: tuple[float, float] | None = None
+
+	for percent in range(25, 76, 2):
+		split = page_width * percent / 100
+		left = [item for item in items if float(item["right"]) <= split]
+		right = [item for item in items if float(item["left"]) >= split]
+		crossing = len(items) - len(left) - len(right)
+		if len(left) < minimum_side or len(right) < minimum_side or crossing > maximum_crossing:
+			continue
+		gap = min(float(item["left"]) for item in right) - max(float(item["right"]) for item in left)
+		if gap < page_width * 0.04:
+			continue
+		score = gap - crossing * page_width * 0.02
+		if best is None or score > best[0]:
+			best = (score, split)
+	return best[1] if best else None
+
+
+def _format_ocr_column(items: list[dict[str, float | str]]) -> str:
+	"""Merge OCR boxes on the same visual row and keep readable paragraph gaps."""
+	if not items:
+		return ""
+	visual_lines: list[dict[str, Any]] = []
+	for item in sorted(items, key=lambda value: (float(value["center_y"]), float(value["left"]))):
+		match = next((line for line in visual_lines if _same_ocr_line(item, line)), None)
+		if match is None:
+			visual_lines.append({
+				"items": [item],
+				"top": float(item["top"]),
+				"bottom": float(item["bottom"]),
+				"center_y": float(item["center_y"]),
+				"height": float(item["height"]),
+			})
+		else:
+			match["items"].append(item)
+			match["top"] = min(float(match["top"]), float(item["top"]))
+			match["bottom"] = max(float(match["bottom"]), float(item["bottom"]))
+			match["height"] = max(1.0, float(match["bottom"]) - float(match["top"]))
+			match["center_y"] = (float(match["top"]) + float(match["bottom"])) / 2
+
+	output: list[str] = []
+	previous: dict[str, Any] | None = None
+	for line in sorted(visual_lines, key=lambda value: (float(value["top"]), float(value["center_y"]))):
+		if previous is not None:
+			gap = float(line["top"]) - float(previous["bottom"])
+			if gap > max(float(line["height"]), float(previous["height"])) * 1.15:
+				output.append("")
+		line_items = sorted(line["items"], key=lambda value: float(value["left"]))
+		output.append(" ".join(str(item["text"]) for item in line_items))
+		previous = line
+	return "\n".join(output).strip()
+
+
+def _same_ocr_line(item: dict[str, float | str], line: dict[str, Any]) -> bool:
+	overlap = max(
+		0.0,
+		min(float(item["bottom"]), float(line["bottom"]))
+		- max(float(item["top"]), float(line["top"])),
+	)
+	minimum_height = max(1.0, min(float(item["height"]), float(line["height"])))
+	center_gap = abs(float(item["center_y"]) - float(line["center_y"]))
+	return overlap / minimum_height > 0.5 or center_gap < minimum_height * 0.35
 
 
 def docx_to_markdown(content: bytes) -> str:
