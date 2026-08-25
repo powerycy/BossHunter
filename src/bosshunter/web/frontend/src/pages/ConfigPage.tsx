@@ -279,33 +279,6 @@ export default function ConfigPage() {
           </div>
         </SectionCard>
 
-        {/* Collection Safety Section */}
-        <SectionCard title="采集安全设置" sectionKey="collection" expanded={expandedSections} toggle={toggleSection}>
-          <div className="space-y-4">
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-              以下均为单日最大值，不是采集目标；重复岗位不占新增岗位额度。
-            </p>
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="单日新增唯一岗位上限">
-                <Input type="number" value={config.collection?.daily_new_jobs_limit ?? 100} onChange={e => updateConfig('collection.daily_new_jobs_limit', Number(e.target.value))} min={1} max={500} />
-              </Field>
-              <Field label="单日搜索页上限">
-                <Input type="number" value={config.collection?.daily_search_page_limit ?? 30} onChange={e => updateConfig('collection.daily_search_page_limit', Number(e.target.value))} min={1} max={200} />
-              </Field>
-              <Field label="单日详情页尝试上限">
-                <Input type="number" value={config.collection?.daily_detail_page_limit ?? 150} onChange={e => updateConfig('collection.daily_detail_page_limit', Number(e.target.value))} min={1} max={500} />
-              </Field>
-              <Field label="连续页面失败停止阈值">
-                <Input type="number" value={config.collection?.max_consecutive_page_failures ?? 3} onChange={e => updateConfig('collection.max_consecutive_page_failures', Number(e.target.value))} min={1} max={10} />
-              </Field>
-            </div>
-            <Field label="全流程采集后投递冷却（分钟）">
-              <Input type="number" value={config.collection?.delivery_cooldown_minutes ?? 30} onChange={e => updateConfig('collection.delivery_cooldown_minutes', Number(e.target.value))} min={0} max={240} />
-              <p className="mt-1 text-xs text-muted">等待期间可停止任务；单独采集不受影响。</p>
-            </Field>
-          </div>
-        </SectionCard>
-
         {/* Scoring Section */}
         <SectionCard title="评分设置" sectionKey="scoring" expanded={expandedSections} toggle={toggleSection}>
           <div className="space-y-4">

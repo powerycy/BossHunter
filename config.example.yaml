@@ -25,13 +25,6 @@ search:
   max_pages: 5
   sort: newest
 
-collection:
-  daily_new_jobs_limit: 100       # 单日新增唯一岗位上限；重复岗位不计入
-  daily_search_page_limit: 30
-  daily_detail_page_limit: 150
-  max_consecutive_page_failures: 3
-  delivery_cooldown_minutes: 30   # 全流程采集结束到投递的最短冷却
-
 scoring:
   threshold: 70
   max_candidates: 20
@@ -90,10 +83,6 @@ follow_up:
 
 dedup:
   history_file: "./data/history.jsonl"
-
-safety:
-  daily_platform_page_limit: 500  # 采集、投递和监测合计的页面打开硬上限
-  risk_lock_minutes: 1440         # 风险信号触发后跨重启保持冷却
 
 browser:
   runtime: "builtin"
