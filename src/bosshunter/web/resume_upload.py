@@ -25,7 +25,7 @@ MAX_OCR_SECONDS = 90
 MIN_OCR_TEXT_CHARS = 20
 RAPID_OCR_PARAMS = {
 	"Global.log_level": "warning",
-	"Global.max_side_len": 1600,
+	"Global.max_side_len": 1200,
 	"EngineConfig.onnxruntime.intra_op_num_threads": 2,
 	"EngineConfig.onnxruntime.inter_op_num_threads": 1,
 	"Cls.cls_batch_num": 4,
