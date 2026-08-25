@@ -122,11 +122,22 @@ JS_EXTRACT_CHAT_LIST = r"""
 
 JS_DETECT_MONITOR_RISK = """
 (() => {
-    const text = document.body ? document.body.innerText : '';
+    // Read only visible UI content. Hidden template nodes and mask placeholders
+    // often contain generic security wording and must not stop a real session.
+    const visible = (el) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    };
+    const visibleText = (el) => visible(el) ? (el.innerText || el.textContent || '').trim() : '';
+    const visibleNodes = Array.from(document.querySelectorAll('body *')).filter(visible);
+    const text = visibleNodes.map(visibleText).filter(Boolean).join(' ');
     const title = document.title || '';
     const url = window.location.href || '';
-    const hasCaptchaElement = !!document.querySelector(
-        '.geetest_panel, .captcha, [class*="captcha"], [id*="captcha"], iframe[src*="captcha"], iframe[src*="verify"]'
+    const hasCaptchaElement = visibleNodes.some((el) =>
+        el.matches('.geetest_panel, .captcha, [class*="captcha"], [id*="captcha"], iframe[src*="captcha"], iframe[src*="verify"]')
     );
     if (
         hasCaptchaElement || /captcha|verify|security-check/i.test(url) ||
