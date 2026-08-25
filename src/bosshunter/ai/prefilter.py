@@ -2,7 +2,7 @@
 
 import re
 
-from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
+from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker, parse_monthly_salary_k
 
 
 _INTERNSHIP_KEYWORDS = ("实习", "intern", "internship", "管培")
@@ -39,10 +39,15 @@ def quick_score(job: dict, config: dict) -> tuple[int, str]:
     if not profile.get("allow_internship", False) and _contains_internship_signal(job):
         return 0, "实习/管培岗位"
 
-    salary_min = _as_number(profile.get("salary_min", 0))
-    salary_max = _parse_salary_max_k(job.get("salary") or "")
-    if salary_min > 0 and salary_max is not None and salary_max < salary_min:
-        return 0, f"薪资低于硬性要求: {_format_k(salary_max)}K < {_format_k(salary_min)}K"
+    user_salary_min = _as_number(profile.get("salary_min", 0))
+    user_salary_max = _as_number(profile.get("salary_max", 0))
+    job_salary = parse_monthly_salary_k(job.get("salary") or "")
+    if job_salary is not None:
+        job_min, job_max = job_salary
+        if user_salary_min > 0 and job_max < user_salary_min:
+            return 0, f"薪资低于硬性要求: {_format_k(job_max)}K < {_format_k(user_salary_min)}K"
+        if user_salary_max > 0 and job_min > user_salary_max:
+            return 0, f"薪资高于预期范围: {_format_k(job_min)}K > {_format_k(user_salary_max)}K"
 
     return 100, "预筛通过"
 
@@ -50,18 +55,6 @@ def quick_score(job: dict, config: dict) -> tuple[int, str]:
 def _contains_internship_signal(job: dict) -> bool:
     title = (job.get("title") or "").lower()
     return any(keyword.lower() in title for keyword in _INTERNSHIP_KEYWORDS)
-
-
-def _parse_salary_max_k(salary: str) -> float | None:
-    range_match = re.search(r"(\d+(?:\.\d+)?)\s*[kK]?\s*-\s*(\d+(?:\.\d+)?)\s*[kK]", salary)
-    if range_match:
-        return max(float(range_match.group(1)), float(range_match.group(2)))
-
-    single_match = re.search(r"(\d+(?:\.\d+)?)\s*[kK]", salary)
-    if single_match:
-        return float(single_match.group(1))
-
-    return None
 
 
 def _as_number(value: object) -> float:
