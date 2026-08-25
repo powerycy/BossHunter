@@ -119,6 +119,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_v1_2(conn)
     _migrate_v1_3(conn)
     _migrate_v1_4(conn)
+    _migrate_v1_5(conn)
     _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
     _init_collection_runs(conn)
@@ -477,6 +478,109 @@ def update_job_greeting(conn: sqlite3.Connection, job_id: str, greeting: str) ->
     conn.commit()
 
 
+def save_generated_greeting_preview(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    original: str,
+    optimized: str | None,
+    style_issues: list[str],
+    selected_greeting: str,
+    selection: str,
+) -> bool:
+    """Persist generated variants without overwriting a human-reviewed greeting."""
+    cursor = conn.execute(
+        """
+        UPDATE jobs
+        SET greeting = ?,
+            greeting_original = ?,
+            greeting_optimized = ?,
+            greeting_style_issues = ?,
+            greeting_selection = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+          AND deleted_at IS NULL
+          AND greeting_reviewed_at IS NULL
+        """,
+        (
+            selected_greeting,
+            original,
+            optimized,
+            json.dumps(style_issues, ensure_ascii=False),
+            selection,
+            job_id,
+        ),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def select_job_greeting(
+    conn: sqlite3.Connection,
+    job_id: str,
+    selection: str,
+    *,
+    edited_greeting: str = "",
+    confirmed: bool = False,
+) -> dict[str, Any]:
+    """Apply an explicit greeting choice and lock it against later generation."""
+    if confirmed is not True:
+        raise ValueError("选择招呼语需要 confirmed=true")
+    if selection not in {"original", "optimized", "edited"}:
+        raise ValueError("招呼语选择无效")
+
+    row = conn.execute(
+        """
+        SELECT * FROM jobs
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        raise KeyError(job_id)
+    record = dict(row)
+    status = str(record.get("status") or "")
+    if status in DELETION_PROTECTED_STATUSES:
+        raise ValueError("已发送或已回复岗位不能修改招呼语")
+    if status not in {"ready", "approved", "error"}:
+        raise ValueError("当前岗位状态不能修改招呼语")
+
+    if selection == "original":
+        greeting = str(record.get("greeting_original") or record.get("greeting") or "").strip()
+    elif selection == "optimized":
+        greeting = str(record.get("greeting_optimized") or "").strip()
+    else:
+        greeting = str(edited_greeting or "").strip()
+    if not greeting:
+        raise ValueError("所选招呼语为空")
+    if len(greeting) > 300:
+        raise ValueError("招呼语不能超过300字")
+
+    action_labels = {
+        "original": "保留原始招呼语",
+        "optimized": "采用优化招呼语",
+        "edited": "采用手动编辑招呼语",
+    }
+    with conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET greeting = ?,
+                greeting_selection = ?,
+                greeting_reviewed_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (greeting, selection, job_id),
+        )
+        conn.execute(
+            "INSERT INTO history (job_id, action, detail) VALUES (?, 'greeting_selected', ?)",
+            (job_id, action_labels[selection]),
+        )
+    updated = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    return dict(updated) if updated is not None else {}
+
+
 def update_job_status(conn: sqlite3.Connection, job_id: str, status: str) -> None:
     """Update job status."""
     conn.execute(
@@ -515,14 +619,20 @@ def get_jobs_pending_confirmation(conn: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def get_jobs_ready_to_send(conn: sqlite3.Connection) -> list[dict]:
+def get_jobs_ready_to_send(
+    conn: sqlite3.Connection,
+    *,
+    include_pending_review: bool = False,
+) -> list[dict]:
     """Get jobs that have generated greetings and are ready to send."""
-    rows = conn.execute("""
+    review_filter = "" if include_pending_review else "AND greeting_selection != 'pending'"
+    rows = conn.execute(f"""
         SELECT * FROM jobs
         WHERE status IN ('ready', 'approved')
           AND deleted_at IS NULL
           AND greeting IS NOT NULL
           AND TRIM(greeting) != ''
+          {review_filter}
         ORDER BY score DESC
     """).fetchall()
     return [dict(row) for row in rows]
@@ -632,6 +742,22 @@ def _migrate_v1_4(conn: sqlite3.Connection) -> None:
         WHERE recruitment_type IS NULL OR TRIM(recruitment_type) = '' OR recruitment_type = 'unknown'
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_recruitment_type ON jobs(recruitment_type)")
+    conn.commit()
+
+
+def _migrate_v1_5(conn: sqlite3.Connection) -> None:
+    """Add non-destructive greeting preview and human-selection metadata."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    additions = {
+        "greeting_original": "TEXT NULL",
+        "greeting_optimized": "TEXT NULL",
+        "greeting_style_issues": "TEXT NOT NULL DEFAULT '[]'",
+        "greeting_selection": "TEXT NOT NULL DEFAULT 'legacy'",
+        "greeting_reviewed_at": "TIMESTAMP NULL",
+    }
+    for name, definition in additions.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
     conn.commit()
 
 

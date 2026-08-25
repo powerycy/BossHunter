@@ -10,7 +10,13 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from bosshunter.ai.credentials import AIRequestError, call_anthropic_text
 from bosshunter.cancellation import OperationCancelled, run_cancellable
 from bosshunter.collection.text import clean_job_description
-from bosshunter.db import add_history, get_db, get_jobs_by_status, update_job_greeting, update_job_status
+from bosshunter.db import (
+    add_history,
+    get_db,
+    get_jobs_by_status,
+    save_generated_greeting_preview,
+    update_job_status,
+)
 
 console = Console()
 
@@ -517,10 +523,14 @@ def generate_greetings(config: dict) -> int:
 
     ai_cfg = config.get("ai", {})
     review_threshold = ai_cfg.get("greeting_review_threshold", 7.0)
+    style_suggestions_enabled = ai_cfg.get("greeting_style_suggestions", True) is not False
+    auto_apply_style = style_suggestions_enabled and ai_cfg.get("greeting_auto_apply_style") is True
     try:
         max_iterations = max(0, int(ai_cfg.get("greeting_max_iterations", 2) or 0))
     except (TypeError, ValueError):
         max_iterations = 2
+    if not style_suggestions_enabled:
+        max_iterations = 0
 
     recent_rows = db.execute(
         """
@@ -553,7 +563,16 @@ def generate_greetings(config: dict) -> int:
         for index, job in enumerate(jobs, start=1):
             if stop_event is not None and stop_event.is_set():
                 break
+            if job.get("greeting_reviewed_at") and str(job.get("greeting") or "").strip():
+                _notify(
+                    config,
+                    f"{job['company']}｜{job['title']} 的招呼语已人工确认，本轮不会覆盖。",
+                )
+                progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
+                continue
             best_greeting = None
+            original_greeting = None
+            original_issues: list[str] = []
             pause_after_current = ""
 
             for iteration in range(max_iterations + 1):
@@ -570,6 +589,10 @@ def generate_greetings(config: dict) -> int:
                         pause_after_current = exc.user_message
                         break
                     style_issues = _greeting_style_issues(best_greeting, recent_openings)
+                    if best_greeting == original_greeting:
+                        original_issues = style_issues[:]
+                        if review and review.get("avg", 10) < review_threshold and review.get("critique"):
+                            original_issues.append(str(review["critique"]))
                     if review is None and not style_issues:
                         _notify(
                             config,
@@ -607,6 +630,8 @@ def generate_greetings(config: dict) -> int:
                     break
 
                 best_greeting = greeting
+                if original_greeting is None:
+                    original_greeting = greeting
                 if max_iterations == 0:
                     break
 
@@ -620,9 +645,41 @@ def generate_greetings(config: dict) -> int:
                     break
                 continue
 
-            update_job_greeting(db, job["id"], best_greeting)
+            original_greeting = original_greeting or best_greeting
+            optimized_greeting = (
+                best_greeting
+                if style_suggestions_enabled and best_greeting != original_greeting
+                else None
+            )
+            if optimized_greeting and not original_issues:
+                original_issues = ["AI 质量复核建议优化表达"]
+            if optimized_greeting and auto_apply_style:
+                selected_greeting = optimized_greeting
+                selection = "auto_optimized"
+            elif optimized_greeting:
+                selected_greeting = original_greeting
+                selection = "pending"
+            else:
+                selected_greeting = original_greeting
+                selection = "generated"
+            saved = save_generated_greeting_preview(
+                db,
+                job["id"],
+                original=original_greeting,
+                optimized=optimized_greeting,
+                style_issues=original_issues,
+                selected_greeting=selected_greeting,
+                selection=selection,
+            )
+            if not saved:
+                _notify(
+                    config,
+                    f"{job['company']}｜{job['title']} 已由人工确认，生成结果未覆盖现有招呼语。",
+                )
+                progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
+                continue
             update_job_status(db, job["id"], "ready")
-            opening = _opening_signature(best_greeting)
+            opening = _opening_signature(selected_greeting)
             if opening:
                 recent_openings.append(opening)
             count += 1

@@ -24,9 +24,11 @@ import {
   ExternalLink,
   Eye,
   MessageCircle,
+  Pencil,
   Play,
   RefreshCw,
   Send,
+  Sparkles,
   Square,
   Trash2,
   XCircle,
@@ -340,6 +342,8 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   }, [refresh])
 
   const pendingGreetingJobs = workbench.pending_greetings
+  const reviewedGreetingJobs = pendingGreetingJobs.filter(job => job.greeting_selection !== 'pending')
+  const pendingGreetingReviewCount = pendingGreetingJobs.length - reviewedGreetingJobs.length
   const activeTask = workbench.task
   const visibleTask = activeTask || workbench.last_task
   const visibleTaskError = visibleTask?.error ? taskErrorFeedback(visibleTask.error) : null
@@ -517,6 +521,28 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '发送失败')
     }
+  }
+
+  const selectGreeting = async (
+    job: Job,
+    selection: 'original' | 'optimized' | 'edited',
+    greeting = '',
+  ) => {
+    const res = await fetch(`/api/jobs/${job.id}/greeting-selection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selection, greeting, confirmed: true }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || '保存招呼语选择失败')
+    await refresh()
+    setNotice(
+      selection === 'original'
+        ? '已保留原文，后续生成不会覆盖。'
+        : selection === 'optimized'
+          ? '已采用优化版，后续生成不会覆盖。'
+          : '已保存手动编辑版本，后续生成不会覆盖。'
+    )
   }
 
   const openJobDetail = async (job: Job) => {
@@ -827,31 +853,34 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
             <div>
               <h3 className="text-lg font-black">待发送招呼语</h3>
-              <p className="mt-1 text-xs text-muted">这些岗位已确认并生成招呼语，点击后会直接进入发送流程。</p>
+              <p className="mt-1 text-xs text-muted">先预览原文与优化建议。人工确认后的版本会锁定，不再被后台生成覆盖。</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => sendReadyGreetings(pendingGreetingJobs.map(job => job.id))}>发送全部 {pendingGreetingJobs.length} 个</Button>
+              {pendingGreetingReviewCount > 0 && (
+                <span className="rounded-full bg-amber-100 px-3 py-2 text-xs font-black text-amber-700">
+                  {pendingGreetingReviewCount} 个待选择
+                </span>
+              )}
+              <Button
+                size="sm"
+                disabled={reviewedGreetingJobs.length === 0}
+                onClick={() => sendReadyGreetings(reviewedGreetingJobs.map(job => job.id))}
+              >
+                发送已确认 {reviewedGreetingJobs.length} 个
+              </Button>
               <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(pendingGreetingJobs.map(job => job.id))}>放弃全部</Button>
             </div>
           </div>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {pendingGreetingJobs.map(job => (
-              <div key={job.id} className="rounded-2xl border border-primary/20 bg-white p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="font-black">{job.company}｜{job.title}</div>
-                    <div className="mt-1 text-xs text-primary">已生成招呼语，等待发送</div>
-                  </div>
-                  <span className="rounded-full bg-[#FFF0E5] px-2 py-1 text-[11px] font-black text-primary">待发送</span>
-                </div>
-                <p className="mt-3 line-clamp-2 text-sm leading-6 text-muted">{job.greeting || '招呼语已生成，等待发送。'}</p>
-                <div className="mt-3 flex gap-2">
-                  <Button size="sm" onClick={() => sendReadyGreetings([job.id])}>发送招呼语</Button>
-                  <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs([job.id])}>放弃</Button>
-                  <Button variant="secondary" size="sm" onClick={() => openJobDetail(job)}><Eye className="mr-2 h-4 w-4" />查看详情</Button>
-                  <Button variant="secondary" size="sm" disabled={!job.url} onClick={() => window.open(job.url, '_blank', 'noopener,noreferrer')}><ExternalLink className="mr-2 h-4 w-4" />跳转岗位链接</Button>
-                </div>
-              </div>
+              <GreetingReviewCard
+                key={job.id}
+                job={job}
+                onSelect={(selection, greeting) => selectGreeting(job, selection, greeting)}
+                onSend={() => sendReadyGreetings([job.id])}
+                onReject={() => rejectSelectedJobs([job.id])}
+                onDetail={() => openJobDetail(job)}
+              />
             ))}
           </div>
         </section>
@@ -934,6 +963,131 @@ function CollectionProgressPanel({ progress }: { progress: CollectionProgress })
             {(state.message || state.reason_code) && <div className="mt-1 text-xs font-bold text-primary">{state.message || state.reason_code}</div>}
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+function GreetingReviewCard({
+  job,
+  onSelect,
+  onSend,
+  onReject,
+  onDetail,
+}: {
+  job: Job
+  onSelect: (selection: 'original' | 'optimized' | 'edited', greeting?: string) => Promise<void>
+  onSend: () => void
+  onReject: () => void
+  onDetail: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(job.greeting || '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const original = job.greeting_original || job.greeting || ''
+  const optimized = job.greeting_optimized || ''
+  const hasPreview = Boolean(optimized && optimized !== original)
+  const needsSelection = job.greeting_selection === 'pending'
+  const issues = Array.isArray(job.greeting_style_issues) ? job.greeting_style_issues : []
+  const selectionLabel = needsSelection
+    ? '待选择'
+    : job.greeting_selection === 'auto_optimized'
+      ? '已自动采用，可调整'
+      : job.greeting_reviewed_at
+        ? '已人工确认'
+        : '待发送'
+
+  const saveSelection = async (selection: 'original' | 'optimized' | 'edited', greeting = '') => {
+    setSaving(true)
+    setError('')
+    try {
+      await onSelect(selection, greeting)
+      setEditing(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className={`rounded-2xl border bg-white p-4 ${needsSelection ? 'border-amber-200' : 'border-primary/20'}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="font-black">{job.company}｜{job.title}</div>
+          <div className="mt-1 text-xs text-muted">发送前确认最终使用的表达</div>
+        </div>
+        <span className={`rounded-full px-2 py-1 text-[11px] font-black ${needsSelection ? 'bg-amber-100 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>
+          {selectionLabel}
+        </span>
+      </div>
+
+      {issues.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5" aria-label="招呼语优化原因">
+          {issues.map(issue => (
+            <span key={issue} className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-700">
+              {issue}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {hasPreview ? (
+        <div className="mt-3 grid gap-3 xl:grid-cols-2">
+          <div className={`rounded-xl border p-3 ${job.greeting_selection === 'original' || needsSelection ? 'border-card-border bg-[#FFFCFA]' : 'border-card-border/70 bg-white'}`}>
+            <div className="text-[11px] font-black tracking-[0.12em] text-muted">原始版本</div>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-foreground">{original}</p>
+            <Button className="mt-3" variant="secondary" size="sm" disabled={saving} onClick={() => void saveSelection('original')}>
+              保留原文
+            </Button>
+          </div>
+          <div className={`rounded-xl border p-3 ${job.greeting_selection === 'optimized' || job.greeting_selection === 'auto_optimized' ? 'border-primary/30 bg-[#FFF8F2]' : 'border-primary/20 bg-white'}`}>
+            <div className="flex items-center gap-1.5 text-[11px] font-black tracking-[0.12em] text-primary">
+              <Sparkles className="h-3.5 w-3.5" />优化预览
+            </div>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-foreground">{optimized}</p>
+            <Button className="mt-3" size="sm" disabled={saving} onClick={() => void saveSelection('optimized')}>
+              采用优化版
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 rounded-xl border border-card-border bg-[#FFFCFA] p-3">
+          <div className="text-[11px] font-black tracking-[0.12em] text-muted">当前版本</div>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-foreground">{job.greeting || '招呼语已生成，等待发送。'}</p>
+        </div>
+      )}
+
+      {editing && (
+        <div className="mt-3 rounded-xl border border-card-border bg-[#FFFCFA] p-3">
+          <label className="text-xs font-black text-foreground" htmlFor={`greeting-edit-${job.id}`}>手动编辑最终版本</label>
+          <textarea
+            id={`greeting-edit-${job.id}`}
+            value={draft}
+            maxLength={300}
+            onChange={event => setDraft(event.target.value)}
+            className="mt-2 min-h-28 w-full resize-y rounded-xl border border-card-border bg-white p-3 text-sm leading-6 outline-none focus:border-primary"
+          />
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <span className="text-xs text-muted">{draft.length}/300</span>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setEditing(false)}>取消</Button>
+              <Button size="sm" disabled={saving || !draft.trim()} onClick={() => void saveSelection('edited', draft)}>保存编辑版</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {error && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-danger">{error}</p>}
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button size="sm" disabled={needsSelection} onClick={onSend}>发送招呼语</Button>
+        <Button variant="secondary" size="sm" onClick={() => { setDraft(job.greeting || original); setEditing(true) }}>
+          <Pencil className="mr-2 h-4 w-4" />手动编辑
+        </Button>
+        <Button variant="secondary" size="sm" onClick={onDetail}><Eye className="mr-2 h-4 w-4" />查看详情</Button>
+        <Button variant="secondary" size="sm" onClick={onReject}>放弃</Button>
       </div>
     </div>
   )

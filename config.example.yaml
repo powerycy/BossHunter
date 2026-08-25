@@ -106,6 +106,8 @@ ai:
   # greeting_timeout_seconds: 180
   greeting_review_threshold: 7
   greeting_max_iterations: 2
+  greeting_style_suggestions: true  # 生成原文与优化预览；关闭后只保留首次生成结果
+  greeting_auto_apply_style: false  # 默认不自动替换，需在页面选择原文或优化版
   resume_max_pages: 3
   # api_key 可通过对应环境变量设置（ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / ARK_API_KEY / OPENAI_API_KEY）
   # api_key: "your-api-key"

@@ -101,7 +101,9 @@
         {"key": "thinking_budget", "label": "Thinking 预算", "type": "number", "min": 1024, "max": 32768, "default": 2048, "description": "仅 enabled 模式使用"},
         {"key": "timeout_seconds", "label": "AI 请求超时 (秒)", "type": "number", "min": 5, "max": 600, "default": 180},
         {"key": "scoring_concurrency", "label": "AI 评分并发数", "type": "number", "min": 1, "max": 3, "default": 1, "description": "仅并发调用 AI，岗位数据仍按顺序安全写入"},
-        {"key": "scoring_second_review", "label": "临界评分二次复核", "type": "switch", "default": false, "description": "开启后对首次68-79分的岗位再调用一次 AI"}
+        {"key": "scoring_second_review", "label": "临界评分二次复核", "type": "switch", "default": false, "description": "开启后对首次68-79分的岗位再调用一次 AI"},
+        {"key": "greeting_style_suggestions", "label": "生成招呼语优化建议", "type": "switch", "default": true, "description": "保存原文、优化预览和触发原因；关闭后只保留首次生成结果"},
+        {"key": "greeting_auto_apply_style", "label": "自动采用招呼语优化版", "type": "switch", "default": false, "description": "默认关闭；关闭时必须在发送前选择原文或优化版"}
       ]
     },
     {

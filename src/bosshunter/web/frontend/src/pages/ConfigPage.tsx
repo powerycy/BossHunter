@@ -540,6 +540,29 @@ export default function ConfigPage() {
               </div>
               <Switch checked={config.ai?.scoring_second_review ?? false} onChange={v => updateConfig('ai.scoring_second_review', v)} />
             </div>
+            <div className="rounded-2xl border border-primary/20 bg-[#FFF8F2] p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <label className="text-sm font-black text-foreground">生成招呼语优化建议</label>
+                  <p className="mt-1 text-xs leading-5 text-muted">保留首次生成原文，同时生成可对比的优化预览和触发原因；关闭后只生成一版。</p>
+                </div>
+                <Switch
+                  checked={config.ai?.greeting_style_suggestions ?? true}
+                  onChange={value => updateConfig('ai.greeting_style_suggestions', value)}
+                />
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-4 border-t border-primary/10 pt-3">
+                <div>
+                  <label className="text-sm font-black text-foreground">自动采用优化版</label>
+                  <p className="mt-1 text-xs leading-5 text-muted">默认关闭。关闭时，发送前必须选择保留原文或采用优化版。</p>
+                </div>
+                <Switch
+                  checked={config.ai?.greeting_auto_apply_style ?? false}
+                  disabled={(config.ai?.greeting_style_suggestions ?? true) === false}
+                  onChange={value => updateConfig('ai.greeting_auto_apply_style', value)}
+                />
+              </div>
+            </div>
             <div className="rounded-2xl border border-card-border bg-[#FFFCFA] p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>

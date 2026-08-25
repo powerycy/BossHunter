@@ -157,6 +157,8 @@ DEFAULTS: dict[str, Any] = {
         "greeting_max_attempts": 2,
         "greeting_review_threshold": 7.0,
         "greeting_max_iterations": 2,
+        "greeting_style_suggestions": True,
+        "greeting_auto_apply_style": False,
     },
     "monitor": {
         "interval": 30,  # 分钟

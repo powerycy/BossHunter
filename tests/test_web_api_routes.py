@@ -18,7 +18,9 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from bosshunter.db import (
     add_history,
     get_db,
+    get_jobs_ready_to_send,
     insert_job,
+    save_generated_greeting_preview,
     update_job_greeting,
     update_job_score,
     update_job_status,
@@ -989,6 +991,112 @@ class WebApiRouteTests(unittest.TestCase):
 
         self.assertTrue(status.startswith("409"), body)
         self.assertEqual(json.loads(body)["invalid_ids"], ["error-without-greeting"])
+
+    def test_pending_greeting_preview_requires_selection_before_send(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("preview-pending"))
+                update_job_status(db, "preview-pending", "ready")
+                saved = save_generated_greeting_preview(
+                    db,
+                    "preview-pending",
+                    original="原始招呼语",
+                    optimized="优化后的招呼语",
+                    style_issues=["开头与近期消息重复"],
+                    selected_greeting="原始招呼语",
+                    selection="pending",
+                )
+                self.assertTrue(saved)
+                self.assertEqual(get_jobs_ready_to_send(db), [])
+                self.assertEqual(
+                    [job["id"] for job in get_jobs_ready_to_send(db, include_pending_review=True)],
+                    ["preview-pending"],
+                )
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            workbench_status, _, workbench_body = self._request("/api/workbench")
+            send_status, _, send_body = self._request(
+                "/api/workbench/deliver",
+                method="POST",
+                json_body={"job_ids": ["preview-pending"], "direct_send": True},
+            )
+
+        self.assertTrue(workbench_status.startswith("200"), workbench_body)
+        preview = json.loads(workbench_body)["pending_greetings"][0]
+        self.assertEqual(preview["greeting_original"], "原始招呼语")
+        self.assertEqual(preview["greeting_optimized"], "优化后的招呼语")
+        self.assertEqual(preview["greeting_style_issues"], ["开头与近期消息重复"])
+        self.assertTrue(send_status.startswith("409"), send_body)
+        self.assertEqual(json.loads(send_body)["code"], "greeting_review_required")
+
+    def test_greeting_selection_applies_choice_and_locks_the_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("preview-choice"))
+                update_job_status(db, "preview-choice", "ready")
+                save_generated_greeting_preview(
+                    db,
+                    "preview-choice",
+                    original="原始招呼语",
+                    optimized="优化后的招呼语",
+                    style_issues=["表达可以更简洁"],
+                    selected_greeting="原始招呼语",
+                    selection="pending",
+                )
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            unconfirmed_status, _, unconfirmed_body = self._request(
+                "/api/jobs/preview-choice/greeting-selection",
+                method="POST",
+                json_body={"selection": "optimized"},
+            )
+            status, _, body = self._request(
+                "/api/jobs/preview-choice/greeting-selection",
+                method="POST",
+                json_body={"selection": "optimized", "confirmed": True},
+            )
+
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                row = verify_db.execute(
+                    "SELECT greeting, greeting_selection, greeting_reviewed_at FROM jobs WHERE id = ?",
+                    ("preview-choice",),
+                ).fetchone()
+                history = verify_db.execute(
+                    "SELECT action, detail FROM history WHERE job_id = ? ORDER BY id",
+                    ("preview-choice",),
+                ).fetchall()
+                overwritten = save_generated_greeting_preview(
+                    verify_db,
+                    "preview-choice",
+                    original="新原文",
+                    optimized="新优化版",
+                    style_issues=[],
+                    selected_greeting="新优化版",
+                    selection="auto_optimized",
+                )
+            finally:
+                verify_db.close()
+
+        self.assertTrue(unconfirmed_status.startswith("409"), unconfirmed_body)
+        self.assertIn("confirmed=true", json.loads(unconfirmed_body)["error"])
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(json.loads(body)["greeting"], "优化后的招呼语")
+        self.assertEqual(row["greeting"], "优化后的招呼语")
+        self.assertEqual(row["greeting_selection"], "optimized")
+        self.assertIsNotNone(row["greeting_reviewed_at"])
+        self.assertEqual([(item["action"], item["detail"]) for item in history], [
+            ("greeting_selected", "采用优化招呼语"),
+        ])
+        self.assertFalse(overwritten)
 
     def test_web_api_deliver_queues_confirmation_before_full_task_event_exists(self):
         full_task = WorkbenchTask(id="full-before-event", mode="full", label="运行全流程")

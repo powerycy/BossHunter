@@ -27,6 +27,11 @@ interface Job {
   score: number
   score_reason: string
   greeting: string
+  greeting_original?: string | null
+  greeting_optimized?: string | null
+  greeting_style_issues?: string[]
+  greeting_selection?: 'legacy' | 'generated' | 'pending' | 'auto_optimized' | 'original' | 'optimized' | 'edited' | string
+  greeting_reviewed_at?: string | null
   status: string
   hr_name: string
   hr_title: string
