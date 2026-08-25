@@ -54,6 +54,9 @@ export default function ConfigPage() {
   }))
   const [resumeInfo, setResumeInfo] = useState<any>(null)
   const [resumeUploadError, setResumeUploadError] = useState('')
+  const [resumeUploadWarning, setResumeUploadWarning] = useState('')
+  const [ocrReview, setOcrReview] = useState<{ filename: string; content: string } | null>(null)
+  const [ocrConfirming, setOcrConfirming] = useState(false)
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
   const [cityOptions, setCityOptions] = useState<CityOption[]>([])
   const [zhilianCityOptions, setZhilianCityOptions] = useState<CityOption[]>([])
@@ -92,6 +95,7 @@ export default function ConfigPage() {
     const file = e.target.files?.[0]
     if (!file) return
     setResumeUploadError('')
+    setResumeUploadWarning('')
     const form = new FormData()
     form.append('file', file)
     try {
@@ -101,7 +105,13 @@ export default function ConfigPage() {
         setResumeUploadError(data.error || '简历上传失败')
         return
       }
+      if (data.requires_review) {
+        setOcrReview({ filename: data.filename, content: data.content || '' })
+        setResumeUploadWarning(data.warning || '请核对 OCR 文本后确认使用。')
+        return
+      }
       setResumeInfo({ filename: data.filename, size: data.size, path: data.path })
+      setResumeUploadWarning(data.warning || '')
       updateConfig('profile.resume_path', data.path)
     } catch {
       setResumeUploadError('网络错误，简历上传失败')
@@ -110,9 +120,43 @@ export default function ConfigPage() {
     }
   }
 
+  const handleOcrConfirm = async () => {
+    if (!ocrReview) return
+    setOcrConfirming(true)
+    setResumeUploadError('')
+    try {
+      const res = await fetch('/api/resume/confirm-ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ocrReview),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        setResumeUploadError(data.error || 'OCR 文本确认失败')
+        return
+      }
+      setResumeInfo({ filename: data.filename, size: data.size, path: data.path })
+      setOcrReview(null)
+      setResumeUploadWarning('')
+      updateConfig('profile.resume_path', data.path)
+    } catch {
+      setResumeUploadError('网络错误，OCR 文本确认失败')
+    } finally {
+      setOcrConfirming(false)
+    }
+  }
+
+  const handleOcrCancel = () => {
+    setOcrReview(null)
+    setResumeUploadWarning('')
+    setResumeUploadError('')
+  }
+
   const handleResumeDelete = async () => {
     await fetch('/api/resume', { method: 'DELETE' })
     setResumeInfo(null)
+    setResumeUploadWarning('')
+    setOcrReview(null)
     updateConfig('profile.resume_path', '')
   }
 
@@ -290,11 +334,33 @@ export default function ConfigPage() {
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-card-border p-6 transition-colors hover:border-primary/50 hover:bg-[#FFFCFA]">
                   <Upload className="mb-2 h-6 w-6 text-muted" />
                   <span className="text-sm text-muted">拖拽或点击上传 (.md、.docx、.pdf)</span>
+                  <span className="mt-1 text-xs text-muted">扫描或图片式 PDF 使用可选的本机 OCR 组件</span>
                   <input type="file" accept=".md,.docx,.pdf,application/pdf" onChange={handleResumeUpload} className="hidden" />
                 </label>
               )}
+              {ocrReview && (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs font-black text-amber-800">OCR 识别结果尚未启用</p>
+                  <p className="mt-1 text-xs leading-5 text-amber-700">请检查姓名、联系方式、日期和数字；可直接修正文本，确认后才会设为当前简历。</p>
+                  <textarea
+                    className="mt-3 h-64 w-full resize-y rounded-lg border border-amber-200 bg-white p-3 font-mono text-xs leading-5 text-foreground outline-none focus:border-primary"
+                    value={ocrReview.content}
+                    onChange={event => setOcrReview({ ...ocrReview, content: event.target.value })}
+                    spellCheck={false}
+                  />
+                  <div className="mt-3 flex justify-end gap-2">
+                    <Button variant="ghost" size="sm" onClick={handleOcrCancel} disabled={ocrConfirming}>取消</Button>
+                    <Button size="sm" onClick={handleOcrConfirm} disabled={ocrConfirming}>
+                      {ocrConfirming ? '保存中...' : '确认并使用这份简历'}
+                    </Button>
+                  </div>
+                </div>
+              )}
               {resumeUploadError && (
                 <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-500">{resumeUploadError}</p>
+              )}
+              {resumeUploadWarning && (
+                <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{resumeUploadWarning}</p>
               )}
             </div>
             <div className="grid grid-cols-2 gap-4">

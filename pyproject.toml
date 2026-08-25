@@ -25,6 +25,11 @@ dependencies = [
 pdf = [
     "xhtml2pdf>=0.2.11",
 ]
+ocr = [
+    "onnxruntime>=1.18,<2",
+    "pypdfium2>=4.30,<6",
+    "rapidocr==3.9.2",
+]
 
 [project.scripts]
 bosshunter = "bosshunter.main:cli"

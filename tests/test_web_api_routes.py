@@ -1730,7 +1730,67 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(status.startswith("400"), body)
         self.assertEqual(json.loads(body), {"error": "PDF 文件无效或已损坏"})
 
-    def test_web_api_resume_upload_rejects_scanned_pdf_without_text_layer(self):
+    @patch("bosshunter.web.resume_upload._ocr_pdf_to_markdown", return_value="# OCR Candidate\n\nLocal OCR result\n")
+    def test_web_api_resume_upload_uses_local_ocr_for_scanned_pdf(self, ocr_pdf):
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        pdf = io.BytesIO()
+        writer.write(pdf)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+            original_resume_path = server.load_config(base_dir / "config.yaml").get("profile", {}).get("resume_path")
+            status, _, body = self._upload_resume("scanned.pdf", pdf.getvalue(), "application/pdf")
+            payload = json.loads(body)
+
+            self.assertTrue(status.startswith("200"), body)
+            self.assertTrue(payload["requires_review"])
+            self.assertNotIn("path", payload)
+            self.assertIn("OCR Candidate", payload["content"])
+            self.assertIn("已在本机 OCR", payload["warning"])
+            self.assertFalse((base_dir / "data" / "resumes" / "scanned.md").exists())
+            self.assertEqual(
+                server.load_config(base_dir / "config.yaml").get("profile", {}).get("resume_path"),
+                original_resume_path,
+            )
+
+            confirm_status, _, confirm_body = self._request(
+                "/api/resume/confirm-ocr",
+                method="POST",
+                json_body={"filename": payload["filename"], "content": payload["content"]},
+            )
+            confirmed = json.loads(confirm_body)
+            stored_text = Path(confirmed["path"]).read_text(encoding="utf-8")
+
+        self.assertTrue(confirm_status.startswith("200"), confirm_body)
+        self.assertEqual(payload["filename"], "scanned.md")
+        self.assertIn("OCR Candidate", stored_text)
+        ocr_pdf.assert_called_once()
+
+    def test_web_api_resume_ocr_confirmation_rejects_unusable_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/resume/confirm-ocr",
+                method="POST",
+                json_body={"filename": "scanned.md", "content": "too short"},
+            )
+
+        self.assertTrue(status.startswith("400"), body)
+        self.assertIn("OCR 文本过少", json.loads(body)["error"])
+
+    @patch(
+        "bosshunter.web.resume_upload._ocr_pdf_to_markdown",
+        side_effect=server.ResumeUploadError(
+            'PDF 没有可用文字层；请安装本地 OCR 组件后重试：pip install -e ".[ocr]"'
+        ),
+    )
+    def test_web_api_resume_upload_explains_missing_local_ocr_component(self, ocr_pdf):
         writer = PdfWriter()
         writer.add_blank_page(width=612, height=792)
         pdf = io.BytesIO()
@@ -1743,7 +1803,9 @@ class WebApiRouteTests(unittest.TestCase):
             status, _, body = self._upload_resume("scanned.pdf", pdf.getvalue(), "application/pdf")
 
         self.assertTrue(status.startswith("400"), body)
-        self.assertIn("扫描版或无文字层", json.loads(body)["error"])
+        self.assertIn("pip install -e", json.loads(body)["error"])
+        self.assertIn(".[ocr]", json.loads(body)["error"])
+        ocr_pdf.assert_called_once()
 
     def test_web_api_resume_upload_rejects_legacy_doc_format(self):
         # Arrange

@@ -117,6 +117,7 @@ BASE_DIR = _default_base_dir()
 DATA_DIR = BASE_DIR / "data"
 RESUME_DIR = DATA_DIR / "resumes"
 CONFIG_PATH = BASE_DIR / "config.yaml"
+MAX_RESUME_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def set_base_dir(base_dir: Path | str) -> None:
@@ -1981,6 +1982,21 @@ def api_jobs_permanent_delete():
 
 # ─── Resume APIs ─────────────────────────────────────────
 
+def _activate_resume(safe_name: str, stored_content: bytes) -> dict:
+	"""Store a reviewed resume and make it the active profile resume."""
+	RESUME_DIR.mkdir(parents=True, exist_ok=True)
+	dest = RESUME_DIR / safe_name
+	dest.write_bytes(stored_content)
+	config = load_config(CONFIG_PATH)
+	config.setdefault("profile", {})["resume_path"] = str(dest)
+	_write_config(config)
+	return {
+		"success": True,
+		"filename": safe_name,
+		"size": len(stored_content),
+		"path": str(dest),
+	}
+
 @app.route("/api/resume")
 def api_resume_get():
 	try:
@@ -2003,35 +2019,55 @@ def api_resume_get():
 @app.route("/api/resume/upload", method="POST")
 def api_resume_upload():
 	try:
-		import yaml
 		upload = request.files.get("file")
 		if not upload:
 			return _json_response({"error": "No file uploaded"}, 400)
 
 		# Validate size (10MB max)
 		content = upload.file.read()
-		if len(content) > 10 * 1024 * 1024:
+		if len(content) > MAX_RESUME_UPLOAD_BYTES:
 			return _json_response({"error": "文件大小超过 10MB 限制"}, 400)
 
 		# Bottle's normalized `filename` strips non-ASCII characters. Use the
 		# raw browser filename and apply our own Unicode-safe sanitization.
 		raw_name = upload.raw_filename or upload.filename
-		safe_name, stored_content = prepare_resume_content(raw_name, content)
-		RESUME_DIR.mkdir(parents=True, exist_ok=True)
-		dest = RESUME_DIR / safe_name
-		dest.write_bytes(stored_content)
+		safe_name, stored_content, warning = prepare_resume_content(raw_name, content)
+		if warning:
+			return _json_response({
+				"success": True,
+				"requires_review": True,
+				"filename": safe_name,
+				"size": len(stored_content),
+				"content": stored_content.decode("utf-8"),
+				"warning": warning,
+			})
+		return _json_response(_activate_resume(safe_name, stored_content))
+	except ResumeUploadError as e:
+		return _json_response({"error": str(e)}, 400)
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
 
-		# Update config
-		config = load_config(CONFIG_PATH)
-		config.setdefault("profile", {})["resume_path"] = str(dest)
-		_write_config(config)
 
-		return _json_response({
-			"success": True,
-			"filename": safe_name,
-			"size": len(stored_content),
-			"path": str(dest)
-		})
+@app.route("/api/resume/confirm-ocr", method="POST")
+def api_resume_confirm_ocr():
+	"""Activate OCR text only after the user has reviewed and confirmed it."""
+	try:
+		body = request.json or {}
+		if not isinstance(body, dict):
+			return _json_response({"error": "请求体必须是对象"}, 400)
+		filename = str(body.get("filename") or "")
+		text = body.get("content")
+		if not isinstance(text, str):
+			return _json_response({"error": "缺少待确认的 OCR 文本"}, 400)
+		stored_content = text.encode("utf-8")
+		if len(stored_content) > MAX_RESUME_UPLOAD_BYTES:
+			return _json_response({"error": "OCR 文本超过 10MB 限制"}, 400)
+		if len("".join(text.split())) < 20:
+			return _json_response({"error": "OCR 文本过少，请核对或补充后再确认"}, 400)
+		safe_name, normalized_content, _ = prepare_resume_content(filename, stored_content)
+		if Path(safe_name).suffix.lower() != ".md":
+			return _json_response({"error": "OCR 确认结果必须保存为 Markdown"}, 400)
+		return _json_response(_activate_resume(safe_name, normalized_content))
 	except ResumeUploadError as e:
 		return _json_response({"error": str(e)}, 400)
 	except Exception as e:
