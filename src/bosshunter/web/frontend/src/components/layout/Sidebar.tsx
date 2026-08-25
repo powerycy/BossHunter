@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom'
-import { BriefcaseBusiness, Github, LayoutDashboard, Radar, Settings } from 'lucide-react'
+import { BriefcaseBusiness, FileText, Github, LayoutDashboard, Radar, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '工作台' },
   { to: '/jobs', icon: BriefcaseBusiness, label: '岗位池' },
   { to: '/monitor', icon: Radar, label: '监测执行' },
+  { to: '/resume-studio', icon: FileText, label: '简历工作室' },
   { to: '/config', icon: Settings, label: '配置' },
 ]
 

@@ -138,6 +138,8 @@ bosshunter run
 | "监听回复" | `bosshunter monitor` |
 | "生成简历给xx岗位" | `bosshunter resume --job-id xxx` |
 
+补充路由：当用户要整理职业事实档案或 Career Profile 时，使用 skills/resume-profile-curator，并在 Web「简历工作室」完成事实确认与档案生成。
+
 ### 监听模式
 
 ```bash
