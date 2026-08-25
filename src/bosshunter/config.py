@@ -66,6 +66,9 @@ DEFAULTS: dict[str, Any] = {
         "resume_path": "./resume.md",
         "resume_output_dir": "./data/resumes",
         "target_cities": ["北京"],
+        "education": "",
+        "recruitment_type": "",
+        "greeting_preference": "",
         "salary_min": 0,
         "salary_max": 0,
         "allow_internship": False,
@@ -78,13 +81,51 @@ DEFAULTS: dict[str, Any] = {
         "cities": [],  # Empty = fallback to profile.target_cities
         "city_codes": {},
         "max_pages": 3,
+        "sort": "default",
     },
     "collection": {
-        "daily_new_jobs_limit": 100,
+        "default_order": ["boss"],
+        "auto_score_default": False,
         "daily_search_page_limit": 30,
         "daily_detail_page_limit": 150,
         "max_consecutive_page_failures": 3,
-        "delivery_cooldown_minutes": 30,
+        "risk_pause_min_minutes": 5,
+        "risk_pause_max_minutes": 10,
+        "collection_delay_multiplier": 1.5,
+        "delivery_cooldown_min_minutes": 5,
+        "delivery_cooldown_max_minutes": 15,
+    },
+    "platforms": {
+        "boss": {
+            "enabled": True,
+            "search": {
+                "keywords": [],
+                "cities": [],
+                "city_codes": {},
+                "max_pages": 3,
+                "sort": "default",
+            },
+        },
+        "zhilian": {
+            "enabled": False,
+            "search": {
+                "keywords": [],
+                "cities": [],
+                "city_codes": {},
+                "max_pages": 3,
+                "sort": "default",
+            },
+        },
+        "51job": {
+            "enabled": False,
+            "search": {
+                "keywords": [],
+                "cities": ["上海"],
+                "city_codes": {"上海": "020000"},
+                "max_pages": 1,
+                "sort": "default",
+            },
+        },
     },
     "scoring": {
         "threshold": 71,
@@ -136,7 +177,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "safety": {
         "daily_platform_page_limit": 500,
-        "risk_lock_minutes": 1440,
+        "risk_lock_minutes": 10,
     },
     "browser": {
         "runtime": "builtin",
@@ -166,10 +207,33 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
 
 
 def _normalize_config_sections(config: dict[str, Any]) -> dict[str, Any]:
-    """Replace malformed top-level sections with their safe defaults."""
+    """Replace malformed sections and discard retired collection-count settings."""
     for section, defaults in DEFAULTS.items():
         if isinstance(defaults, dict) and not isinstance(config.get(section), dict):
             config[section] = _deep_copy_dict(defaults)
+
+    return remove_retired_collection_settings(config)
+
+
+def remove_retired_collection_settings(config: dict[str, Any]) -> dict[str, Any]:
+    """Remove collection-count settings that are no longer supported."""
+
+    # These settings existed briefly, but a result-count limit is not a page-access
+    # safety control. Ignore stale values so old config files cannot re-enable it or
+    # make the removed fields reappear in the Web UI/API.
+    collection = config.get("collection", {})
+    collection.pop("daily_new_jobs_limit", None)
+    collection.pop("default_target_count", None)
+    if "delivery_cooldown_min_minutes" in collection or "delivery_cooldown_max_minutes" in collection:
+        collection.pop("delivery_cooldown_minutes", None)
+    search = config.get("search", {})
+    search.pop("target_count", None)
+    platforms = config.get("platforms", {})
+    for platform_config in platforms.values():
+        if isinstance(platform_config, dict):
+            platform_search = platform_config.get("search", {})
+            if isinstance(platform_search, dict):
+                platform_search.pop("target_count", None)
     return config
 
 

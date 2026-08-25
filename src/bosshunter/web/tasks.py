@@ -43,6 +43,7 @@ class WorkbenchTask:
     stop_reason: str | None = None
     stop_requested: Event = field(default_factory=Event, repr=False)
     metrics: dict[str, int] = field(default_factory=dict)
+    progress: dict[str, Any] = field(default_factory=dict)
     context: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def snapshot(self) -> dict:
@@ -59,6 +60,7 @@ class WorkbenchTask:
             "stop_reason": self.stop_reason,
             "stop_requested": self.stop_requested.is_set(),
             "metrics": dict(self.metrics),
+            "progress": dict(self.progress),
         }
 
 

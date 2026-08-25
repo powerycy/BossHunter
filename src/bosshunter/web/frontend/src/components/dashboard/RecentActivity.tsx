@@ -10,6 +10,7 @@ const ACTION_LABELS: Record<string, string> = {
   scrape: '采集',
   scored: '评分',
   sent: '发送',
+  manual_sent: '手动已发送',
   replied: '回复',
   error: '错误',
   approved: '确认',

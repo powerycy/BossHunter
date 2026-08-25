@@ -111,6 +111,30 @@ def test_export_scopes_use_exact_database_sets(tmp_path):
 	assert _csv_ids(selected_content) == {"range-1", "range-7"}
 
 
+def test_export_supports_51job_source_filter_and_label(tmp_path):
+	db = get_db(tmp_path / "job51-export.db")
+	try:
+		job = _job("51job:sh-1", city="上海")
+		job.update({
+			"source_platform": "51job",
+			"source_job_id": "sh-1",
+			"source_city_code": "020000",
+		})
+		insert_job(db, job)
+		content, _, _ = export_jobs(
+			db,
+			format="csv",
+			scope="filtered",
+			filters={"source_platform": "51job"},
+		)
+	finally:
+		db.close()
+
+	text = content.decode("utf-8-sig")
+	assert "前程无忧" in text
+	assert "020000" in text
+
+
 def test_selected_export_rejects_missing_ids(tmp_path):
 	db = get_db(tmp_path / "missing.db")
 	try:

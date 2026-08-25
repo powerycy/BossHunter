@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import time
 import unicodedata
 from io import BytesIO
 from pathlib import Path
@@ -17,7 +18,19 @@ from pypdf.errors import PdfReadError
 MAX_DOCX_XML_SIZE = 20 * 1024 * 1024
 MAX_PDF_PAGES = 10
 OCR_RENDER_SCALE = 2.0
+MIN_OCR_RENDER_SCALE = 0.75
+MAX_OCR_PAGE_PIXELS = 4_000_000
+MAX_OCR_TOTAL_PIXELS = 20_000_000
+MAX_OCR_SECONDS = 90
 MIN_OCR_TEXT_CHARS = 20
+RAPID_OCR_PARAMS = {
+	"Global.log_level": "warning",
+	"Global.max_side_len": 1600,
+	"EngineConfig.onnxruntime.intra_op_num_threads": 2,
+	"EngineConfig.onnxruntime.inter_op_num_threads": 1,
+	"Cls.cls_batch_num": 4,
+	"Rec.rec_batch_num": 4,
+}
 SUPPORTED_RESUME_EXTENSIONS = {".md", ".docx", ".pdf"}
 _WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _W = f"{{{_WORD_NAMESPACE}}}"
@@ -56,6 +69,10 @@ def prepare_resume_content(filename: str, content: bytes) -> tuple[str, bytes, s
 	safe_name = safe_resume_filename(filename)
 	suffix = Path(safe_name).suffix.lower()
 	if suffix == ".md":
+		try:
+			content.decode("utf-8")
+		except UnicodeDecodeError as exc:
+			raise ResumeUploadError("Markdown 文件必须使用 UTF-8 编码") from exc
 		return safe_name, content, None
 
 	if suffix == ".docx":
@@ -107,6 +124,17 @@ def _load_ocr_runtime():
 	return np, pdfium, RapidOCR
 
 
+def _create_ocr_engine(rapid_ocr_class):
+	"""Create the pinned local engine with an actionable model-install error."""
+	try:
+		return rapid_ocr_class(params=RAPID_OCR_PARAMS)
+	except Exception as exc:
+		raise ResumeUploadError(
+			'本地 OCR 模型加载失败；请联网重新安装完整组件：pip install --force-reinstall "rapidocr==3.9.2"。'
+			"安装完成后可断网识别。"
+		) from exc
+
+
 def _ocr_pdf_to_markdown(content: bytes) -> str:
 	"""Recognize an image-only PDF locally without sending it to a remote service."""
 	np, pdfium, rapid_ocr_class = _load_ocr_runtime()
@@ -115,13 +143,35 @@ def _ocr_pdf_to_markdown(content: bytes) -> str:
 		document = pdfium.PdfDocument(content)
 		if len(document) > MAX_PDF_PAGES:
 			raise ResumeUploadError(f"PDF 页数超过 {MAX_PDF_PAGES} 页限制")
-		engine = rapid_ocr_class()
+		engine = _create_ocr_engine(rapid_ocr_class)
+		started_at = time.monotonic()
+		total_rendered_pixels = 0
 		page_texts: list[str] = []
 		for page_index in range(len(document)):
+			if time.monotonic() - started_at > MAX_OCR_SECONDS:
+				raise ResumeUploadError(f"PDF 本地 OCR 超过 {MAX_OCR_SECONDS} 秒限制，请拆分或压缩后重试")
 			page = document[page_index]
-			bitmap = page.render(scale=OCR_RENDER_SCALE)
-			image = np.asarray(bitmap.to_pil().convert("RGB"))
+			bitmap = None
+			pil_image = None
+			try:
+				width, height = page.get_size()
+				scale = _bounded_ocr_render_scale(float(width), float(height))
+				rendered_pixels = math.ceil(float(width) * scale) * math.ceil(float(height) * scale)
+				total_rendered_pixels += rendered_pixels
+				if total_rendered_pixels > MAX_OCR_TOTAL_PIXELS:
+					raise ResumeUploadError("PDF 页面图像总量过大，请压缩或拆分后重试")
+				bitmap = page.render(scale=scale)
+				pil_image = bitmap.to_pil().convert("RGB")
+				image = np.array(pil_image, copy=True)
+			finally:
+				if pil_image is not None:
+					pil_image.close()
+				if bitmap is not None:
+					bitmap.close()
+				page.close()
 			result = engine(image)
+			if time.monotonic() - started_at > MAX_OCR_SECONDS:
+				raise ResumeUploadError(f"PDF 本地 OCR 超过 {MAX_OCR_SECONDS} 秒限制，请拆分或压缩后重试")
 			page_text = _ocr_result_to_text(result.boxes, result.txts, image.shape[1])
 			if page_text:
 				page_texts.append(page_text)
@@ -137,6 +187,16 @@ def _ocr_pdf_to_markdown(content: bytes) -> str:
 	if len(re.sub(r"\s+", "", text)) < MIN_OCR_TEXT_CHARS:
 		raise ResumeUploadError("未能从 PDF 识别到足够文字，请确认页面清晰或改用 .docx / .md 简历")
 	return f"{text}\n"
+
+
+def _bounded_ocr_render_scale(width: float, height: float) -> float:
+	"""Keep one rendered page within a predictable pixel budget."""
+	if not math.isfinite(width) or not math.isfinite(height) or width <= 0 or height <= 0:
+		raise ResumeUploadError("PDF 页面尺寸无效")
+	required_scale = math.sqrt(MAX_OCR_PAGE_PIXELS / (width * height))
+	if required_scale < MIN_OCR_RENDER_SCALE:
+		raise ResumeUploadError("PDF 页面尺寸过大，请压缩或拆分后重试")
+	return min(OCR_RENDER_SCALE, required_scale)
 
 
 def _ocr_result_to_text(boxes: Any, texts: Any, page_width: float) -> str:
@@ -192,6 +252,8 @@ def _detect_ocr_column_split(items: list[dict[str, float | str]], page_width: fl
 		crossing = len(items) - len(left) - len(right)
 		if len(left) < minimum_side or len(right) < minimum_side or crossing > maximum_crossing:
 			continue
+		if _vertical_span_overlap(left, right) < 0.35:
+			continue
 		gap = min(float(item["left"]) for item in right) - max(float(item["right"]) for item in left)
 		if gap < page_width * 0.04:
 			continue
@@ -199,6 +261,20 @@ def _detect_ocr_column_split(items: list[dict[str, float | str]], page_width: fl
 		if best is None or score > best[0]:
 			best = (score, split)
 	return best[1] if best else None
+
+
+def _vertical_span_overlap(
+	left: list[dict[str, float | str]],
+	right: list[dict[str, float | str]],
+) -> float:
+	"""Return how much the two candidate columns coexist vertically."""
+	left_top = min(float(item["top"]) for item in left)
+	left_bottom = max(float(item["bottom"]) for item in left)
+	right_top = min(float(item["top"]) for item in right)
+	right_bottom = max(float(item["bottom"]) for item in right)
+	overlap = max(0.0, min(left_bottom, right_bottom) - max(left_top, right_top))
+	shorter_span = max(1.0, min(left_bottom - left_top, right_bottom - right_top))
+	return overlap / shorter_span
 
 
 def _format_ocr_column(items: list[dict[str, float | str]]) -> str:

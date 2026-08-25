@@ -64,6 +64,22 @@ class WebConfigApiTests(unittest.TestCase):
 		self.assertEqual(cleaned["ai"]["model"], "new")
 		self.assertNotIn("api_key_masked", cleaned["ai"])
 
+	def test_sanitize_config_discards_retired_collection_count_fields_without_ai_section(self):
+		cleaned = server._sanitize_config_for_write({
+			"search": {"target_count": 9},
+			"collection": {"default_target_count": 8, "daily_new_jobs_limit": 100},
+			"platforms": {
+				"boss": {"search": {"target_count": 7}},
+				"zhilian": {"search": {"target_count": 6}},
+				"51job": {"search": {"target_count": 5}},
+			},
+		})
+
+		self.assertEqual(cleaned["search"], {})
+		self.assertEqual(cleaned["collection"], {})
+		for platform in ("boss", "zhilian", "51job"):
+			self.assertEqual(cleaned["platforms"][platform]["search"], {})
+
 	def test_sanitize_config_preserves_omitted_api_key(self):
 		with tempfile.TemporaryDirectory() as tmp:
 			config_path = Path(tmp) / "config.yaml"

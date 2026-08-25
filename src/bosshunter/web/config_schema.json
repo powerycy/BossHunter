@@ -6,6 +6,9 @@
       "icon": "User",
       "fields": [
         {"key": "resume_path", "label": "简历文件路径", "type": "file", "description": "上传 .md 格式简历"},
+        {"key": "education", "label": "最高学历", "type": "select", "options": ["博士", "硕士", "本科", "大专", "其他"], "default": "", "description": "用于 AI 评分时判断岗位学历要求与个人背景的匹配度"},
+        {"key": "recruitment_type", "label": "求职招聘类型", "type": "select", "options": ["campus", "experienced", "both"], "default": "", "description": "选择校招、社招或两者均可"},
+        {"key": "greeting_preference", "label": "招呼语偏好", "type": "textarea", "default": "", "description": "补充语气和内容偏好；不会覆盖真实简历与安全规则"},
         {"key": "target_cities", "label": "目标城市", "type": "multi-select", "options_from": "cities", "description": "支持多城市"},
         {"key": "salary_min", "label": "最低薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
         {"key": "salary_max", "label": "最高薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
@@ -27,6 +30,25 @@
       ]
     },
     {
+      "key": "collection",
+      "label": "岗位采集队列",
+      "icon": "ListOrdered",
+      "fields": [
+        {"key": "default_order", "label": "默认平台顺序", "type": "multi-select", "options": ["boss", "zhilian", "51job"], "default": ["boss"]},
+        {"key": "auto_score_default", "label": "采集后自动评分", "type": "switch", "default": false}
+      ]
+    },
+    {
+      "key": "platforms",
+      "label": "平台采集设置",
+      "icon": "Layers",
+      "fields": [
+        {"key": "boss", "label": "BOSS 直聘独立设置", "type": "object", "description": "配置页保存 BOSS 的关键词、城市、页数和排序；城市编码由系统管理"},
+        {"key": "zhilian", "label": "智联招聘独立设置", "type": "object", "description": "配置页保存智联的关键词、城市、页数和排序；当前默认只开放采集、评分和招呼语生成"},
+        {"key": "51job", "label": "前程无忧独立设置", "type": "object", "description": "当前开放已验证的北京、上海采集、评分和招呼语生成；验证码或限流会立即停止"}
+      ]
+    },
+    {
       "key": "scoring",
       "label": "评分设置",
       "icon": "Star",
@@ -37,19 +59,22 @@
     },
     {
       "key": "collection",
-      "label": "采集安全设置",
+      "label": "反监测设置",
       "icon": "Shield",
       "fields": [
-        {"key": "daily_new_jobs_limit", "label": "单日新增唯一岗位上限", "type": "number", "min": 1, "max": 500, "default": 100, "description": "重复岗位不计入"},
-        {"key": "daily_search_page_limit", "label": "单日搜索页上限", "type": "number", "min": 1, "max": 200, "default": 30},
-        {"key": "daily_detail_page_limit", "label": "单日详情页尝试上限", "type": "number", "min": 1, "max": 500, "default": 150},
-        {"key": "max_consecutive_page_failures", "label": "连续页面失败停止阈值", "type": "number", "min": 1, "max": 10, "default": 3},
-        {"key": "delivery_cooldown_minutes", "label": "采集后投递冷却（分钟）", "type": "number", "min": 0, "max": 240, "default": 30}
+        {"key": "daily_search_page_limit", "label": "BOSS 单日搜索页上限", "type": "number", "min": 1, "max": 200, "default": 30},
+        {"key": "daily_detail_page_limit", "label": "BOSS 单日详情页尝试上限", "type": "number", "min": 1, "max": 500, "default": 150},
+        {"key": "max_consecutive_page_failures", "label": "BOSS 连续页面失败停止阈值", "type": "number", "min": 1, "max": 10, "default": 3},
+        {"key": "risk_pause_min_minutes", "label": "BOSS 风险暂停最少分钟", "type": "number", "min": 1, "max": 60, "default": 5},
+        {"key": "risk_pause_max_minutes", "label": "BOSS 风险暂停最多分钟", "type": "number", "min": 1, "max": 60, "default": 10},
+        {"key": "collection_delay_multiplier", "label": "BOSS 操作间隔倍率", "type": "number", "min": 1, "max": 5, "step": 0.1, "default": 1.5, "description": "同时作用于 BOSS 采集和监测的页面操作与每轮等待"},
+        {"key": "delivery_cooldown_min_minutes", "label": "BOSS 采集后投递冷却最少（分钟）", "type": "number", "min": 0, "max": 240, "default": 5},
+        {"key": "delivery_cooldown_max_minutes", "label": "BOSS 采集后投递冷却最多（分钟）", "type": "number", "min": 0, "max": 240, "default": 15}
       ]
     },
     {
       "key": "throttle",
-      "label": "反检测设置",
+      "label": "反监测设置",
       "icon": "Shield",
       "fields": [
         {"key": "daily_limit", "label": "每日发送上限", "type": "number", "min": 1, "max": 200, "default": 30},

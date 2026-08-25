@@ -13,7 +13,6 @@ from bosshunter.db import (
     set_platform_safety_lock,
 )
 
-
 class PlatformSafetyStop(RuntimeError):
     """Raised before another platform page is opened when a safety guard stops work."""
 
@@ -27,6 +26,7 @@ class PlatformAccessGuard:
     conn: sqlite3.Connection
     config: dict
     stage: str
+    platform: str = "boss"
 
     def ensure_unlocked(self) -> None:
         lock = get_active_platform_safety_lock(self.conn)
@@ -38,22 +38,27 @@ class PlatformAccessGuard:
         self.ensure_unlocked()
         safety_cfg = self.config.get("safety", {})
         global_limit = _positive_int(safety_cfg.get("daily_platform_page_limit", 500), 500)
-        if count_platform_access_today(self.conn) >= global_limit:
+        if count_platform_access_today(self.conn, platform=self.platform) >= global_limit:
             raise PlatformSafetyStop("daily_platform_page_limit")
         if daily_limit is not None:
             stage_count = count_platform_access_today(
                 self.conn,
+                platform=self.platform,
                 stage=self.stage,
                 action=action,
             )
             if stage_count >= max(int(daily_limit), 1):
                 raise PlatformSafetyStop(f"daily_{action}_limit")
-        add_platform_access(self.conn, self.stage, action)
+        add_platform_access(self.conn, self.stage, action, platform=self.platform)
 
-    def lock(self, reason: str) -> None:
+    def lock(self, reason: str, *, minutes: int | None = None) -> None:
         safety_cfg = self.config.get("safety", {})
-        minutes = _positive_int(safety_cfg.get("risk_lock_minutes", 1440), 1440)
-        set_platform_safety_lock(self.conn, reason, minutes=minutes)
+        lock_minutes = (
+            _positive_int(minutes, 1)
+            if minutes is not None
+            else _positive_int(safety_cfg.get("risk_lock_minutes", 10), 10)
+        )
+        set_platform_safety_lock(self.conn, reason, minutes=lock_minutes)
 
 
 @dataclass
@@ -63,18 +68,19 @@ class TransientPlatformAccessGuard:
     config: dict
     stage: str
     db_factory: Callable[[], sqlite3.Connection]
+    platform: str = "boss"
 
     def ensure_unlocked(self) -> None:
         conn = self.db_factory()
         try:
-            PlatformAccessGuard(conn, self.config, self.stage).ensure_unlocked()
+            PlatformAccessGuard(conn, self.config, self.stage, self.platform).ensure_unlocked()
         finally:
             conn.close()
 
     def reserve(self, action: str, *, daily_limit: int | None = None) -> None:
         conn = self.db_factory()
         try:
-            PlatformAccessGuard(conn, self.config, self.stage).reserve(
+            PlatformAccessGuard(conn, self.config, self.stage, self.platform).reserve(
                 action,
                 daily_limit=daily_limit,
             )

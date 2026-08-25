@@ -17,20 +17,44 @@ from bosshunter.ai.credentials import (
 	get_ai_service,
 )
 from bosshunter.browser.diagnostics import run_browser_diagnostics
+from bosshunter.collection.orchestrator import normalize_collection_options
 
 
 VALID_MODES = {"full", "collect", "rescore", "monitor"}
 
 
-def collect_preflight_checks(mode: str, config: dict) -> list[dict[str, str]]:
+def collect_preflight_checks(mode: str, config: dict, options: dict | None = None) -> list[dict[str, str]]:
 	"""Collect configuration, AI connectivity, and browser readiness checks."""
-	checks = _configuration_checks(mode, config)
+	collection_options = None
+	if mode == "collect":
+		try:
+			collection_options = normalize_collection_options(config, options)
+		except ValueError as exc:
+			collection_options = None
+			checks = [_check("collection_options", "采集参数", "error", str(exc), "请在岗位采集窗口修正平台、关键词、城市或目标数量。", "config")]
+		else:
+			checks = _configuration_checks(mode, config, collection_options)
+	else:
+		checks = _configuration_checks(mode, config, options)
 	if mode not in VALID_MODES:
+		return checks
+	ai_required = mode in {"full", "rescore"} or (
+		mode == "collect" and bool(collection_options and collection_options.get("auto_score"))
+	)
+
+	if not ai_required:
+		# Pure collection must not perform an AI connectivity request. This keeps
+		# ``auto_score=false`` genuinely AI-free even when credentials are saved.
+		checks.append(_check("ai_connection", "AI 接口连接", "pass", "纯采集不需要 AI", "关闭“采集后自动评分”时不会调用 AI。"))
+		try:
+			checks.extend(check_browser_connection(deepcopy(config), collection_options))
+		except Exception:
+			checks.append(_check("browser_runtime", "浏览器连接", "error", "浏览器连接检测失败", "请重新启动 BossHunter 后再试。", "browser"))
 		return checks
 
 	with ThreadPoolExecutor(max_workers=2) as executor:
-		ai_future = executor.submit(check_ai_connection, deepcopy(config), mode in {"full", "collect", "rescore"})
-		browser_future = executor.submit(check_browser_connection, deepcopy(config))
+		ai_future = executor.submit(check_ai_connection, deepcopy(config), True)
+		browser_future = executor.submit(check_browser_connection, deepcopy(config), collection_options)
 		for future, fallback in (
 			(ai_future, _check("ai_connection", "AI 接口连接", "error", "AI 接口检测失败", "请检查 AI 设置后重试。", "config")),
 			(
@@ -49,6 +73,30 @@ def collect_preflight_checks(mode: str, config: dict) -> list[dict[str, str]]:
 				checks.extend(future.result())
 			except Exception:
 				checks.append(fallback)
+	if mode == "full":
+		try:
+			full_options = normalize_collection_options(config, options)
+		except ValueError as exc:
+			checks.append(
+				_check(
+					"full_flow_platform",
+					"全流程采集设置",
+					"error",
+					str(exc),
+					"请在全流程采集设置中选择平台并填写关键词、城市和目标数量。",
+					"config",
+				)
+			)
+		else:
+			checks.append(
+				_check(
+					"full_flow_platform",
+					"全流程平台能力",
+					"pass",
+					"已选择的平台均接入全流程",
+					f"执行顺序：{' → '.join(full_options.get('platform_order', []))}；只有支持投递的平台可进入全流程。",
+				)
+			)
 	return checks
 
 
@@ -196,7 +244,7 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 	]
 
 
-def check_browser_connection(config: dict) -> list[dict[str, str]]:
+def check_browser_connection(config: dict, collection_options: dict | None = None) -> list[dict[str, str]]:
 	"""Translate Browser Runtime diagnostics into actionable checks."""
 	result = run_browser_diagnostics(config)
 	checks: list[dict[str, str]] = []
@@ -278,41 +326,57 @@ def check_browser_connection(config: dict) -> list[dict[str, str]]:
 			)
 
 	if result.get("chrome"):
-		boss_tab = result.get("boss_tab")
-		if boss_tab:
-			url = str(boss_tab.get("url") or "")
-			if any(marker in url.lower() for marker in ("/login", "/user/", "signin")):
-				checks.append(
-					_check(
-						"boss_login",
-						"BOSS 直聘登录",
-						"warning",
-						"BOSS 直聘可能尚未登录",
-						"请在已连接的 Google Chrome 中完成登录，再开始任务。",
-						"browser",
+		selected_platforms = set(collection_options.get("platform_order", [])) if collection_options else {"boss"}
+		if "boss" in selected_platforms:
+			boss_tab = result.get("boss_tab")
+			if boss_tab:
+				url = str(boss_tab.get("url") or "")
+				if any(marker in url.lower() for marker in ("/login", "/user/", "signin")):
+					checks.append(
+						_check(
+							"boss_login",
+							"BOSS 直聘登录",
+							"warning",
+							"BOSS 直聘可能尚未登录",
+							"请在已连接的 Google Chrome 中完成登录，再开始任务。",
+							"browser",
+						)
 					)
-				)
+				else:
+					checks.append(
+						_check(
+							"boss_tab",
+							"BOSS 直聘页面",
+							"pass",
+							"已发现 BOSS 直聘页面",
+							"请确认该页面已登录招聘平台账号。",
+						)
+					)
 			else:
 				checks.append(
 					_check(
 						"boss_tab",
 						"BOSS 直聘页面",
-						"pass",
-						"已发现 BOSS 直聘页面",
-						"请确认该页面已登录招聘平台账号。",
+						"warning",
+						"未发现已打开的 BOSS 直聘页面",
+						"请在已连接的 Google Chrome 中打开 www.zhipin.com 并确认已经登录。",
+						"browser",
 					)
 				)
-		else:
-			checks.append(
-				_check(
-					"boss_tab",
-					"BOSS 直聘页面",
-					"warning",
-					"未发现已打开的 BOSS 直聘页面",
-					"请在已连接的 Google Chrome 中打开 www.zhipin.com 并确认已经登录。",
-					"browser",
-				)
-			)
+		if "zhilian" in selected_platforms:
+			zhilian_tab = result.get("zhilian_tab")
+			page_state = result.get("zhilian_page") or {}
+			state = str(page_state.get("status") or "unknown") if zhilian_tab else "missing"
+			if state == "ready":
+				checks.append(_check("zhilian_tab", "智联招聘页面", "pass", "智联搜索页可用，未发现登录墙", "采集不会点击投递或申请按钮。"))
+			elif state == "login_required":
+				checks.append(_check("zhilian_login", "智联招聘登录", "error", "智联页面要求登录", "请在已连接的 Google Chrome 中完成智联登录后重新检查。", "browser"))
+			elif state == "blocked":
+				checks.append(_check("zhilian_blocked", "智联页面状态", "error", "智联页面受到拦截", str(page_state.get("message") or "请人工处理验证码、频率限制或账号异常。"), "browser"))
+			elif state == "missing":
+				checks.append(_check("zhilian_tab", "智联招聘页面", "error", "未发现已打开的智联招聘页面", "请在已连接的 Google Chrome 中打开已登录的智联职位页后重新检查。", "browser"))
+			else:
+				checks.append(_check("zhilian_page", "智联页面结构", "error", "未识别到智联搜索页", str(page_state.get("message") or "请打开智联职位搜索页后重新检查。"), "browser"))
 	return checks
 
 
@@ -325,7 +389,7 @@ def error_messages(checks: list[dict[str, str]]) -> list[str]:
 	]
 
 
-def _configuration_checks(mode: str, config: dict) -> list[dict[str, str]]:
+def _configuration_checks(mode: str, config: dict, options: dict | None = None) -> list[dict[str, str]]:
 	checks: list[dict[str, str]] = []
 	if mode not in VALID_MODES:
 		checks.append(
@@ -339,23 +403,33 @@ def _configuration_checks(mode: str, config: dict) -> list[dict[str, str]]:
 		)
 		return checks
 
-	resume_path = config.get("profile", {}).get("resume_path", "")
-	if not resume_path or not Path(str(resume_path)).exists():
-		checks.append(
-			_check(
-				"resume",
-				"简历文件",
-				"error",
-				"尚未配置有效简历",
-				"打开“配置 → 个人信息”，上传 .md 或 .docx 简历。",
-				"config",
+	ai_required = mode in {"full", "rescore"} or (mode == "collect" and bool(options and options.get("auto_score")))
+	if ai_required:
+		resume_path = config.get("profile", {}).get("resume_path", "")
+		if not resume_path or not Path(str(resume_path)).exists():
+			checks.append(
+				_check(
+					"resume",
+					"简历文件",
+					"error",
+					"尚未配置有效简历",
+					"打开“配置 → 个人信息”，上传 .md、.docx 或 .pdf 简历。",
+					"config",
+				)
 			)
-		)
-	else:
-		checks.append(_check("resume", "简历文件", "pass", "简历文件已就绪", Path(str(resume_path)).name))
+		else:
+			checks.append(_check("resume", "简历文件", "pass", "简历文件已就绪", Path(str(resume_path)).name))
 
 	if mode in {"full", "collect"}:
-		keywords = config.get("search", {}).get("keywords") or []
+		if options:
+			platforms = options.get("platforms", {})
+			keywords = [
+				f"{platform}：{', '.join(value.get('keywords', []))}"
+				for platform, value in platforms.items()
+				if isinstance(value, dict) and value.get("keywords")
+			]
+		else:
+			keywords = config.get("search", {}).get("keywords") or []
 		if not keywords:
 			checks.append(
 				_check(

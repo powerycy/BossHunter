@@ -468,6 +468,47 @@ class ScorerTokenResilienceTests(unittest.TestCase):
 
 
 class GreeterTokenResilienceTests(unittest.TestCase):
+    def test_style_guard_flags_template_language_and_technical_stacking(self):
+        greeting = (
+            "看到这个岗位挺有共鸣，我一直在做Agent、RAG、Prompt和MCP项目，"
+            "可以完成从0到1的完整闭环，期待进一步沟通。"
+        )
+
+        issues = greeter._greeting_style_issues(greeting)
+
+        self.assertTrue(any("模板化开头" in issue for issue in issues))
+        self.assertTrue(any("求职套话" in issue for issue in issues))
+        self.assertTrue(any("技术名词" in issue for issue in issues))
+
+    def test_style_guard_flags_an_opening_already_used_in_the_batch(self):
+        greeting = "复杂流程里最关键的是先把异常边界定义清楚，我有相关需求梳理经验，可以交流下具体场景。"
+
+        issues = greeter._greeting_style_issues(
+            greeting,
+            [greeter._opening_signature(greeting)],
+        )
+
+        self.assertIn("本批次已使用相同开头，请换一种自然切入方式", issues)
+
+    def test_portfolio_is_only_added_when_the_job_explicitly_requests_it(self):
+        config = {
+            "profile": {
+                "portfolio_url": "https://portfolio.example",
+                "extra_highlights": ["有用户研究经验"],
+            }
+        }
+        ordinary_job = _job("ordinary")
+        design_job = {**_job("design"), "jd": "请提供交互设计案例和原型作品集。"}
+
+        with patch("bosshunter.ai.greeter._call_claude", return_value="生成结果") as call_ai:
+            greeter._generate_greeting_once(ordinary_job, "匿名简历摘要", config)
+            ordinary_prompt = call_ai.call_args.args[0]
+            greeter._generate_greeting_once(design_job, "匿名简历摘要", config)
+            design_prompt = call_ai.call_args.args[0]
+
+        self.assertNotIn("https://portfolio.example", ordinary_prompt)
+        self.assertIn("https://portfolio.example", design_prompt)
+
     def test_greeting_json_wrapper_is_normalized(self):
         response = '```json\n{"greeting":"您好，我的产品经验与岗位需求比较匹配。"}\n```'
 
@@ -520,6 +561,37 @@ class GreeterTokenResilienceTests(unittest.TestCase):
         )
         update_status.assert_called_once_with(db, "review-format", "ready")
         self.assertTrue(any("质量检查返回格式无法识别" in message for message in logs))
+
+    def test_style_guard_rewrites_even_when_model_review_is_malformed(self):
+        db = MagicMock()
+        jobs = [_job("style-rewrite")]
+
+        with (
+            patch("bosshunter.ai.greeter.get_db", return_value=db),
+            patch("bosshunter.ai.greeter.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.greeter._get_resume_summary", return_value="匿名简历摘要"),
+            patch(
+                "bosshunter.ai.greeter._call_claude",
+                side_effect=[
+                    "看到这个岗位挺有共鸣，我一直在做相关项目，期待进一步沟通。",
+                    "评分很好，但没有按 JSON 返回。",
+                    "复杂流程先理清异常边界更重要，我有相关需求梳理经验，可以交流下具体场景。",
+                ],
+            ) as call_ai,
+            patch("bosshunter.ai.greeter.update_job_greeting") as update_greeting,
+            patch("bosshunter.ai.greeter.update_job_status"),
+        ):
+            count = greeter.generate_greetings(
+                {"ai": {"greeting_max_iterations": 1}}
+            )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(call_ai.call_count, 3)
+        update_greeting.assert_called_once_with(
+            db,
+            "style-rewrite",
+            "复杂流程先理清异常边界更重要，我有相关需求梳理经验，可以交流下具体场景。",
+        )
 
     def test_empty_greeting_retries_before_leaving_job_pending(self):
         db = MagicMock()

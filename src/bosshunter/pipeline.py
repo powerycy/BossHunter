@@ -64,12 +64,16 @@ def run_pipeline(config: dict) -> None:
 
     # Step 6: Auto-start monitor loop
     console.print("\n[bold]Step 6/6: 启动持续监测[/bold]")
-    interval_min = config.get("monitor", {}).get("interval", 30)
+    from bosshunter.executor.monitor import (
+        get_effective_monitor_interval_minutes,
+        monitor_and_send_resumes,
+    )
+
+    interval_min = get_effective_monitor_interval_minutes(config)
     interval_sec = interval_min * 60
-    console.print(f"[dim]每 {interval_min} 分钟检查一次HR回复和跟进，按 Ctrl+C 停止[/dim]\n")
+    console.print(f"[dim]每 {interval_min:g} 分钟检查一次HR回复和跟进，按 Ctrl+C 停止[/dim]\n")
 
     import time
-    from bosshunter.executor.monitor import monitor_and_send_resumes
 
     try:
         raw_cooldown = config.get("monitor", {}).get("initial_cooldown_minutes", 10)
@@ -99,7 +103,7 @@ def run_pipeline(config: dict) -> None:
                     break
             except Exception as e:
                 console.print(f"[red]  监测出错: {e}[/red]")
-            console.print(f"[dim]  下次检查: {interval_min} 分钟后...[/dim]\n")
+            console.print(f"[dim]  下次检查: {interval_min:g} 分钟后...[/dim]\n")
             time.sleep(interval_sec)
     except KeyboardInterrupt:
         console.print("\n[yellow]已停止监测[/yellow]")

@@ -206,6 +206,7 @@ def _build_history_panel(history: list[dict]) -> Panel:
     """Build recent activity panel."""
     ACTION_LABELS = {
         "sent": "[green]发送[/green]",
+        "manual_sent": "[green]手动已发送[/green]",
         "approved": "[blue]确认[/blue]",
         "error": "[red]失败[/red]",
         "skipped": "[dim]跳过[/dim]",

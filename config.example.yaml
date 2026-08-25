@@ -3,6 +3,10 @@
 
 profile:
   resume_path: "./resume.md"
+  # 用于校招/社招岗位筛选与 AI 评分；留空保持旧行为。
+  education: ""
+  recruitment_type: ""  # campus / experienced / both
+  greeting_preference: ""  # 只补充招呼语语气与内容偏好，不覆盖事实和安全规则
   resume_output_dir: "./data/resumes"
   target_roles: ["你的目标岗位1", "目标岗位2", "目标岗位3"]
   target_cities: ["北京"]
@@ -26,11 +30,45 @@ search:
   sort: newest
 
 collection:
-  daily_new_jobs_limit: 100       # 单日新增唯一岗位上限；重复岗位不计入
-  daily_search_page_limit: 30
-  daily_detail_page_limit: 150
+  default_order: [boss]
+  auto_score_default: false
+  # 以下页面额度只统计 BOSS 直聘；智联和 51job 不占用。
+  daily_search_page_limit: 30     # BOSS 单日搜索页上限
+  daily_detail_page_limit: 150    # BOSS 单日详情页尝试上限
   max_consecutive_page_failures: 3
-  delivery_cooldown_minutes: 30   # 全流程采集结束到投递的最短冷却
+  risk_pause_min_minutes: 5       # BOSS 风险信号后随机暂停下限
+  risk_pause_max_minutes: 10      # BOSS 风险信号后随机暂停上限
+  collection_delay_multiplier: 1.5 # BOSS 采集等待时间倍数
+  delivery_cooldown_min_minutes: 5   # BOSS 采集结束到 BOSS 投递的随机冷却下限
+  delivery_cooldown_max_minutes: 15  # BOSS 采集结束到 BOSS 投递的随机冷却上限
+
+platforms:
+  boss:
+    enabled: true
+    search:
+      keywords: ["关键词1", "关键词2"]
+      cities: ["北京"]
+      city_codes: {}
+      max_pages: 5
+      sort: newest
+  zhilian:
+    enabled: false
+    search:
+      keywords: []
+      cities: []
+      # 只需填写城市名称；BossHunter 会从内置智联目录自动匹配城市编码。
+      city_codes: {}
+      max_pages: 3
+      sort: default
+  51job:
+    enabled: false
+    # 51job 目前只开放采集/评分/招呼语生成，真实发送和监听仍锁定。
+    search:
+      keywords: []
+      cities: ["上海"]
+      city_codes: {"上海": "020000"}
+      max_pages: 1
+      sort: default
 
 scoring:
   threshold: 70
@@ -92,8 +130,8 @@ dedup:
   history_file: "./data/history.jsonl"
 
 safety:
-  daily_platform_page_limit: 500  # 采集、投递和监测合计的页面打开硬上限
-  risk_lock_minutes: 1440         # 风险信号触发后跨重启保持冷却
+  daily_platform_page_limit: 500  # 仅 BOSS：采集、投递和监测合计的页面打开硬上限
+  risk_lock_minutes: 10           # 旧版 24 小时锁已取消；投递/监测风险最多短时冷却
 
 browser:
   runtime: "builtin"

@@ -81,8 +81,7 @@ class ScraperBackgroundTests(unittest.TestCase):
         }
 
         with patch("bosshunter.scraper.jobs.get_db", return_value=db), \
-             patch("bosshunter.scraper.jobs.count_jobs_created_today", return_value=0), \
-             patch("bosshunter.scraper.jobs.PlatformAccessGuard") as guard_cls, \
+             patch("bosshunter.collection.platforms.boss.PlatformAccessGuard") as guard_cls, \
              patch("bosshunter.scraper.jobs.Progress", return_value=progress_context), \
              patch("bosshunter.scraper.jobs.PageThrottle") as throttle_cls, \
              patch("bosshunter.scraper.jobs.new_tab", return_value="worker-target"), \
@@ -105,10 +104,11 @@ class ScraperBackgroundTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(len(collected_job_ids), 1)
         self.assertEqual(updates[-1], {
-            "seen": 2, "new": 1, "duplicate": 1, "filtered": 0, "search_pages": 1,
+            "seen": 2, "new": 1, "duplicate": 1, "filtered": 0,
+            "parse_failed": 0, "save_failed": 0, "search_pages": 1,
         })
 
-    def test_search_and_detail_pages_reuse_one_visible_worker_tab(self):
+    def test_search_and_detail_pages_reuse_one_background_worker_tab(self):
         db = Mock()
         progress = Mock()
         progress.add_task.return_value = "task-1"
@@ -137,8 +137,7 @@ class ScraperBackgroundTests(unittest.TestCase):
         }
 
         with patch("bosshunter.scraper.jobs.get_db", return_value=db), \
-             patch("bosshunter.scraper.jobs.count_jobs_created_today", return_value=0), \
-             patch("bosshunter.scraper.jobs.PlatformAccessGuard") as guard_cls, \
+             patch("bosshunter.collection.platforms.boss.PlatformAccessGuard") as guard_cls, \
              patch("bosshunter.scraper.jobs.Progress", return_value=progress_context), \
              patch("bosshunter.scraper.jobs.PageThrottle") as throttle_cls, \
              patch(
@@ -167,8 +166,9 @@ class ScraperBackgroundTests(unittest.TestCase):
         self.assertEqual(count, 1)
         new_tab.assert_called_once_with(
             "https://www.zhipin.com/web/geek/job?query=AI&city=101010100",
-            background=False,
+            background=True,
         )
+        throttle_cls.assert_called_once_with(delay_min=3.0, delay_max=7.5)
         navigate.assert_called_once_with(
             "worker-target",
             "https://www.zhipin.com/job_detail/background-job.html",

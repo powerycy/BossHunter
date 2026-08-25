@@ -255,10 +255,13 @@ def resume(ctx: click.Context, job_id: str | None) -> None:
 @click.pass_context
 def monitor(ctx: click.Context, once: bool, interval: int | None) -> None:
     """监控HR回复，自动回复或发送简历"""
-    from bosshunter.executor.monitor import monitor_and_send_resumes
+    from bosshunter.executor.monitor import (
+        get_effective_monitor_interval_minutes,
+        monitor_and_send_resumes,
+    )
 
     config = ctx.obj["config"]
-    interval_min = interval or config.get("monitor", {}).get("interval", 30)
+    interval_min = get_effective_monitor_interval_minutes(config, interval)
     interval_sec = interval_min * 60
 
     if once:
@@ -278,7 +281,7 @@ def monitor(ctx: click.Context, once: bool, interval: int | None) -> None:
         if summary.get("stop_reason"):
             console.print("[red]检测到平台风险信号，本次监测已安全停止[/red]")
     else:
-        console.print(f"[bold cyan]═══ 持续监听模式 (间隔 {interval_min} 分钟) ═══[/bold cyan]\n")
+        console.print(f"[bold cyan]═══ 持续监听模式 (间隔 {interval_min:g} 分钟) ═══[/bold cyan]\n")
         console.print("[dim]按 Ctrl+C 停止[/dim]\n")
         try:
             while True:
@@ -290,7 +293,7 @@ def monitor(ctx: click.Context, once: bool, interval: int | None) -> None:
                 except Exception as e:
                     console.print(f"[red]本轮监听出错: {e}[/red]")
                     console.print("[dim]将在下一轮重试...[/dim]")
-                console.print(f"\n[dim]等待 {interval_min} 分钟后再次检查...[/dim]\n")
+                console.print(f"\n[dim]等待 {interval_min:g} 分钟后再次检查...[/dim]\n")
                 import time
                 time.sleep(interval_sec)
         except KeyboardInterrupt:

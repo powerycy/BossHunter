@@ -11,8 +11,9 @@ DB_PATH = Path("./data/bosshunter.db")
 MAX_JOB_IDS = 1000
 DELETION_PROTECTED_STATUSES = {"sent", "replied", "resume_sent", "needs_resume", "follow_up_sent"}
 DELETION_PROTECTED_HISTORY_ACTIONS = {
-    "sent", "replied", "resume_sent", "needs_resume", "follow_up_sent", "reply_pending", "auto_replied",
+    "sent", "manual_sent", "replied", "resume_sent", "needs_resume", "follow_up_sent", "reply_pending", "auto_replied",
 }
+EXTERNAL_MANUAL_SEND_PLATFORMS = {"zhilian", "51job"}
 
 
 class JobDeletionConfirmationError(ValueError):
@@ -21,6 +22,15 @@ class JobDeletionConfirmationError(ValueError):
 
 class JobDeletionConflictError(ValueError):
     code = "deletion_conflict"
+
+    def __init__(self, message: str, *, blocked: list[dict[str, Any]] | None = None, not_found: list[str] | None = None):
+        super().__init__(message)
+        self.blocked = blocked or []
+        self.not_found = not_found or []
+
+
+class JobManualSentConflictError(ValueError):
+    code = "manual_sent_conflict"
 
     def __init__(self, message: str, *, blocked: list[dict[str, Any]] | None = None, not_found: list[str] | None = None):
         super().__init__(message)
@@ -49,6 +59,8 @@ def _init_tables(conn: sqlite3.Connection) -> None:
             salary TEXT,
             city TEXT,
             experience TEXT,
+            education TEXT,
+            recruitment_type TEXT DEFAULT 'unknown',
             jd TEXT,
             hr_name TEXT,
             hr_title TEXT,
@@ -82,6 +94,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
 
         CREATE TABLE IF NOT EXISTS platform_access_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'boss',
             stage TEXT NOT NULL,
             action TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -104,13 +117,41 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
     _migrate_v1_1(conn)
     _migrate_v1_2(conn)
+    _migrate_v1_3(conn)
+    _migrate_v1_4(conn)
+    _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
+    _init_collection_runs(conn)
 
 
 def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
     """Check if a job already exists in the database."""
     row = conn.execute("SELECT 1 FROM jobs WHERE id = ?", (job_id,)).fetchone()
     return row is not None
+
+
+def job_identity_exists(
+    conn: sqlite3.Connection,
+    source_platform: str,
+    source_job_id: str,
+    *,
+    legacy_job_id: str | None = None,
+) -> bool:
+    """Check a platform identity while retaining old BOSS id compatibility."""
+    source_platform = str(source_platform or "boss").strip() or "boss"
+    source_job_id = str(source_job_id or "").strip()
+    if not source_job_id:
+        return bool(legacy_job_id and job_exists(conn, str(legacy_job_id)))
+    row = conn.execute(
+        "SELECT 1 FROM jobs WHERE source_platform = ? AND source_job_id = ? LIMIT 1",
+        (source_platform, source_job_id),
+    ).fetchone()
+    if row is not None:
+        return True
+    if source_platform == "boss":
+        fallback_id = str(legacy_job_id or source_job_id)
+        return job_exists(conn, fallback_id)
+    return False
 
 
 def _normalize_job_ids(job_ids: Any, *, required: bool = False) -> list[str]:
@@ -272,6 +313,59 @@ def restore_jobs(conn: sqlite3.Connection, job_ids: Any, *, confirmed: bool = Fa
     }
 
 
+def mark_external_jobs_sent(conn: sqlite3.Connection, job_ids: Any, *, confirmed: bool = False) -> dict[str, Any]:
+    """Record user-confirmed sends for collection-only platforms without automating them."""
+    if confirmed is not True:
+        raise JobDeletionConfirmationError("标记已发送需要 confirmed=true")
+    ids = _normalize_job_ids(job_ids, required=True)
+    rows = _job_rows_by_ids(conn, ids)
+    found_ids = {str(row["id"]) for row in rows}
+    not_found = [job_id for job_id in ids if job_id not in found_ids]
+    if not_found:
+        raise JobManualSentConflictError("存在不存在的岗位，未执行标记", not_found=not_found)
+
+    completed_statuses = {"sent", "replied", "resume_sent", "needs_resume", "follow_up_sent"}
+    already_sent: list[str] = []
+    blocked: list[dict[str, Any]] = []
+    pending_rows: list[dict[str, Any]] = []
+    for row in rows:
+        job_id = str(row["id"])
+        reasons: list[str] = []
+        platform = str(row.get("source_platform") or "boss")
+        if row.get("deleted_at") is not None:
+            reasons.append("岗位已进入回收站")
+        if platform not in EXTERNAL_MANUAL_SEND_PLATFORMS:
+            reasons.append("仅智联招聘和前程无忧支持手动标记已发送")
+        if reasons:
+            blocked.append({"job_id": job_id, "reasons": reasons})
+        elif str(row.get("status") or "") in completed_statuses:
+            already_sent.append(job_id)
+        else:
+            pending_rows.append(row)
+    if blocked:
+        raise JobManualSentConflictError("存在不允许手动标记的岗位，批量操作已整体拒绝", blocked=blocked)
+
+    platform_labels = {"zhilian": "智联招聘", "51job": "前程无忧"}
+    with conn:
+        for row in pending_rows:
+            job_id = str(row["id"])
+            platform = str(row.get("source_platform") or "")
+            detail = f"用户在{platform_labels[platform]}完成投递后手动标记"
+            conn.execute(
+                "UPDATE jobs SET status = 'sent', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
+                (job_id,),
+            )
+            conn.execute(
+                "INSERT INTO history (job_id, action, detail) VALUES (?, 'manual_sent', ?)",
+                (job_id, detail),
+            )
+    return {
+        "requested_count": len(ids),
+        "affected_count": len(pending_rows),
+        "already_sent": already_sent,
+    }
+
+
 def permanent_delete_jobs(
     conn: sqlite3.Connection,
     job_ids: Any,
@@ -315,15 +409,54 @@ def permanent_delete_jobs(
     return {"requested_count": len(ids), "affected_count": len(ids)}
 
 
-def insert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
-    """Insert a new job record."""
-    conn.execute("""
-        INSERT OR IGNORE INTO jobs (id, title, company, salary, city, experience, jd,
-            hr_name, hr_title, hr_active, company_size, company_industry, url)
-        VALUES (:id, :title, :company, :salary, :city, :experience, :jd,
-            :hr_name, :hr_title, :hr_active, :company_size, :company_industry, :url)
-    """, job)
+def insert_job_if_new(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
+    """Insert a job atomically and return True only when a row was inserted."""
+    values = {
+        "id": str(job.get("id") or ""),
+        "title": str(job.get("title") or ""),
+        "company": str(job.get("company") or ""),
+        "salary": job.get("salary", ""),
+        "city": job.get("city", ""),
+        "experience": job.get("experience", ""),
+        "education": job.get("education", ""),
+        "recruitment_type": (
+            job.get("recruitment_type")
+            if job.get("recruitment_type") in {"campus", "experienced"}
+            else "unknown"
+        ),
+        "jd": job.get("jd", ""),
+        "hr_name": job.get("hr_name", ""),
+        "hr_title": job.get("hr_title", ""),
+        "hr_active": job.get("hr_active", ""),
+        "company_size": job.get("company_size", ""),
+        "company_industry": job.get("company_industry", ""),
+        "url": job.get("url", ""),
+        "source_platform": str(job.get("source_platform") or "boss"),
+        "source_job_id": str(job.get("source_job_id") or "") or None,
+        "source_keyword": job.get("source_keyword", ""),
+        "source_city_code": job.get("source_city_code", ""),
+    }
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO jobs (
+            id, title, company, salary, city, experience, education, recruitment_type, jd,
+            hr_name, hr_title, hr_active, company_size, company_industry, url,
+            source_platform, source_job_id, source_keyword, source_city_code
+        ) VALUES (
+            :id, :title, :company, :salary, :city, :experience, :education, :recruitment_type, :jd,
+            :hr_name, :hr_title, :hr_active, :company_size, :company_industry, :url,
+            :source_platform, :source_job_id, :source_keyword, :source_city_code
+        )
+        """,
+        values,
+    )
     conn.commit()
+    return cursor.rowcount == 1
+
+
+def insert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
+    """Backward-compatible insert entry point; returns whether it was new."""
+    return insert_job_if_new(conn, job)
 
 
 def update_job_score(conn: sqlite3.Connection, job_id: str, score: int, reason: str) -> None:
@@ -446,6 +579,74 @@ def _migrate_v1_2(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_v1_3(conn: sqlite3.Connection) -> None:
+    """Add source identity columns without rewriting existing BOSS ids."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    additions = {
+        "source_platform": "TEXT NOT NULL DEFAULT 'boss'",
+        "source_job_id": "TEXT NULL",
+        "source_keyword": "TEXT NULL",
+        "source_city_code": "TEXT NULL",
+    }
+    for name, definition in additions.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_source_identity
+        ON jobs(source_platform, source_job_id)
+        WHERE source_job_id IS NOT NULL AND TRIM(source_job_id) <> ''
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_source_platform ON jobs(source_platform)")
+    conn.commit()
+
+
+def _migrate_v1_4(conn: sqlite3.Connection) -> None:
+    """Add education and recruitment-type fields without aggressive inference."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "education" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN education TEXT")
+    if "recruitment_type" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN recruitment_type TEXT DEFAULT 'unknown'")
+    searchable = "COALESCE(title, '') || ' ' || COALESCE(jd, '') || ' ' || COALESCE(experience, '')"
+    conn.execute(f"""
+        UPDATE jobs SET education = CASE
+            WHEN {searchable} LIKE '%博士%' THEN '博士'
+            WHEN {searchable} LIKE '%硕士%' THEN '硕士'
+            WHEN {searchable} LIKE '%本科%' THEN '本科'
+            WHEN {searchable} LIKE '%大专%' OR {searchable} LIKE '%专科%' THEN '大专'
+            WHEN {searchable} LIKE '%学历不限%' OR {searchable} LIKE '%不限学历%' THEN '不限'
+            ELSE education
+        END
+        WHERE education IS NULL OR TRIM(education) = ''
+    """)
+    conn.execute(f"""
+        UPDATE jobs SET recruitment_type = CASE
+            WHEN {searchable} LIKE '%校招%' OR {searchable} LIKE '%校园招聘%'
+              OR {searchable} LIKE '%应届%' OR {searchable} LIKE '%毕业生%'
+              OR {searchable} LIKE '%管培生%' OR {searchable} LIKE '%实习生%' THEN 'campus'
+            WHEN {searchable} LIKE '%社招%' OR {searchable} LIKE '%社会招聘%' THEN 'experienced'
+            ELSE 'unknown'
+        END
+        WHERE recruitment_type IS NULL OR TRIM(recruitment_type) = '' OR recruitment_type = 'unknown'
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_recruitment_type ON jobs(recruitment_type)")
+    conn.commit()
+
+
+def _migrate_platform_access_events(conn: sqlite3.Connection) -> None:
+    """Scope PR #66 access counters to a platform without losing old BOSS events."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(platform_access_events)").fetchall()}
+    if "platform" not in cols:
+        conn.execute("ALTER TABLE platform_access_events ADD COLUMN platform TEXT NOT NULL DEFAULT 'boss'")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_platform_access_platform_stage_action "
+        "ON platform_access_events(platform, stage, action, created_at)"
+    )
+    conn.commit()
+
+
 def _init_scoring_runs(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -463,6 +664,29 @@ def _init_scoring_runs(conn: sqlite3.Connection) -> None:
             finished_at TIMESTAMP NULL
         );
         CREATE INDEX IF NOT EXISTS idx_scoring_runs_status ON scoring_runs(status);
+        """
+    )
+    conn.commit()
+
+
+def _init_collection_runs(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS collection_runs (
+            id TEXT PRIMARY KEY,
+            task_id TEXT,
+            status TEXT NOT NULL,
+            options_json TEXT NOT NULL,
+            platform_states_json TEXT NOT NULL,
+            collected_job_ids_json TEXT NOT NULL,
+            current_platform TEXT,
+            stop_reason TEXT,
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            finished_at TIMESTAMP NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_collection_runs_status ON collection_runs(status);
         """
     )
     conn.commit()
@@ -503,26 +727,19 @@ def add_risk_event(conn: sqlite3.Connection, event_type: str, detail: str = "") 
     conn.commit()
 
 
-def count_jobs_created_today(conn: sqlite3.Connection) -> int:
-    """Count unique jobs stored during the current local calendar day."""
-    row = conn.execute(
-        """
-        SELECT COUNT(*) AS cnt FROM jobs
-        WHERE datetime(created_at, 'localtime') >= datetime('now', 'localtime', 'start of day')
-        """
-    ).fetchone()
-    return int(row["cnt"] if row else 0)
-
-
 def count_platform_access_today(
     conn: sqlite3.Connection,
     *,
+    platform: str = "boss",
     stage: str | None = None,
     action: str | None = None,
 ) -> int:
     """Count recorded platform page opens during the current local day."""
-    clauses = ["datetime(created_at, 'localtime') >= datetime('now', 'localtime', 'start of day')"]
-    params: list[str] = []
+    clauses = [
+        "datetime(created_at, 'localtime') >= datetime('now', 'localtime', 'start of day')",
+        "platform = ?",
+    ]
+    params: list[str] = [str(platform or "boss")]
     if stage:
         clauses.append("stage = ?")
         params.append(stage)
@@ -536,11 +753,17 @@ def count_platform_access_today(
     return int(row["cnt"] if row else 0)
 
 
-def add_platform_access(conn: sqlite3.Connection, stage: str, action: str) -> None:
+def add_platform_access(
+    conn: sqlite3.Connection,
+    stage: str,
+    action: str,
+    *,
+    platform: str = "boss",
+) -> None:
     """Record one platform page-open attempt without URLs or account data."""
     conn.execute(
-        "INSERT INTO platform_access_events (stage, action) VALUES (?, ?)",
-        (stage, action),
+        "INSERT INTO platform_access_events (platform, stage, action) VALUES (?, ?, ?)",
+        (str(platform or "boss"), stage, action),
     )
     conn.commit()
 
@@ -549,7 +772,7 @@ def set_platform_safety_lock(
     conn: sqlite3.Connection,
     reason: str,
     *,
-    minutes: int = 1440,
+    minutes: int = 10,
 ) -> None:
     """Persist a temporary account-safety lock across task and process restarts."""
     locked_until = datetime.now(timezone.utc) + timedelta(minutes=max(int(minutes), 1))

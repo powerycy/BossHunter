@@ -57,10 +57,10 @@ class VersionMetadataTests(unittest.TestCase):
             / "Sidebar.tsx"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('version = "2.3.0"', pyproject)
-        self.assertEqual(bosshunter.__version__, "2.3.0")
-        self.assertEqual(json.loads(health())["version"], "2.3.0")
-        self.assertIn("v2.3 · 本地控制台", sidebar_source)
+        self.assertIn('version = "2.3.1"', pyproject)
+        self.assertEqual(bosshunter.__version__, "2.3.1")
+        self.assertEqual(json.loads(health())["version"], "2.3.1")
+        self.assertIn("v2.3.1 · 本地控制台", sidebar_source)
         self.assertNotIn("v1.1.0", sidebar_source)
 
 
@@ -717,6 +717,47 @@ class ConfigPageTests(unittest.TestCase):
 
     def test_follow_up_switch_defaults_to_off_when_config_field_is_missing(self):
         self.assertIn("config.follow_up?.enabled ?? false", self.source)
+
+    def test_config_page_merges_boss_safety_and_throttle_settings(self):
+        self.assertEqual(self.source.count('title="反监测设置"'), 1)
+        self.assertNotIn('title="BOSS 直聘采集安全"', self.source)
+        self.assertNotIn('title="反检测设置"', self.source)
+        self.assertIn('label="BOSS 操作间隔倍率"', self.source)
+        self.assertNotIn('label="BOSS 采集间隔倍数"', self.source)
+
+    def test_random_delivery_cooldown_is_below_ai_settings(self):
+        ai_index = self.source.index('title="AI 设置"')
+        anti_monitor_index = self.source.index('title="反监测设置"')
+        monitor_index = self.source.index('title="监控设置"')
+
+        self.assertLess(ai_index, anti_monitor_index)
+        self.assertLess(anti_monitor_index, monitor_index)
+        self.assertNotIn("BOSS 页面访问相关设置同时用于采集和监测", self.source)
+        self.assertIn("collection.delivery_cooldown_min_minutes", self.source)
+        self.assertIn("collection.delivery_cooldown_max_minutes", self.source)
+        self.assertNotIn("collection.delivery_cooldown_minutes", self.source)
+
+    def test_minimum_and_maximum_fields_share_compact_range_controls(self):
+        for label in (
+            "期望薪资范围（K）",
+            "BOSS 风险暂停范围（分钟）",
+            "BOSS 采集后投递冷却范围（分钟）",
+            "发送间隔范围（秒）",
+            "模拟浏览时长范围（秒）",
+        ):
+            self.assertIn(f'label="{label}"', self.source)
+
+        for retired_label in (
+            "BOSS 风险暂停最少分钟",
+            "BOSS 风险暂停最多分钟",
+            "BOSS 采集后投递冷却最少（分钟）",
+            "BOSS 采集后投递冷却最多（分钟）",
+            "最短间隔 (秒)",
+            "最长间隔 (秒)",
+            "浏览最短时长 (秒)",
+            "浏览最长时长 (秒)",
+        ):
+            self.assertNotIn(f'label="{retired_label}"', self.source)
 
 
 class ConfigSchemaTests(unittest.TestCase):

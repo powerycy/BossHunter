@@ -13,6 +13,7 @@ interface JobFilterBarProps {
   totalCount: number
   invalidSalary?: boolean
   showStatus?: boolean
+  showSource?: boolean
 }
 
 export function JobFilterBar({
@@ -23,6 +24,7 @@ export function JobFilterBar({
   totalCount,
   invalidSalary = false,
   showStatus = false,
+  showSource = false,
 }: JobFilterBarProps) {
   const update = (key: keyof JobFilters, value: string) => onChange({ ...filters, [key]: value })
 
@@ -79,6 +81,29 @@ export function JobFilterBar({
             ))}
           </Select>
         )}
+        {showSource && (
+          <Select className="min-w-0" value={filters.sourcePlatform} onChange={event => update('sourcePlatform', event.target.value)} aria-label="来源平台">
+            <option value="">来源平台：全部</option>
+            <option value="boss">BOSS 直聘</option>
+            <option value="zhilian">智联招聘</option>
+            <option value="51job">前程无忧</option>
+          </Select>
+        )}
+        <Select className="min-w-0" value={filters.education} onChange={event => update('education', event.target.value)} aria-label="学历要求">
+          <option value="">学历：全部</option>
+          <option value="博士">博士</option>
+          <option value="硕士">硕士</option>
+          <option value="本科">本科</option>
+          <option value="大专">大专</option>
+          <option value="不限">学历不限</option>
+          <option value="unknown">未识别</option>
+        </Select>
+        <Select className="min-w-0" value={filters.recruitmentType} onChange={event => update('recruitmentType', event.target.value)} aria-label="招聘类型">
+          <option value="">招聘类型：全部</option>
+          <option value="campus">校招</option>
+          <option value="experienced">社招</option>
+          <option value="unknown">未识别</option>
+        </Select>
         <div className="flex min-h-9 min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-card-border bg-white px-3 py-1">
           <span className="whitespace-nowrap text-xs font-bold text-muted">筛选结果 {resultCount} / 总数 {totalCount}</span>
           <Button

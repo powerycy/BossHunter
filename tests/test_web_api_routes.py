@@ -416,6 +416,33 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(payload["total"], 3)
         self.assertEqual([job["id"] for job in payload["items"]], ["middle", "low"])
 
+    def test_job_search_supports_whitelisted_column_sorting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                for job_id, score, education in (("low", 60, "本科"), ("high", 90, "博士")):
+                    job = _job(job_id)
+                    job["education"] = education
+                    insert_job(db, job)
+                    update_job_score(db, job_id, score, "评分")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request("/api/jobs/search?sort_by=score&sort_order=asc")
+            invalid_sort_status, _, invalid_sort_body = self._request(
+                "/api/jobs/search?sort_by=score%20DESC&sort_order=asc"
+            )
+            invalid_order_status, _, invalid_order_body = self._request(
+                "/api/jobs/search?sort_by=score&sort_order=sideways"
+            )
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual([job["id"] for job in json.loads(body)["items"]], ["low", "high"])
+        self.assertTrue(invalid_sort_status.startswith("400"), invalid_sort_body)
+        self.assertTrue(invalid_order_status.startswith("400"), invalid_order_body)
+
     def test_job_search_decodes_chinese_keyword_as_utf8(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
@@ -552,6 +579,48 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(status.startswith("200"))
         self.assertIn("application/json", headers["Content-Type"])
         self.assertEqual([job["id"] for job in payload["pending_confirmation"]], ["ready-job"])
+
+    def test_workbench_excludes_collection_only_platforms_from_automatic_delivery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                external = _job("zhilian-ready")
+                external.update({"source_platform": "zhilian", "source_job_id": "zhilian-ready"})
+                insert_job(db, external)
+                update_job_score(db, "zhilian-ready", 90, "匹配")
+                update_job_status(db, "zhilian-ready", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request("/api/workbench")
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(payload["pending_confirmation"], [])
+
+    def test_web_api_workbench_reports_daily_send_quota(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("sent-today"))
+                add_history(db, "sent-today", "sent", "已发送")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request("/api/workbench")
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(payload["send_quota"], {
+            "daily_limit": 30,
+            "sent": 1,
+            "remaining": 29,
+            "exhausted": False,
+        })
 
     def test_web_api_workbench_shows_approved_job_when_greeting_was_interrupted(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -842,6 +911,85 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(full_task.context["confirmed_job_ids"], ["ready-job"])
         self.assertEqual(json.loads(response_body)["id"], "full-task")
 
+    def test_web_api_manual_sent_records_external_send_without_using_boss_quota(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                external = _job("51job-manual")
+                external.update({"source_platform": "51job", "source_job_id": "51job-manual"})
+                insert_job(db, external)
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/jobs/manual-sent",
+                method="POST",
+                json_body={"job_ids": ["51job-manual"], "confirmed": True},
+            )
+            workbench_status, _, workbench_body = self._request("/api/workbench")
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                row = verify_db.execute(
+                    "SELECT status FROM jobs WHERE id = ?",
+                    ("51job-manual",),
+                ).fetchone()
+                history = verify_db.execute(
+                    "SELECT action FROM history WHERE job_id = ?",
+                    ("51job-manual",),
+                ).fetchall()
+            finally:
+                verify_db.close()
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(json.loads(body)["affected_count"], 1)
+        self.assertTrue(workbench_status.startswith("200"), workbench_body)
+        self.assertEqual(json.loads(workbench_body)["send_quota"]["sent"], 0)
+        self.assertEqual(row["status"], "sent")
+        self.assertEqual([item["action"] for item in history], ["manual_sent"])
+
+    def test_web_api_deliver_rejects_already_sent_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("already-sent"))
+                update_job_greeting(db, "already-sent", "已经发送过的招呼语")
+                update_job_status(db, "already-sent", "sent")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/workbench/deliver",
+                method="POST",
+                json_body={"job_ids": ["already-sent"]},
+            )
+
+        self.assertTrue(status.startswith("409"), body)
+        self.assertEqual(json.loads(body)["invalid_ids"], ["already-sent"])
+
+    def test_web_api_direct_send_requires_a_retryable_greeting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("error-without-greeting"))
+                update_job_status(db, "error-without-greeting", "error")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/workbench/deliver",
+                method="POST",
+                json_body={"job_ids": ["error-without-greeting"], "direct_send": True},
+            )
+
+        self.assertTrue(status.startswith("409"), body)
+        self.assertEqual(json.loads(body)["invalid_ids"], ["error-without-greeting"])
+
     def test_web_api_deliver_queues_confirmation_before_full_task_event_exists(self):
         full_task = WorkbenchTask(id="full-before-event", mode="full", label="运行全流程")
         runner = WorkbenchTaskRunner()
@@ -970,6 +1118,7 @@ class WebApiRouteTests(unittest.TestCase):
                 for job_id in ("already-scheduled", "new-ready"):
                     insert_job(db, _job(job_id))
                     update_job_status(db, job_id, "ready")
+                    update_job_greeting(db, job_id, f"{job_id} 的待发送招呼语")
             finally:
                 db.close()
             server.set_base_dir(base_dir)
@@ -1290,6 +1439,9 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertIn("招呼语发送结果：成功 1，失败 1，待下次发送 1（共 3）", task.logs)
         self.assertIn("1 个岗位发送失败已单独记录，继续后续流程", task.logs)
         self.assertIn("1 个岗位因今日发送额度未执行，已保留在“待发送招呼语”", task.logs)
+        self.assertEqual(task.stop_reason, "daily_limit")
+        self.assertEqual(task.metrics["send_success"], 1)
+        self.assertEqual(task.metrics["send_deferred"], 1)
 
     def test_deliver_still_stops_on_account_risk_signal(self):
         # Arrange
@@ -1589,15 +1741,48 @@ class WebApiRouteTests(unittest.TestCase):
             base_dir = Path(tmp)
             (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
             server.set_base_dir(base_dir)
+            original_resume_path = server.load_config(base_dir / "config.yaml").get("profile", {}).get("resume_path")
             status, _, body = self._upload_resume("scanned.pdf", pdf.getvalue(), "application/pdf")
             payload = json.loads(body)
-            stored_text = Path(payload["path"]).read_text(encoding="utf-8")
 
-        self.assertTrue(status.startswith("200"), body)
+            self.assertTrue(status.startswith("200"), body)
+            self.assertTrue(payload["requires_review"])
+            self.assertNotIn("path", payload)
+            self.assertIn("OCR Candidate", payload["content"])
+            self.assertIn("已在本机 OCR", payload["warning"])
+            self.assertFalse((base_dir / "data" / "resumes" / "scanned.md").exists())
+            self.assertEqual(
+                server.load_config(base_dir / "config.yaml").get("profile", {}).get("resume_path"),
+                original_resume_path,
+            )
+
+            confirm_status, _, confirm_body = self._request(
+                "/api/resume/confirm-ocr",
+                method="POST",
+                json_body={"filename": payload["filename"], "content": payload["content"]},
+            )
+            confirmed = json.loads(confirm_body)
+            stored_text = Path(confirmed["path"]).read_text(encoding="utf-8")
+
+        self.assertTrue(confirm_status.startswith("200"), confirm_body)
         self.assertEqual(payload["filename"], "scanned.md")
         self.assertIn("OCR Candidate", stored_text)
-        self.assertIn("已在本机 OCR", payload["warning"])
         ocr_pdf.assert_called_once()
+
+    def test_web_api_resume_ocr_confirmation_rejects_unusable_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/resume/confirm-ocr",
+                method="POST",
+                json_body={"filename": "scanned.md", "content": "too short"},
+            )
+
+        self.assertTrue(status.startswith("400"), body)
+        self.assertIn("OCR 文本过少", json.loads(body)["error"])
 
     @patch(
         "bosshunter.web.resume_upload._ocr_pdf_to_markdown",
@@ -1883,6 +2068,86 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertFalse(unresolved_item["resolved"])
         self.assertTrue(resolved_item["resolved"])
         self.assertEqual(resolved_item["resume_path"], "/tmp/generated.md")
+
+    def test_full_task_receives_global_boss_collection_options(self):
+        config = {
+            "search": {"keywords": ["旧关键词"], "cities": ["北京"]},
+            "profile": {"target_cities": ["北京"]},
+            "collection": {"default_order": ["boss"]},
+            "platforms": {
+                "boss": {"enabled": True, "search": {"keywords": ["全局关键词"], "cities": ["上海"], "max_pages": 2, "sort": "newest", "target_count": 4}},
+                "zhilian": {"enabled": False, "search": {}},
+            },
+        }
+        with patch.object(server, "load_config", return_value=config), patch.object(server, "_preflight_messages", return_value=[]), patch.object(
+            server, "_write_config"
+        ), patch.object(server.task_runner, "start", return_value={"id": "full-global-config"}) as start:
+            status, _, body = self._request("/api/workbench/task", method="POST", json_body={"mode": "full"})
+
+        self.assertTrue(status.startswith("200"), body)
+        task_config = start.call_args.args[1]
+        self.assertEqual(task_config["_collection_options"]["platforms"]["boss"]["keywords"], ["全局关键词"])
+        self.assertEqual(task_config["_collection_options"]["platforms"]["boss"]["cities"], ["上海"])
+        self.assertNotIn("target_count", task_config["_collection_options"]["platforms"]["boss"])
+        self.assertTrue(task_config["_collection_options"]["auto_score"])
+
+    def test_full_task_rejects_collection_only_platform_from_saved_config(self):
+        config = {
+            "search": {"keywords": ["人力"], "cities": ["深圳"]},
+            "profile": {"resume_path": "C:/resume.md"},
+            "ai": {"api_key": "test-key"},
+            "collection": {"default_order": ["boss", "zhilian"]},
+            "platforms": {
+                "boss": {"enabled": True, "search": {"keywords": ["人力"], "cities": ["深圳"]}},
+                "zhilian": {"enabled": True, "search": {"keywords": ["人力"], "cities": ["深圳"]}},
+            },
+        }
+        with patch.object(server, "load_config", return_value=config), patch.object(server, "_preflight_messages", return_value=[]), patch.object(
+            server.task_runner, "start", return_value={"id": "full-with-zhilian"}
+        ) as start:
+            status, _, body = self._request("/api/workbench/task", method="POST", json_body={"mode": "full"})
+
+        self.assertTrue(status.startswith("400"), body)
+        self.assertEqual(json.loads(body)["collection_only_platforms"], ["zhilian"])
+        start.assert_not_called()
+
+    def test_full_task_rejects_collection_only_platform_from_dialog(self):
+        config = {
+            "profile": {"resume_path": "C:/resume.md"},
+            "ai": {"api_key": "test-key"},
+            "collection": {"default_order": ["boss"]},
+            "platforms": {
+                "boss": {"enabled": True, "search": {}},
+                "zhilian": {"enabled": False, "search": {}},
+            },
+        }
+        options = {
+            "platform_order": ["zhilian"],
+            "auto_score": False,
+            "platforms": {
+                "zhilian": {
+                    "keywords": ["人力"],
+                    "cities": ["深圳"],
+                    "city_codes": {"深圳": "765"},
+                    "max_pages": 3,
+                    "sort": "default",
+                    "target_count": 3,
+                },
+            },
+        }
+        with patch.object(server, "load_config", return_value=config), patch.object(server, "_preflight_messages", return_value=[]), patch.object(
+            server, "_write_config"
+        ) as write_config, patch.object(server.task_runner, "start", return_value={"id": "full-dialog-options"}) as start:
+            status, _, body = self._request(
+                "/api/workbench/task",
+                method="POST",
+                json_body={"mode": "full", "options": options},
+            )
+
+        self.assertTrue(status.startswith("400"), body)
+        self.assertEqual(json.loads(body)["collection_only_platforms"], ["zhilian"])
+        start.assert_not_called()
+        write_config.assert_not_called()
 
 
 if __name__ == "__main__":

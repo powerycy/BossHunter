@@ -6,6 +6,12 @@ from rich.console import Console
 
 
 class BrowserDiagnosticsTests(unittest.TestCase):
+    def test_zhilian_page_script_recognizes_current_login_wall_markers(self):
+        from bosshunter.browser.diagnostics import ZHILIAN_PAGE_STATE_SCRIPT
+
+        self.assertIn("登录查看更多", ZHILIAN_PAGE_STATE_SCRIPT)
+        self.assertIn("立即登录", ZHILIAN_PAGE_STATE_SCRIPT)
+
     @patch("bosshunter.browser.diagnostics.httpx.get")
     def test_browser_identity_detects_edge_from_older_runtime_health(self, http_get):
         from bosshunter.browser.diagnostics import _browser_identity

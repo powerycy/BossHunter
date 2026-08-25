@@ -12,11 +12,17 @@ interface ActivityData {
 
 interface Job {
   id: string
+  source_platform?: 'boss' | 'zhilian' | string
+  source_job_id?: string | null
+  source_keyword?: string | null
+  source_city_code?: string | null
   title: string
   company: string
   salary: string
   city: string
   experience: string
+  education?: string
+  recruitment_type?: 'campus' | 'experienced' | 'unknown' | string
   jd: string
   score: number
   score_reason: string
@@ -42,7 +48,7 @@ interface TopCompany {
   job_count: number
 }
 
-interface WorkbenchTask {
+export interface WorkbenchTask {
   id: string
   mode: 'full' | 'collect' | 'rescore' | 'monitor' | 'deliver'
   label: string
@@ -53,6 +59,36 @@ interface WorkbenchTask {
   stop_reason?: string
   stop_requested: boolean
   metrics?: Record<string, number>
+  progress?: CollectionProgress
+}
+
+export interface CollectionPlatformProgress {
+  status: string
+  new: number
+  target: number | null
+  percent?: number | null
+  seen?: number
+  duplicate?: number
+  filtered?: number
+  parse_failed?: number
+  save_failed?: number
+  keyword?: string
+  city?: string
+  page?: number
+  max_pages?: number
+  phase?: string
+  reason_code?: string
+  message?: string
+}
+
+export interface CollectionProgress {
+  run_id?: string
+  outcome?: string
+  current_platform?: string
+  platform_index?: number
+  platform_total?: number
+  platforms?: Record<string, CollectionPlatformProgress>
+  collected_job_ids?: string[]
 }
 
 interface WorkbenchData {
@@ -62,6 +98,7 @@ interface WorkbenchData {
   pending_greetings: Job[]
   send_errors: Job[]
   needs_resume: Job[]
+  send_quota: { daily_limit: number; sent: number; remaining: number; exhausted: boolean }
   task: WorkbenchTask | null
   last_task: WorkbenchTask | null
 }
@@ -97,6 +134,7 @@ const emptyWorkbench: WorkbenchData = {
   pending_greetings: [],
   send_errors: [],
   needs_resume: [],
+  send_quota: { daily_limit: 30, sent: 0, remaining: 30, exhausted: false },
   task: null,
   last_task: null,
 }
@@ -143,11 +181,11 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
     }
   }
 
-  const startTask = async (mode: 'full' | 'collect' | 'rescore' | 'monitor' | 'deliver') => {
+  const startTask = async (mode: 'full' | 'collect' | 'rescore' | 'monitor' | 'deliver', options?: Record<string, unknown>) => {
     const res = await fetch('/api/workbench/task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode, ...(options ? { options } : {}) }),
     })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
@@ -191,4 +229,4 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
   }
 }
 
-export type { FunnelData, ActivityData, Job, TopCompany, WorkbenchData, WorkbenchTask, HistoryDetailPayload, HistoryItem }
+export type { FunnelData, ActivityData, Job, TopCompany, WorkbenchData, HistoryDetailPayload, HistoryItem }

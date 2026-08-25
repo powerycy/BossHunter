@@ -5,14 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from bosshunter.config import DEFAULTS
+from bosshunter.config import DEFAULTS, load_config
 from bosshunter.db import (
     add_platform_access,
-    count_jobs_created_today,
     count_platform_access_today,
     get_active_platform_safety_lock,
     get_db,
-    insert_job,
     set_platform_safety_lock,
 )
 from bosshunter.platform_safety import PlatformAccessGuard, PlatformSafetyStop
@@ -20,33 +18,49 @@ from bosshunter.scraper.jobs import scrape_jobs
 from bosshunter.web.server import _execute_collect, _wait_for_collection_delivery_cooldown
 from bosshunter.web.tasks import WorkbenchTask
 
-
-def _job(job_id: str) -> dict:
-    return {
-        "id": job_id,
-        "title": "AI 产品经理",
-        "company": "示例公司",
-        "salary": "20-30K",
-        "city": "北京",
-        "experience": "3-5年",
-        "jd": "产品工作",
-        "hr_name": "",
-        "hr_title": "",
-        "hr_active": "",
-        "company_size": "",
-        "company_industry": "",
-        "url": f"https://www.zhipin.com/job_detail/{job_id}.html",
-    }
-
-
 class CollectionSafetyTests(unittest.TestCase):
     def test_default_limits_are_daily_only(self):
         collection = DEFAULTS["collection"]
-        self.assertEqual(collection["daily_new_jobs_limit"], 100)
+        self.assertNotIn("daily_new_jobs_limit", collection)
         self.assertEqual(collection["daily_search_page_limit"], 30)
         self.assertEqual(collection["daily_detail_page_limit"], 150)
+        self.assertEqual(collection["risk_pause_min_minutes"], 5)
+        self.assertEqual(collection["risk_pause_max_minutes"], 10)
+        self.assertEqual(collection["collection_delay_multiplier"], 1.5)
         self.assertNotIn("max_new_jobs_per_cycle", collection)
         self.assertNotIn("max_search_pages_per_cycle", collection)
+
+    def test_retired_count_limits_are_removed_from_existing_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.yaml"
+            config_path.write_text(
+                """
+search:
+  target_count: 88
+collection:
+  default_target_count: 66
+  daily_new_jobs_limit: 100
+platforms:
+  boss:
+    search:
+      target_count: 77
+  zhilian:
+    search:
+      target_count: 55
+  51job:
+    search:
+      target_count: 44
+""",
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        self.assertNotIn("target_count", config["search"])
+        self.assertNotIn("default_target_count", config["collection"])
+        self.assertNotIn("daily_new_jobs_limit", config["collection"])
+        for platform in ("boss", "zhilian", "51job"):
+            self.assertNotIn("target_count", config["platforms"][platform]["search"])
 
     def test_daily_access_limit_stops_before_the_next_page(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -78,13 +92,17 @@ class CollectionSafetyTests(unittest.TestCase):
             self.assertEqual(raised.exception.reason, "daily_platform_page_limit")
             db.close()
 
-    def test_unique_daily_count_ignores_accesses_and_counts_jobs_once(self):
+    def test_external_page_events_do_not_consume_boss_page_budget(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")
-            insert_job(db, _job("one"))
-            add_platform_access(db, "collection", "search_page")
-            add_platform_access(db, "collection", "detail_page")
-            self.assertEqual(count_jobs_created_today(db), 1)
+            add_platform_access(db, "collection", "search_page", platform="zhilian")
+            guard = PlatformAccessGuard(db, {"safety": {"daily_platform_page_limit": 1}}, "collection")
+            guard.reserve("search_page")
+            with self.assertRaises(PlatformSafetyStop) as raised:
+                guard.reserve("search_page")
+            self.assertEqual(raised.exception.reason, "daily_platform_page_limit")
+            self.assertEqual(count_platform_access_today(db, platform="boss"), 1)
+            self.assertEqual(count_platform_access_today(db, platform="zhilian"), 1)
             db.close()
 
     def test_risk_lock_survives_a_new_database_connection(self):
@@ -99,26 +117,6 @@ class CollectionSafetyTests(unittest.TestCase):
             self.assertEqual(lock["reason"], "captcha")
             reopened.close()
 
-    def test_daily_new_job_limit_stops_without_opening_platform_page(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "bosshunter.db"
-            db = get_db(db_path)
-            for index in range(100):
-                insert_job(db, _job(f"job-{index}"))
-            config = {
-                "profile": {"target_cities": ["北京"]},
-                "search": {"max_pages": 1},
-                "collection": {"daily_new_jobs_limit": 100},
-            }
-
-            with patch("bosshunter.scraper.jobs.get_db", return_value=db), \
-                 patch("bosshunter.scraper.jobs.new_tab") as new_tab:
-                count = scrape_jobs(config, ["AI"])
-
-            self.assertEqual(count, 0)
-            self.assertEqual(config["_workbench_collect_report"]["stop_reason"], "daily_new_jobs_limit")
-            new_tab.assert_not_called()
-
     def test_collection_risk_stops_and_records_safe_reason(self):
         db = Mock()
         progress = Mock()
@@ -132,8 +130,7 @@ class CollectionSafetyTests(unittest.TestCase):
         }
 
         with patch("bosshunter.scraper.jobs.get_db", return_value=db), \
-             patch("bosshunter.scraper.jobs.count_jobs_created_today", return_value=0), \
-             patch("bosshunter.scraper.jobs.PlatformAccessGuard") as guard_cls, \
+             patch("bosshunter.collection.platforms.boss.PlatformAccessGuard") as guard_cls, \
              patch("bosshunter.scraper.jobs.Progress", return_value=context), \
              patch("bosshunter.scraper.jobs.new_tab", return_value="worker"), \
              patch("bosshunter.scraper.jobs.wait_for_load"), \
@@ -144,7 +141,70 @@ class CollectionSafetyTests(unittest.TestCase):
 
         self.assertEqual(count, 0)
         self.assertEqual(config["_workbench_collect_report"]["stop_reason"], "captcha")
-        guard_cls.return_value.lock.assert_called_once_with("captcha")
+        guard_cls.return_value.lock.assert_called_once()
+        lock_call = guard_cls.return_value.lock.call_args
+        self.assertEqual(lock_call.args, ("captcha",))
+        self.assertGreaterEqual(lock_call.kwargs["minutes"], 5)
+        self.assertLessEqual(lock_call.kwargs["minutes"], 10)
+
+    def test_transient_collection_risk_is_ignored_without_locking(self):
+        db = Mock()
+        progress = Mock()
+        progress.add_task.return_value = "task"
+        context = Mock()
+        context.__enter__ = Mock(return_value=progress)
+        context.__exit__ = Mock(return_value=False)
+        config = {
+            "profile": {"target_cities": ["北京"]},
+            "search": {"max_pages": 1},
+        }
+
+        with patch("bosshunter.scraper.jobs.get_db", return_value=db), \
+             patch("bosshunter.collection.platforms.boss.PlatformAccessGuard") as guard_cls, \
+             patch("bosshunter.scraper.jobs.Progress", return_value=context), \
+             patch("bosshunter.scraper.jobs.new_tab", return_value="worker"), \
+             patch("bosshunter.scraper.jobs.wait_for_load"), \
+             patch(
+                 "bosshunter.scraper.jobs.evaluate",
+                 side_effect=[
+                     json.dumps({"risk": "blocked", "evidence": "blocked_page"}),
+                     json.dumps({"risk": None}),
+                     json.dumps([]),
+                 ],
+             ), \
+             patch("bosshunter.scraper.jobs.scroll"), \
+             patch("bosshunter.scraper.jobs.close_tab"), \
+             patch("bosshunter.scraper.jobs.time.sleep"):
+            count = scrape_jobs(config, ["AI"])
+
+        self.assertEqual(count, 0)
+        self.assertEqual(config["_workbench_collect_report"]["stop_reason"], "search_exhausted")
+        guard_cls.return_value.lock.assert_not_called()
+
+    def test_consecutive_page_failures_end_collection_without_risk_lock(self):
+        db = Mock()
+        progress = Mock()
+        progress.add_task.return_value = "task"
+        context = Mock()
+        context.__enter__ = Mock(return_value=progress)
+        context.__exit__ = Mock(return_value=False)
+        config = {
+            "profile": {"target_cities": ["北京"]},
+            "search": {"max_pages": 3},
+            "collection": {"max_consecutive_page_failures": 3},
+        }
+
+        with patch("bosshunter.scraper.jobs.get_db", return_value=db), \
+             patch("bosshunter.collection.platforms.boss.PlatformAccessGuard") as guard_cls, \
+             patch("bosshunter.scraper.jobs.Progress", return_value=context), \
+             patch("bosshunter.scraper.jobs.new_tab", return_value=None), \
+             patch("bosshunter.scraper.jobs.close_tab"), \
+             patch("bosshunter.scraper.jobs.time.sleep"):
+            count = scrape_jobs(config, ["AI"])
+
+        self.assertEqual(count, 0)
+        self.assertEqual(config["_workbench_collect_report"]["stop_reason"], "consecutive_page_failures")
+        guard_cls.return_value.lock.assert_not_called()
 
     def test_frontend_task_log_explains_daily_limit(self):
         task = WorkbenchTask(id="collect", mode="collect", label="单独采集")
@@ -162,14 +222,37 @@ class CollectionSafetyTests(unittest.TestCase):
 
     def test_collection_delivery_cooldown_is_cancellable(self):
         task = WorkbenchTask(id="full", mode="full", label="运行全流程")
-        task.context["collection_completed_monotonic"] = time.monotonic()
+        task.context["boss_collection_completed_monotonic"] = time.monotonic()
         task.stop_requested.set()
         self.assertTrue(
             _wait_for_collection_delivery_cooldown(
                 task,
-                {"collection": {"delivery_cooldown_minutes": 30}},
+                {
+                    "collection": {
+                        "delivery_cooldown_min_minutes": 5,
+                        "delivery_cooldown_max_minutes": 15,
+                    }
+                },
             )
         )
+
+    def test_collection_delivery_cooldown_selects_one_random_value_per_flow(self):
+        task = WorkbenchTask(id="full", mode="full", label="运行全流程")
+        task.context["boss_collection_completed_monotonic"] = time.monotonic()
+        task.stop_requested.set()
+        config = {
+            "collection": {
+                "delivery_cooldown_min_minutes": 5,
+                "delivery_cooldown_max_minutes": 15,
+            }
+        }
+
+        with patch("bosshunter.web.server.random.uniform", return_value=11.25) as choose:
+            self.assertTrue(_wait_for_collection_delivery_cooldown(task, config))
+            self.assertTrue(_wait_for_collection_delivery_cooldown(task, config))
+
+        choose.assert_called_once_with(5, 15)
+        self.assertEqual(task.context["boss_delivery_cooldown_minutes"], 11.25)
 
 
 if __name__ == "__main__":

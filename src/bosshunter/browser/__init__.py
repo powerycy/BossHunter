@@ -50,6 +50,15 @@ def find_boss_tab() -> dict | None:
     return None
 
 
+def find_zhilian_tab() -> dict | None:
+    """Find a 智联招聘 tab in Chrome without opening or logging in."""
+    for target in get_page_targets():
+        url = str(target.get("url", ""))
+        if "zhaopin.com" in url:
+            return target
+    return None
+
+
 def new_tab(url: str, background: bool = False) -> str | None:
     """Open a tab and return its target ID."""
     if not _ready():

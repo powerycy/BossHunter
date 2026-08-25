@@ -29,6 +29,52 @@ def _job(job_id: str, hr_name: str | None = None) -> dict:
 
 
 class MonitorThrottleTests(unittest.TestCase):
+    def test_boss_operation_multiplier_applies_to_monitor_cycle_wait(self):
+        from bosshunter.executor import monitor
+
+        config = {
+            "collection": {"collection_delay_multiplier": 1.5},
+            "monitor": {"interval": 30},
+        }
+
+        self.assertEqual(monitor.get_boss_operation_interval_multiplier(config), 1.5)
+        self.assertEqual(monitor.get_effective_monitor_interval_minutes(config), 45)
+
+    def test_boss_operation_multiplier_applies_to_monitor_page_requests(self):
+        from bosshunter.executor import monitor
+
+        config = {
+            "collection": {"collection_delay_multiplier": 1.5},
+            "throttle": {
+                "interval_min": 60,
+                "interval_max": 180,
+                "send_windows": [],
+            },
+        }
+
+        with patch.object(monitor, "RequestThrottle") as request_throttle, \
+             patch.object(monitor, "check_replies", return_value=[]), \
+             patch.object(monitor, "_check_follow_ups", return_value=0):
+            monitor.monitor_and_send_resumes(config)
+
+        request_throttle.assert_called_once_with(90, 270)
+
+    def test_boss_operation_multiplier_is_bounded_and_tolerates_invalid_values(self):
+        from bosshunter.executor import monitor
+
+        self.assertEqual(
+            monitor.get_boss_operation_interval_multiplier(
+                {"collection": {"collection_delay_multiplier": 99}}
+            ),
+            5,
+        )
+        self.assertEqual(
+            monitor.get_boss_operation_interval_multiplier(
+                {"collection": {"collection_delay_multiplier": "invalid"}}
+            ),
+            1.5,
+        )
+
     def test_mark_makes_configured_request_interval_effective(self):
         throttle = RequestThrottle(delay_min=60, delay_max=60)
 

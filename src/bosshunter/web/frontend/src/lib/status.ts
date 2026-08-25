@@ -22,6 +22,7 @@ export const ACTION_LABELS: Record<string, string> = {
   approved: '确认',
   skipped: '跳过',
   sent: '发送',
+  manual_sent: '手动标记已发送',
   replied: '回复',
   reply_pending: '待确认回复',
   reply_dismissed: '已放弃回复',
