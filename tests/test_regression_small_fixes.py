@@ -57,9 +57,9 @@ class VersionMetadataTests(unittest.TestCase):
             / "Sidebar.tsx"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('version = "2.3.0"', pyproject)
-        self.assertEqual(bosshunter.__version__, "2.3.0")
-        self.assertEqual(json.loads(health())["version"], "2.3.0")
+        self.assertIn('version = "2.3.1"', pyproject)
+        self.assertEqual(bosshunter.__version__, "2.3.1")
+        self.assertEqual(json.loads(health())["version"], "2.3.1")
         self.assertIn("v2.3 · 本地控制台", sidebar_source)
         self.assertNotIn("v1.1.0", sidebar_source)
 

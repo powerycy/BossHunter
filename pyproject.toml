@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bosshunter"
-version = "2.3.0"
+version = "2.3.1"
 description = "BOSS直聘智能求职Agent - 端到端自动化求职工具"
 requires-python = ">=3.10"
 license = "LicenseRef-BossHunter-NonCommercial"

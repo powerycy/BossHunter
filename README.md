@@ -3,13 +3,13 @@
 > [!NOTE]
 > **本项目由 [升级打怪开源社区](https://github.com/powerycy/shengjidaguai) 维护。** 欢迎访问社区仓库，参与交流与共建。
 
-# BossHunter v2.3.0
+# BossHunter v2.3.1
 
 > 某直聘智能求职 Agent — 从岗位采集、AI 评分到人工确认投递、回复监测与定制简历生成的本地自动化流水线
 
 <p align="center">
   <a href="https://github.com/powerycy/BossHunter/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/powerycy/BossHunter?style=social"></a>
-  <a href="https://github.com/powerycy/BossHunter"><img alt="Version" src="https://img.shields.io/badge/version-v2.3.0-FB6511"></a>
+  <a href="https://github.com/powerycy/BossHunter"><img alt="Version" src="https://img.shields.io/badge/version-v2.3.1-FB6511"></a>
   <a href="https://www.python.org/"><img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white"></a>
   <a href="LICENSE"><img alt="Non-Commercial License" src="https://img.shields.io/badge/license-Non--Commercial-6f42c1"></a>
   <a href="https://github.com/powerycy/BossHunter/issues"><img alt="GitHub Issues" src="https://img.shields.io/github/issues/powerycy/BossHunter"></a>
@@ -362,7 +362,7 @@ A: 项目通过 CDP (Chrome DevTools Protocol) 直连你日常使用的浏览器
 
 | 日期 | 版本号 | 类型 | 更新内容 |
 |------|--------|------|----------|
-| 2026-08-25 | main（待发布） | 多平台与安全整合 | 合入智联/51job 只读采集、外部平台人工投递闭环、岗位池与筛选增强、Windows 兼容、招呼语与消息判定修复，并重整 BOSS 页面访问保护设置。 |
+| 2026-08-25 | v2.3.1 | 多平台与安全整合 | 合入智联/51job 只读采集、外部平台人工投递闭环、岗位池与筛选增强、Windows 兼容、招呼语与消息判定修复，并重整 BOSS 页面访问保护设置。 |
 | 2026-08-13 | v2.3.0 | 功能与可恢复性 | 增加多范围岗位导出、离线城市目录、任务安全的岗位回收站和可独立重试的 AI 评分；同步改进配置安全、岗位筛选与投递队列。 |
 | 2026-08-02 | v2.2.0 | 功能与稳定性 | 单岗位失败不再中断全流程；额度未完成岗位下次优先续发；加强首次沟通、历史会话、任务停止、后台页面与最新配置生效逻辑，并简化工作台。 |
 | 2026-07-30 | v2.1.1 | 稳定性修复 | 修复 AI 评分与招呼语可能因 Token 限制中断的问题：回答被截断时增大输出上限重试，上下文过长时压缩请求，额度或限流异常会保留进度并在工作台显示原因。 |
@@ -373,7 +373,7 @@ A: 项目通过 CDP (Chrome DevTools Protocol) 直连你日常使用的浏览器
 > 查看每个版本的完整说明：[CHANGELOG.md](CHANGELOG.md)
 
 <details>
-<summary><strong>展开查看 2026-08-25 main 多平台与安全整合</strong></summary>
+<summary><strong>展开查看 v2.3.1 多平台与安全整合</strong></summary>
 
 ### 多平台与人工投递闭环
 
