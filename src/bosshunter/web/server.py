@@ -1556,6 +1556,9 @@ def api_workbench_deliver():
 
 		deliver_options = {"_workbench_job_ids": job_ids}
 		if direct_send:
+			# The greeting is already finalized on the review card. Keep direct
+			# send separate from generation so a click cannot replace the text or
+			# move the job back into greeting review.
 			deliver_options["_workbench_skip_greeting"] = True
 		task = task_runner.start("deliver", _task_config(deliver_options))
 		return _json_response(task)

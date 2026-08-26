@@ -992,6 +992,43 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(status.startswith("409"), body)
         self.assertEqual(json.loads(body)["invalid_ids"], ["error-without-greeting"])
 
+    def test_web_api_direct_send_never_regenerates_finalized_greeting(self):
+        runner = WorkbenchTaskRunner()
+        received_config = {}
+
+        def capture_deliver(_task, config):
+            received_config.update(config)
+
+        runner._executors["deliver"] = capture_deliver
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("direct-finalized"))
+                update_job_greeting(db, "direct-finalized", "已经确认的招呼语")
+                update_job_status(db, "direct-finalized", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch.object(server, "task_runner", runner), \
+                 patch.object(
+                     server,
+                     "_task_config",
+                     side_effect=lambda overrides=None: dict(overrides or {}),
+                 ), \
+                 patch("bosshunter.web.tasks._deadline_from_config", return_value=None):
+                status, _, body = self._request(
+                    "/api/workbench/deliver",
+                    method="POST",
+                    json_body={"job_ids": ["direct-finalized"], "direct_send": True},
+                )
+                runner.wait(timeout=1)
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(received_config["_workbench_job_ids"], ["direct-finalized"])
+        self.assertTrue(received_config["_workbench_skip_greeting"])
+
     def test_pending_greeting_preview_requires_selection_before_send(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
