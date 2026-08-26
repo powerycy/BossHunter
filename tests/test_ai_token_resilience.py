@@ -1,5 +1,7 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from threading import Event, Lock, Thread, get_ident
 from time import sleep
 from unittest.mock import MagicMock, patch
@@ -508,6 +510,94 @@ class GreeterTokenResilienceTests(unittest.TestCase):
 
         self.assertNotIn("https://portfolio.example", ordinary_prompt)
         self.assertIn("https://portfolio.example", design_prompt)
+
+    def test_greeting_prompt_forbids_unprovided_urls(self):
+        with patch("bosshunter.ai.greeter._call_claude", return_value="普通招呼语") as call_ai:
+            greeter._generate_greeting_once(_job("no-url-prompt"), "不含网址的简历", {})
+
+        self.assertIn("不得生成", call_ai.call_args.args[0])
+        self.assertIn("未明确提供的网址", call_ai.call_args.args[0])
+
+    def test_resume_urls_after_prompt_limit_remain_trusted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resume_path = Path(tmp) / "resume.md"
+            resume_path.write_text(
+                f"{'真实简历内容' * 300}\n项目地址：https://resume.example/late-project",
+                encoding="utf-8",
+            )
+
+            resume_text = greeter._get_resume_summary(
+                {"profile": {"resume_path": str(resume_path)}}
+            )
+
+        self.assertIn("https://resume.example/late-project", resume_text)
+        self.assertGreater(len(resume_text), 1500)
+
+    def test_invented_greeting_url_is_rejected(self):
+        logs: list[str] = []
+        config = {"_workbench_log": logs.append}
+
+        with patch(
+            "bosshunter.ai.greeter._call_claude",
+            return_value="项目介绍：https://invented.example/project",
+        ):
+            result = greeter._generate_greeting_once(
+                _job("invented-url"),
+                "这份简历不包含网址",
+                config,
+            )
+
+        self.assertIsNone(result)
+        self.assertTrue(any("包含未提供的网址" in message for message in logs))
+
+    def test_resume_and_configured_urls_are_allowed(self):
+        cases = (
+            ("项目地址：https://resume.example/project", {}, "https://resume.example/project"),
+            (
+                "不含网址的简历",
+                {"profile": {"portfolio_url": "https://portfolio.example"}},
+                "https://portfolio.example",
+            ),
+        )
+        for resume_text, config, url in cases:
+            with self.subTest(url=url), patch(
+                "bosshunter.ai.greeter._call_claude",
+                return_value=f"项目介绍：{url}",
+            ):
+                result = greeter._generate_greeting_once(
+                    _job(f"allowed-{url}"),
+                    resume_text,
+                    config,
+                )
+
+            self.assertEqual(result, f"项目介绍：{url}")
+
+    def test_repeated_invented_urls_are_not_saved(self):
+        db = MagicMock()
+        jobs = [_job("repeated-invented-url")]
+
+        with (
+            patch("bosshunter.ai.greeter.get_db", return_value=db),
+            patch("bosshunter.ai.greeter.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.greeter._get_resume_summary", return_value="不含网址的真实简历"),
+            patch(
+                "bosshunter.ai.greeter._call_claude",
+                side_effect=[
+                    "项目介绍：https://invented.example/one",
+                    "项目介绍：https://invented.example/two",
+                ],
+            ),
+            patch("bosshunter.ai.greeter.update_job_greeting") as update_greeting,
+            patch("bosshunter.ai.greeter.update_job_status") as update_status,
+            patch("bosshunter.ai.greeter.add_history"),
+        ):
+            count = greeter.generate_greetings(
+                {"ai": {"greeting_max_attempts": 2, "greeting_max_iterations": 0}}
+            )
+
+        self.assertEqual(count, 0)
+        update_greeting.assert_not_called()
+        update_status.assert_not_called()
 
     def test_greeting_json_wrapper_is_normalized(self):
         response = '```json\n{"greeting":"您好，我的产品经验与岗位需求比较匹配。"}\n```'

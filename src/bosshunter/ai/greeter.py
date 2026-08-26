@@ -3,6 +3,7 @@
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -49,9 +50,15 @@ GREETING_PROMPT = """你是一位求职者，需要在{platform}上给HR发送�
 9. 【严禁】不得把岗位JD中的描述（如公司头衔、项目名）当作我的经历来写
 10. 项目经历只作轻量证据，可不提；如需提及，整条消息最多出现一次“项目”，不得写具体项目名称
 11. 可以压缩和概括“我的背景”，但不得新增事实、夸大结果或改写成更高职级经历
+12. 【严禁】不得生成“我的背景”或“可用亮点”中未明确提供的网址；
+    没有提供网址时，不得输出任何网址
 {critique_section}
 请直接输出招呼语文本，不要加任何标记或解释。
 """
+
+URL_PATTERN = re.compile(
+    r"(?i)(?<![\w@.])(?:https?://|www\.)[^\s<>()\[\]{}\"'，。！？；]+"
+)
 
 REVIEW_PROMPT = """请评估以下{platform}招呼语的质量。
 
@@ -77,8 +84,7 @@ def _get_resume_summary(config: dict) -> str:
     resume_path = Path(config.get("profile", {}).get("resume_path", "./resume.md"))
     if not resume_path.exists():
         return ""
-    content = resume_path.read_text(encoding="utf-8")
-    return content[:1500]
+    return resume_path.read_text(encoding="utf-8")
 
 
 def _call_claude(
@@ -120,6 +126,38 @@ def _truncate_prompt_text(text: str, limit: int) -> str:
     available = max(limit - len(marker), 2)
     head = max(int(available * 0.7), 1)
     return f"{text[:head]}{marker}{text[-(available - head):]}"
+
+
+def _normalize_url(value: str) -> str:
+    candidate = str(value or "").strip().rstrip(".,;:!?，。！？；、)]}）】》")
+    if candidate.lower().startswith("www."):
+        candidate = f"https://{candidate}"
+    parsed = urlsplit(candidate)
+    if not parsed.netloc:
+        return candidate.lower().rstrip("/")
+    path = parsed.path.rstrip("/")
+    suffix = f"?{parsed.query}" if parsed.query else ""
+    suffix += f"#{parsed.fragment}" if parsed.fragment else ""
+    return f"{parsed.netloc.lower()}{path}{suffix}"
+
+
+def _extract_urls(text: str) -> set[str]:
+    return {
+        normalized
+        for match in URL_PATTERN.findall(str(text or ""))
+        if (normalized := _normalize_url(match))
+    }
+
+
+def _has_untrusted_greeting_url(greeting: str, resume_text: str, config: dict) -> bool:
+    generated_urls = _extract_urls(greeting)
+    if not generated_urls:
+        return False
+    trusted_urls = _extract_urls(resume_text)
+    portfolio_url = str(config.get("profile", {}).get("portfolio_url", "") or "").strip()
+    if portfolio_url:
+        trusted_urls.add(_normalize_url(portfolio_url))
+    return not generated_urls.issubset(trusted_urls)
 
 
 def _notify(config: dict, message: str, *, error: bool = False) -> None:
@@ -379,7 +417,14 @@ def _generate_greeting_once(
     ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
     token_limit = max_tokens if max_tokens is not None else ai_cfg.get("greeting_max_tokens", 8192)
     response = _call_claude(prompt, config, token_limit)
-    return _normalize_greeting_response(response)
+    greeting = _normalize_greeting_response(response)
+    if greeting and _has_untrusted_greeting_url(greeting, resume_summary, config):
+        _notify(
+            config,
+            f"{job['company']}｜{job['title']} 的招呼语包含未提供的网址，已拒绝并重试。",
+        )
+        return None
+    return greeting
 
 
 def _generate_with_token_retry(
