@@ -184,6 +184,22 @@ class Job51Collector:
         self.sleep(max(0.0, seconds))
         return False
 
+    def _navigate(self, hooks: CollectorHooks, target_id: str, url: str, label: str) -> bool:
+        """Navigate with bounded retries so a transient CDP/page hiccup does not
+        abort the entire platform run. Returns True when navigation commits."""
+        nav = self.browser.navigate_action
+        if nav is None:
+            return True
+        for attempt in range(1, 4):
+            if hooks.stop_event is not None and hooks.stop_event.is_set():
+                return False
+            if nav(target_id, url):
+                return True
+            if attempt < 3:
+                hooks.on_event(phase="pacing", message=f"{label}导航重试 {attempt}/3")
+                self._wait(hooks, 2.0)
+        return False
+
     def collect(self, request: PlatformCollectionRequest, hooks: CollectorHooks) -> PlatformCollectionResult:
         detail_requests = 0
         for city in request.cities:
@@ -195,7 +211,7 @@ class Job51Collector:
                 target_id = self.browser.new_tab(initial_url, background=True)
                 if not target_id:
                     return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "无法打开 51job 搜索页")
-                if self.browser.navigate_action is not None and not self.browser.navigate_action(target_id, search_url):
+                if not self._navigate(hooks, target_id, search_url, "51job 搜索页"):
                     return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "51job 搜索页导航失败")
                 try:
                     for page in range(1, request.max_pages + 1):
@@ -213,17 +229,23 @@ class Job51Collector:
                         self.browser.scroll(target_id, y=2200)
                         payload: dict[str, Any] = {}
                         status = "waiting"
+                        # 51job 的搜索页是 SPA：导航后页面会短暂停留在落地页标题
+                        # （含"全国招聘"、0 张卡片）再替换为真实结果。因此把
+                        # "waiting"（尚未出卡片）与 "throttled"（仍在落地页标题）都视为
+                        # 渲染过渡态继续轮询；只有真正的验证墙（"blocked"）才中止平台任务。
                         for attempt in range(RENDER_POLL_ATTEMPTS):
                             payload = _payload(self.browser.evaluate(target_id, JS_EXTRACT_LIST))
                             status = str(payload.get("status") or "selector_changed")
-                            if status != "waiting":
+                            if status not in {"waiting", "throttled"}:
                                 break
                             if attempt + 1 < RENDER_POLL_ATTEMPTS and self._wait(hooks, RENDER_POLL_INTERVAL_SECONDS):
                                 return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
-                        if status in {"blocked", "throttled"}:
+                        if status == "blocked":
                             return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "51job 出现验证或限流信号，已停止整个平台任务")
-                        if status == "waiting":
-                            return PlatformCollectionResult(self.platform, "blocked", "render_timeout", "51job 列表未稳定渲染，已安全停止")
+                        if status in {"waiting", "throttled"}:
+                            # 轮询耗尽仍无卡片：SPA 始终未渲染结果（真实限流或暂无结果）。
+                            # 优雅结束本平台任务，而不是 fail-closed 中断整个编排。
+                            return PlatformCollectionResult(self.platform, "completed", "search_exhausted", "51job 列表未渲染出岗位（限流或暂无结果）")
                         if status != "ready" or not isinstance(payload.get("jobs"), list):
                             return PlatformCollectionResult(self.platform, "blocked", "selector_changed", "51job 列表页结构与预期不一致")
 
@@ -242,7 +264,7 @@ class Job51Collector:
                             if not detail_target:
                                 hooks.on_parse_failed("无法打开 51job 详情页")
                                 continue
-                            if self.browser.navigate_action is not None and not self.browser.navigate_action(detail_target, candidate.url):
+                            if not self._navigate(hooks, detail_target, candidate.url, "51job 详情页"):
                                 self.browser.close_tab(detail_target)
                                 hooks.on_parse_failed("51job 详情页导航失败")
                                 continue
@@ -266,7 +288,12 @@ class Job51Collector:
                                 hooks.on_parse_failed("51job 岗位已下线")
                                 continue
                             if detail_status != "ready" or not str(detail.get("jd") or "").strip():
-                                return PlatformCollectionResult(self.platform, "blocked", "selector_changed", "51job 详情页结构变化，已安全停止")
+                                # 详情页 JD 未渲染（SPA 过渡/结构微调/登录墙）：保留列表
+                                # 已采集的岗位线索（标题/公司/薪资/城市），不中断整个平台任务。
+                                hooks.on_parse_failed("51job 详情页JD不可用，仅保存列表信息")
+                                if not hooks.on_candidate(candidate):
+                                    return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")
+                                continue
                             final = self._candidate_from_detail(detail, candidate)
                             if not hooks.on_candidate(final):
                                 return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")

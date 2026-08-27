@@ -8,6 +8,7 @@ Serves:
 import json
 import math
 import mimetypes
+import sqlite3
 import os
 import random
 import tempfile
@@ -54,6 +55,7 @@ from bosshunter.collection.capabilities import platform_supports
 from bosshunter.collection.orchestrator import CollectionOrchestrator, normalize_collection_options
 from bosshunter.collection.platforms.zhilian import load_zhilian_city_snapshot
 from bosshunter.collection.platforms.job51 import load_51job_city_snapshot
+from bosshunter.collection.platforms.liepin import load_liepin_city_snapshot
 from bosshunter.collection_run_store import (
 	get_collection_run,
 	list_collection_runs,
@@ -126,8 +128,19 @@ def set_base_dir(base_dir: Path | str) -> None:
 	DATA_DIR = BASE_DIR / "data"
 	RESUME_DIR = DATA_DIR / "resumes"
 	CONFIG_PATH = BASE_DIR / "config.yaml"
-	mark_orphaned_scoring_runs_paused(DATA_DIR / "bosshunter.db")
-	mark_orphaned_collection_runs_stopped(DATA_DIR / "bosshunter.db")
+	# The runtime db file is intermittently locked read-only by the host's
+	# real-time file monitor (e.g. TQDefender/OneDrive) on this machine, so the
+	# startup housekeeping writes below can fail. They only mark stale runs as
+	# paused/stopped - non-essential for serving the dashboard - so tolerate a
+	# read-only db here and let the server come up for reads/UI.
+	try:
+		mark_orphaned_scoring_runs_paused(DATA_DIR / "bosshunter.db")
+	except sqlite3.OperationalError as _e:
+		print(f"[warn] skip orphan scoring-run marking (readonly db): {_e}", flush=True)
+	try:
+		mark_orphaned_collection_runs_stopped(DATA_DIR / "bosshunter.db")
+	except sqlite3.OperationalError as _e:
+		print(f"[warn] skip orphan collection-run marking (readonly db): {_e}", flush=True)
 
 
 def _get_web_db():
@@ -979,7 +992,7 @@ def api_job_search():
 		params.append(status_filter)
 	source_platform = request.params.get("source_platform", "").strip()
 	if source_platform:
-		if source_platform not in {"boss", "zhilian", "51job"}:
+		if source_platform not in {"boss", "zhilian", "51job", "liepin"}:
 			return _json_response({"error": "source_platform 参数无效"}, 400)
 		conditions.append("COALESCE(source_platform, 'boss') = ?")
 		params.append(source_platform)
@@ -1364,7 +1377,7 @@ def api_workbench_task_start():
 					"enabled": platform in selected_platforms,
 					"search": value,
 				}
-			for platform in ("boss", "zhilian", "51job"):
+			for platform in ("boss", "zhilian", "51job", "liepin"):
 				if platform not in selected_platforms and isinstance(platform_configs.get(platform), dict):
 					platform_configs[platform]["enabled"] = False
 			base_config["platforms"] = platform_configs
@@ -1778,6 +1791,15 @@ def api_city_snapshot():
 			"note": snapshot.get("note", ""),
 			"cities": snapshot["cities"],
 		})
+	if platform == "liepin":
+		snapshot = load_liepin_city_snapshot()
+		return _json_response({
+			"ok": True,
+			"source": snapshot["source"],
+			"count": len(snapshot["cities"]),
+			"note": snapshot.get("note", ""),
+			"cities": snapshot["cities"],
+		})
 	try:
 		snapshot = load_city_snapshot(BASE_DIR)
 		return _json_response({
@@ -1800,8 +1822,8 @@ def api_city_snapshot():
 @app.route("/api/cities/refresh", method="POST")
 def api_city_refresh():
 	platform = request.params.get("platform", "").strip().lower()
-	if platform in {"zhilian", "51job"}:
-		label = "智联" if platform == "zhilian" else "51job"
+	if platform in {"zhilian", "51job", "liepin"}:
+		label = "智联" if platform == "zhilian" else ("猎聘" if platform == "liepin" else "51job")
 		return _json_response({
 			"ok": False,
 			"source": "local",

@@ -59,6 +59,21 @@ function currentTaskStage(logs: string[] = []) {
   return '等待后端返回阶段'
 }
 
+function formatPlatformLabel(platform: string) {
+  if (platform === 'boss') return 'BOSS 直聘'
+  if (platform === 'zhilian') return '智联招聘'
+  if (platform === '51job') return '前程无忧'
+  if (platform === 'liepin') return '猎聘'
+  return platform
+}
+
+function formatSourcePlatformLabel(platform: string) {
+  if (platform === 'zhilian') return '智联招聘｜当前只开放采集'
+  if (platform === '51job') return '前程无忧｜当前只开放采集'
+  if (platform === 'liepin') return '猎聘｜当前只开放采集'
+  return 'BOSS 直聘'
+}
+
 function taskStatusText(status: string) {
   if (status === 'failed') return '运行失败'
   if (status === 'completed') return '已结束'
@@ -924,7 +939,7 @@ function CollectionProgressPanel({ progress }: { progress: CollectionProgress })
         {Object.entries(progress.platforms || {}).map(([platform, state]) => (
           <div key={platform} className="rounded-xl border border-card-border bg-white p-3">
             <div className="flex items-center justify-between text-sm font-black">
-              <span>{platform === 'boss' ? 'BOSS 直聘' : platform === 'zhilian' ? '智联招聘' : '前程无忧'}</span>
+              <span>{formatPlatformLabel(platform)}</span>
               <span>新增 {state.new}</span>
             </div>
             <div className="mt-1 text-xs text-muted">
@@ -975,7 +990,7 @@ function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void }) {
           <InfoBlock label="HR" value={[job.hr_name, job.hr_title].filter(Boolean).join(' · ') || '-'} />
           <InfoBlock label="招聘者活跃" value={job.hr_active || '活跃度未知'} />
           <InfoBlock label="公司" value={[job.company_size, job.company_industry].filter(Boolean).join(' · ') || '-'} />
-          <InfoBlock label="来源平台" value={job.source_platform === 'zhilian' ? '智联招聘｜当前只开放采集' : job.source_platform === '51job' ? '前程无忧｜当前只开放采集' : 'BOSS 直聘'} />
+          <InfoBlock label="来源平台" value={formatSourcePlatformLabel(job.source_platform || '')} />
           <InfoBlock label="匹配分" value={String(job.score || '-')} />
           <InfoBlock label="定制简历" value={job.resume_path || '未生成'} />
         </div>
@@ -1113,8 +1128,8 @@ function JobsPoolView() {
   }
 
   const markManuallySent = async (job: Job) => {
-    if (job.source_platform !== 'zhilian' && job.source_platform !== '51job') return
-    const platformLabel = job.source_platform === 'zhilian' ? '智联招聘' : '前程无忧'
+    if (job.source_platform !== 'zhilian' && job.source_platform !== '51job' && job.source_platform !== 'liepin') return
+    const platformLabel = formatPlatformLabel(job.source_platform)
     if (!window.confirm(`请确认：你已经在${platformLabel}完成了这个岗位的投递。此操作只更新 BossHunter 本地记录，不会向平台发送任何内容。`)) return
     try {
       const result = await postJobAction('/api/jobs/manual-sent', {

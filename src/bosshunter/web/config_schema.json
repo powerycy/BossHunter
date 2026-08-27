@@ -34,7 +34,7 @@
       "label": "岗位采集队列",
       "icon": "ListOrdered",
       "fields": [
-        {"key": "default_order", "label": "默认平台顺序", "type": "multi-select", "options": ["boss", "zhilian", "51job"], "default": ["boss"]},
+        {"key": "default_order", "label": "默认平台顺序", "type": "multi-select", "options": ["boss", "zhilian", "51job", "liepin"], "default": ["boss"]},
         {"key": "auto_score_default", "label": "采集后自动评分", "type": "switch", "default": false}
       ]
     },
@@ -45,7 +45,8 @@
       "fields": [
         {"key": "boss", "label": "BOSS 直聘独立设置", "type": "object", "description": "配置页保存 BOSS 的关键词、城市、页数和排序；城市编码由系统管理"},
         {"key": "zhilian", "label": "智联招聘独立设置", "type": "object", "description": "配置页保存智联的关键词、城市、页数和排序；当前默认只开放采集、评分和招呼语生成"},
-        {"key": "51job", "label": "前程无忧独立设置", "type": "object", "description": "当前开放已验证的北京、上海采集、评分和招呼语生成；验证码或限流会立即停止"}
+        {"key": "51job", "label": "前程无忧独立设置", "type": "object", "description": "当前开放已验证的北京、上海采集、评分和招呼语生成；验证码或限流会立即停止"},
+        {"key": "liepin", "label": "猎聘独立设置", "type": "object", "description": "猎聘（Liepin）采集、评分与招呼语生成；城市经 dqs 参数过滤，验证码或限流会立即停止整个平台任务"}
       ]
     },
     {
