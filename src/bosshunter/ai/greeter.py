@@ -496,10 +496,23 @@ def _review_with_token_retry(greeting: str, job: dict, config: dict) -> dict | N
         raise
 
 
-def generate_greetings(config: dict) -> int:
-    """Generate greetings for approved jobs with optional self-review. Returns count generated."""
+def generate_greetings(config: dict, job_ids: list[str] | None = None) -> int:
+    """Generate greetings for approved jobs (or specific job_ids) with optional self-review.
+
+    Returns count generated. When ``job_ids`` is provided, only those jobs are
+    processed regardless of their current status, which lets the dashboard
+    generate greetings for pending-confirmation jobs without sending them.
+    """
     db = get_db()
-    jobs = get_jobs_by_status(db, "approved")
+    if job_ids:
+        placeholders = ",".join("?" for _ in job_ids)
+        rows = db.execute(
+            f"SELECT * FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders}) ORDER BY score DESC",
+            [str(job_id) for job_id in job_ids],
+        ).fetchall()
+        jobs = [dict(row) for row in rows]
+    else:
+        jobs = get_jobs_by_status(db, "approved")
     _workbench_job_ids = {str(job_id) for job_id in config.get("_workbench_job_ids", [])}
     if _workbench_job_ids:
         jobs = [job for job in jobs if str(job["id"]) in _workbench_job_ids]

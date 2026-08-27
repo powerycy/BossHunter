@@ -309,6 +309,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const [statsScope, setStatsScope] = useState<StatsScope>('today')
   const [collectDialogOpen, setCollectDialogOpen] = useState(false)
   const [collectDialogMode, setCollectDialogMode] = useState<'collect' | 'full'>('collect')
+  const [generatingGreetings, setGeneratingGreetings] = useState(false)
 
   const todayJobs = useMemo(
     () => workbench.pending_confirmation.filter(job => !confirmedDeliveryIds.has(job.id)),
@@ -489,6 +490,36 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       setNotice(`已放弃 ${count} 个岗位。`)
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '放弃失败')
+    }
+  }
+
+  const generateGreetings = async (ids: string[]) => {
+    if (!ids.length) return
+    const count = ids.length
+    setGeneratingGreetings(true)
+    try {
+      const res = await fetch('/api/workbench/greetings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_ids: ids }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || '生成招呼语失败')
+      }
+      const data = await res.json().catch(() => ({}))
+      await refresh()
+      setNotice(
+        data.generated_count === count
+          ? `已为 ${count} 个岗位生成招呼语。`
+          : data.generated_count
+            ? `已生成 ${data.generated_count}/${count} 条招呼语，其余岗位可稍后重试。`
+            : '未生成招呼语，请检查 AI 配置后重试。'
+      )
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '生成招呼语失败')
+    } finally {
+      setGeneratingGreetings(false)
     }
   }
 
@@ -866,6 +897,9 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           <div className="flex gap-2">
             <Button variant="secondary" size="sm" onClick={() => setSelected(filteredTodayJobs.map(job => job.id))}>全选</Button>
             <Button variant="secondary" size="sm" onClick={() => setSelected([])}>清空</Button>
+            <Button variant="secondary" size="sm" disabled={generatingGreetings} onClick={() => generateGreetings(actionableSelected)}>
+              {generatingGreetings ? '生成中...' : `生成打招呼用语 ${actionableSelected.length} 个`}
+            </Button>
             <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(actionableSelected)}>放弃已选 {actionableSelected.length} 个</Button>
             <Button size="sm" onClick={() => confirmDeliver(actionableSelected)}>一键投递已选 {actionableSelected.length} 个</Button>
           </div>
@@ -901,7 +935,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         )}
       </section>
 
-      {selectedJob && <JobDetailModal job={selectedJob} onClose={() => setSelectedJob(null)} />}
+      {selectedJob && <JobDetailModal job={selectedJob} onClose={() => setSelectedJob(null)} onChanged={() => void refresh()} />}
       <CollectJobsDialog
         open={collectDialogOpen}
         mode={collectDialogMode}
@@ -959,7 +993,67 @@ function JobActionCard({ job, selected, onToggle, onDetail, onReject }: { job: J
   )
 }
 
-function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void }) {
+function JobDetailModal({ job, onClose, onChanged }: { job: Job; onClose: () => void; onChanged?: () => void }) {
+  const [greeting, setGreeting] = useState(job.greeting || '')
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
+  const [notice, setNotice] = useState('')
+
+  const saveGreeting = async () => {
+    const text = greeting.trim()
+    if (!text) {
+      setNotice('招呼语不能为空')
+      return
+    }
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/jobs/${job.id}/greeting`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ greeting: text }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || '保存失败')
+      }
+      setEditing(false)
+      setNotice('招呼语已保存')
+      onChanged?.()
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const regenerateGreeting = async () => {
+    setRegenerating(true)
+    setNotice('')
+    try {
+      const res = await fetch('/api/workbench/greetings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_ids: [job.id] }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || '重新生成失败')
+      }
+      const detailRes = await fetch(`/api/jobs/${job.id}`)
+      if (detailRes.ok) {
+        const detail = await detailRes.json()
+        setGreeting(detail.greeting || '')
+      }
+      setNotice('已重新生成招呼语')
+      onChanged?.()
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '重新生成失败')
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-6">
       <div className="max-h-[86vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-card-border bg-white p-6 shadow-2xl">
@@ -984,8 +1078,35 @@ function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void }) {
           <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">{job.score_reason || '-'}</p>
         </div>
         <div className="mt-4 rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
-          <div className="text-sm font-black">招呼语</div>
-          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">{job.greeting || '未生成'}</p>
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-black">招呼语</div>
+            <div className="flex gap-2">
+              {editing ? (
+                <>
+                  <Button size="sm" disabled={saving} onClick={saveGreeting}>{saving ? '保存中...' : '保存'}</Button>
+                  <Button size="sm" variant="secondary" onClick={() => { setEditing(false); setGreeting(job.greeting || '') }}>取消</Button>
+                </>
+              ) : (
+                <>
+                  <Button size="sm" variant="secondary" onClick={() => { setEditing(true); setNotice('') }}>编辑</Button>
+                  <Button size="sm" variant="secondary" disabled={regenerating} onClick={regenerateGreeting}>
+                    {regenerating ? '生成中...' : 'AI 重新生成'}
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+          {editing ? (
+            <textarea
+              className="mt-2 w-full rounded-xl border border-card-border bg-white p-3 text-sm leading-6 text-foreground focus:border-primary focus:outline-none"
+              rows={4}
+              value={greeting}
+              onChange={e => setGreeting(e.target.value)}
+            />
+          ) : (
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">{greeting || '未生成'}</p>
+          )}
+          {notice && <div className="mt-2 text-xs font-bold text-primary">{notice}</div>}
         </div>
         <div className="mt-4 rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
           <div className="text-sm font-black">JD</div>

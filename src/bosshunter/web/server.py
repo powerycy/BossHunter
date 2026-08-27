@@ -48,6 +48,7 @@ from bosshunter.db import (
 	query_jobs,
 	restore_jobs,
 	soft_delete_jobs,
+	update_job_greeting,
 	update_job_status,
 )
 from bosshunter.collection.capabilities import platform_supports
@@ -1566,6 +1567,66 @@ def api_workbench_reject():
 			db.close()
 
 		return _json_response({"success": True, "count": len(job_ids)})
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/workbench/greetings", method="POST")
+def api_workbench_generate_greetings():
+	"""Generate greetings for selected jobs without sending them."""
+	from bosshunter.ai.greeter import generate_greetings
+
+	try:
+		body = request.json or {}
+		job_ids = [str(job_id) for job_id in body.get("job_ids", []) if str(job_id)]
+		if not job_ids:
+			return _json_response({"error": "请选择要生成招呼语的岗位"}, 400)
+
+		db = _get_web_db()
+		try:
+			placeholders = ",".join("?" for _ in job_ids)
+			active_ids = {
+				str(row["id"])
+				for row in db.execute(
+					f"SELECT id FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
+					job_ids,
+				).fetchall()
+			}
+		finally:
+			db.close()
+		invalid_ids = [job_id for job_id in job_ids if job_id not in active_ids]
+		if invalid_ids:
+			return _json_response({"error": "所选岗位不存在或已进入回收站", "invalid_ids": invalid_ids}, 409)
+
+		config = load_config(CONFIG_PATH)
+		config["_workbench_job_ids"] = job_ids
+		generated_count = generate_greetings(config, job_ids=job_ids)
+		return _json_response({"success": True, "generated_count": generated_count})
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/jobs/<job_id>/greeting", method="POST")
+def api_job_update_greeting(job_id):
+	"""Update the greeting text for a single job."""
+	try:
+		body = request.json or {}
+		greeting = str(body.get("greeting") or "").strip()
+		if not greeting:
+			return _json_response({"error": "招呼语不能为空"}, 400)
+
+		db = _get_web_db()
+		try:
+			row = db.execute(
+				"SELECT id FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+			).fetchone()
+			if not row:
+				return _json_response({"error": "岗位不存在或已进入回收站"}, 404)
+			update_job_greeting(db, job_id, greeting)
+			add_history(db, job_id, "greeting_edited", "Web Dashboard 编辑招呼语")
+		finally:
+			db.close()
+		return _json_response({"success": True, "greeting": greeting})
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
 
