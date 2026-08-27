@@ -33,7 +33,7 @@ collection:
   default_order: [boss]
   auto_score_default: false
   # 以下页面额度只统计 BOSS 直聘；智联和 51job 不占用。
-  daily_search_page_limit: 30     # BOSS 单日搜索页上限
+  daily_search_page_limit: 60     # BOSS 单日搜索页上限
   daily_detail_page_limit: 150    # BOSS 单日详情页尝试上限
   max_consecutive_page_failures: 3
   risk_pause_min_minutes: 5       # BOSS 风险信号后随机暂停下限

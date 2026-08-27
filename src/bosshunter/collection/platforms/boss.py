@@ -200,7 +200,7 @@ class BossCollector:
             delay_max=5.0 * delay_multiplier,
         )
         guard = PlatformAccessGuard(self.safety_conn, self.config, "collection", "boss") if self.safety_conn is not None else None
-        search_limit = _positive_int(collection_cfg.get("daily_search_page_limit", 30), 30)
+        search_limit = _positive_int(collection_cfg.get("daily_search_page_limit", 60), 60)
         detail_limit = _positive_int(collection_cfg.get("daily_detail_page_limit", 150), 150)
         failure_limit = _positive_int(collection_cfg.get("max_consecutive_page_failures", 3), 3)
         risk_pause_min = _positive_int(collection_cfg.get("risk_pause_min_minutes", 5), 5)

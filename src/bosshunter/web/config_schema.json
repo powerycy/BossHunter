@@ -62,7 +62,7 @@
       "label": "反监测设置",
       "icon": "Shield",
       "fields": [
-        {"key": "daily_search_page_limit", "label": "BOSS 单日搜索页上限", "type": "number", "min": 1, "max": 200, "default": 30},
+        {"key": "daily_search_page_limit", "label": "BOSS 单日搜索页上限", "type": "number", "min": 1, "max": 200, "default": 60},
         {"key": "daily_detail_page_limit", "label": "BOSS 单日详情页尝试上限", "type": "number", "min": 1, "max": 500, "default": 150},
         {"key": "max_consecutive_page_failures", "label": "BOSS 连续页面失败停止阈值", "type": "number", "min": 1, "max": 10, "default": 3},
         {"key": "risk_pause_min_minutes", "label": "BOSS 风险暂停最少分钟", "type": "number", "min": 1, "max": 60, "default": 5},

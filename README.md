@@ -13,7 +13,6 @@
   <a href="https://github.com/powerycy/BossHunter/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/powerycy/BossHunter?style=social"></a>
   <a href="https://github.com/powerycy/BossHunter"><img alt="Version" src="https://img.shields.io/badge/version-v2.3.1-FB6511"></a>
   <a href="https://www.python.org/"><img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white"></a>
-  <a href="LICENSE"><img alt="Non-Commercial License" src="https://img.shields.io/badge/license-Non--Commercial-6f42c1"></a>
   <a href="https://github.com/powerycy/BossHunter/issues"><img alt="GitHub Issues" src="https://img.shields.io/github/issues/powerycy/BossHunter"></a>
   <a href="https://github.com/powerycy/BossHunter/commits/main"><img alt="Last Commit" src="https://img.shields.io/github/last-commit/powerycy/BossHunter"></a>
 </p>
@@ -300,7 +299,6 @@ bosshunter status --full        # 完整仪表盘
 BossHunter/
 ├── SKILL.md              # Skill 行为定义（Claude Code 加载）
 ├── README.md             # 本文件
-├── LICENSE               # MIT License
 ├── config.example.yaml   # 配置模板（脱敏）
 ├── pyproject.toml        # Python 包定义
 ├── .gitignore            # 安全排除规则
@@ -531,9 +529,3 @@ BossHunter 感谢每一位参与改进的开发者。下面的榜单记录外部
 | 13 | [@Colin-Cai0318](https://github.com/Colin-Cai0318) | **1%** | ✅ 部分适配合入 | 🧾 Markdown 简历上传 UTF-8 编码校验；完整简历工作室继续独立审查 | [#61](https://github.com/powerycy/BossHunter/pull/61) → [#62](https://github.com/powerycy/BossHunter/pull/62) |
 
 > **计算口径**：产品影响 40% + 可靠性与安全 25% + 测试与可维护性 20% + 采纳状态 15%。本榜单只计算实际进入主线的内容；选择性整合按最终采用范围计分，未采用或仍在审查的部分不计入。为保持总和 100%，历史贡献会随新增贡献按相同口径重新归一化。百分比不代表代码所有权、奖金分配或单纯的代码行数。项目发起人和 AI 工具提交不参与本榜单。数据更新于 **2026-08-25**；如署名或功能描述需要修正，欢迎提交 Issue。
-
----
-
-## License
-
-[MIT License](LICENSE)
