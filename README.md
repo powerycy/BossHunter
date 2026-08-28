@@ -506,6 +506,8 @@ https://github.com/powerycy/BossHunter
 - 不接受收集、上传或外发用户隐私数据的 PR。
 - 建议先开 Issue 讨论再提交大改动。
 
+长期参与维护的社区成员可以查看 [项目治理与候选晋升规则](GOVERNANCE.md)。现任及历任维护者、任期与负责范围统一记录在 [MAINTAINERS.md](MAINTAINERS.md)，与下方贡献榜分开管理。
+
 ---
 
 ## 🏆 社区贡献影响力

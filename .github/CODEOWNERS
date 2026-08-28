@@ -1,0 +1,26 @@
+# Initial ownership is intentionally conservative while the first maintainer
+# cohort is being recruited. Replace @powerycy with visible organization teams
+# that have Write access only after candidates complete the documented trial.
+
+* @powerycy
+
+# Governance, maintainer history, contributor ranking, and repository policy.
+/GOVERNANCE.md @powerycy
+/MAINTAINERS.md @powerycy
+/CONTRIBUTING.md @powerycy
+/README.md @powerycy
+/.github/ @powerycy
+
+# Core and safety: delivery, browser control, credentials, data, and releases.
+/src/bosshunter/executor/ @powerycy
+/src/bosshunter/browser/ @powerycy
+/src/bosshunter/throttle.py @powerycy
+/src/bosshunter/platform_safety.py @powerycy
+/src/bosshunter/config.py @powerycy
+/src/bosshunter/db.py @powerycy
+/src/bosshunter/ai/credentials.py @powerycy
+/src/bosshunter/web/server.py @powerycy
+/pyproject.toml @powerycy
+
+# Product/AI and platform-adapter team owners will be added after their teams
+# exist and have Write access. The global owner remains enforceable until then.
