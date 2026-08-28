@@ -350,7 +350,10 @@ def mark_external_jobs_sent(conn: sqlite3.Connection, job_ids: Any, *, confirmed
         for row in pending_rows:
             job_id = str(row["id"])
             platform = str(row.get("source_platform") or "")
-            detail = f"用户在{platform_labels[platform]}完成投递后手动标记"
+            # 用 .get 兜底，避免未来扩展 EXTERNAL_MANUAL_SEND_PLATFORMS 时
+            # 出现未登记平台导致 KeyError 使整批标记失败。
+            platform_label = platform_labels.get(platform, platform)
+            detail = f"用户在{platform_label}完成投递后手动标记"
             conn.execute(
                 "UPDATE jobs SET status = 'sent', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
                 (job_id,),
