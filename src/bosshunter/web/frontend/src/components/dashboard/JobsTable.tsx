@@ -191,6 +191,11 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                             {isExternalPlatform && !externalUrl && (
                               <span className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] font-bold text-amber-700">链接不可用</span>
                             )}
+                            {!isExternalPlatform && job.url && (
+                              <a href={job.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-card-border px-2 py-1.5 text-[11px] font-bold text-primary hover:bg-[#FFF0E5]">
+                                <ExternalLink className="h-3.5 w-3.5" />跳转岗位
+                              </a>
+                            )}
                             {isExternalPlatform && onMarkManuallySent && (
                               <button
                                 type="button"
