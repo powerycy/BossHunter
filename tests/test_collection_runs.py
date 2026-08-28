@@ -14,7 +14,7 @@ from bosshunter.db import get_db, insert_job
 
 class CollectionRunAndMigrationTests(TestCase):
     def test_source_migration_is_idempotent_and_preserves_legacy_boss_rows(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "jobs.db"
             db = get_db(path)
             insert_job(db, {
@@ -44,7 +44,7 @@ class CollectionRunAndMigrationTests(TestCase):
         self.assertEqual(dict(legacy), {"id": "legacy-boss-1", "source_platform": "boss", "source_job_id": None})
 
     def test_collection_run_checkpoint_persists_platform_progress_and_restart_stop(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "runs.db"
             options = {"platform_order": ["boss", "zhilian"], "auto_score": False}
             initial_states = {"boss": {"status": "queued"}, "zhilian": {"status": "queued"}}

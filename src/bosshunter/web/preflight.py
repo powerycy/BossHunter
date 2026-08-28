@@ -6,7 +6,6 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
 
 import httpx
 

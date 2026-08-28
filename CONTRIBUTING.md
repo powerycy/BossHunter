@@ -35,13 +35,13 @@
 1. Fork 仓库
 2. 基于 `main` 创建功能分支：`git checkout -b feat/your-feature`
 3. 提交代码，确保 `bosshunter --help` 正常运行
-4. 运行相关测试；涉及前端时同时确认前端可以构建
+4. 运行相关测试（`python -m pytest`）；涉及前端时同时确认前端可以构建
 5. 推送并创建 Pull Request
 6. 等待对应维护域的 review
 
 ### 代码风格
 
-- Python: 遵循 ruff 默认规则，行长 120
+- Python: 遵循 ruff 规则（`E4`/`E7`/`E9`/`F`，显式声明于 pyproject），行长 120
 - 提交信息：中文或英文均可，简洁描述改动
 
 ## 本地开发
@@ -52,6 +52,9 @@ pip install -e ".[dev]"
 
 # 检查代码风格
 ruff check src/
+
+# 运行测试
+python -m pytest
 
 # 运行 CLI
 bosshunter --help

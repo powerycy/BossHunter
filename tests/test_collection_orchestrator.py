@@ -76,7 +76,7 @@ class CollectionOrchestratorTests(TestCase):
             "boss": lambda: _FakeCollector("boss", events, boss_candidates),
             "zhilian": lambda: _FakeCollector("zhilian", events, zhilian_candidates),
         })
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "collection.db"
             db = get_db(db_path)
             try:
@@ -114,7 +114,7 @@ class CollectionOrchestratorTests(TestCase):
     def test_auto_score_is_opt_in_and_receives_only_this_run_ids(self):
         candidates = [_candidate("boss", "new-1")]
         registry = CollectorRegistry({"boss": lambda: _FakeCollector("boss", [], candidates)})
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "collection.db"
             with patch("bosshunter.ai.scorer.score_jobs") as score_jobs:
                 result = CollectionOrchestrator({}, db_path=db_path, registry=registry).run(
@@ -127,7 +127,7 @@ class CollectionOrchestratorTests(TestCase):
         self.assertFalse(kwargs["force_rescore"])
         self.assertEqual(result["collected_job_ids"], ["new-1"])
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             with patch("bosshunter.ai.scorer.score_jobs") as score_jobs:
                 CollectionOrchestrator({}, db_path=Path(tmp) / "collection.db", registry=registry).run(
                     _options(auto_score=False)
@@ -141,7 +141,7 @@ class CollectionOrchestratorTests(TestCase):
             "boss": lambda: _FakeCollector("boss", events, [_candidate("boss", "one")], stop=True),
             "zhilian": lambda: _FakeCollector("zhilian", events, [_candidate("zhilian", "two")]),
         })
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             config = {"_workbench_stop_event": stop_event}
             with patch("bosshunter.ai.scorer.score_jobs") as score_jobs:
                 result = CollectionOrchestrator(config, db_path=Path(tmp) / "collection.db", registry=registry).run(

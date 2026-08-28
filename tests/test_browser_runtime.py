@@ -11,7 +11,7 @@ from bosshunter.config import load_config
 
 class BrowserRuntimeConfigTests(unittest.TestCase):
     def test_browser_defaults_are_loaded(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             config = load_config(Path(tmp) / "missing.yaml")
 
         self.assertEqual(config["browser"]["runtime"], "builtin")
@@ -23,7 +23,7 @@ class BrowserRuntimeConfigTests(unittest.TestCase):
         self.assertTrue(config["browser"]["site_patterns"])
 
     def test_browser_config_overrides_merge_with_defaults(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             config_path = Path(tmp) / "config.yaml"
             config_path.write_text(
                 yaml.dump({"browser": {"proxy_port": 4567, "auto_start_proxy": False}}, sort_keys=False),

@@ -27,7 +27,7 @@ def test_platform_job_record_keeps_education_and_recruitment_type():
 
 
 def test_database_stores_structured_education_fields():
-    with tempfile.TemporaryDirectory() as temporary:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
         db = get_db(Path(temporary) / "jobs.db")
         try:
             inserted = insert_job_if_new(db, {

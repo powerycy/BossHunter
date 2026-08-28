@@ -24,6 +24,10 @@ dependencies = [
 pdf = [
     "xhtml2pdf>=0.2.11",
 ]
+dev = [
+    "pytest>=8.0",
+    "ruff==0.16.0",
+]
 
 [project.scripts]
 bosshunter = "bosshunter.main:cli"
@@ -43,6 +47,10 @@ pythonpath = ["src"]
 [tool.ruff]
 line-length = 120
 indent-width = 4
+
+[tool.ruff.lint]
+# 显式声明，避免依赖 ruff 默认规则集随版本漂移（新版默认集远大于 E/F）
+select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.format]
 indent-style = "tab"

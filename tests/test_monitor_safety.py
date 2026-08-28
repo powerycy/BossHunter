@@ -132,7 +132,7 @@ class MonitorIdempotencyAndLimitTests(unittest.TestCase):
             {"sender": "hr", "text": "也请补充一个最近的项目案例。"},
         ]
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "data" / "bosshunter.db"
             db = get_db(db_path)
             try:
@@ -189,7 +189,7 @@ class MonitorIdempotencyAndLimitTests(unittest.TestCase):
     def test_chat_list_skips_same_pending_before_opening_and_caps_new_items(self):
         from bosshunter.executor import monitor
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "data" / "bosshunter.db"
             db = get_db(db_path)
             try:
@@ -240,7 +240,7 @@ class MonitorRiskTests(unittest.TestCase):
     def test_captcha_stops_cycle_and_records_only_safe_risk_detail(self):
         from bosshunter.executor import monitor
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "data" / "bosshunter.db"
             db = get_db(db_path)
             try:
@@ -272,7 +272,7 @@ class MonitorRiskTests(unittest.TestCase):
     def test_consecutive_page_failures_stop_at_configured_threshold(self):
         from bosshunter.executor import monitor
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "data" / "bosshunter.db"
 
             def open_db():

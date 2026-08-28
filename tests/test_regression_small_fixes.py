@@ -92,7 +92,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_load_config_rejects_unsupported_ai_provider(self):
         from bosshunter.config import load_config
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             config_path = Path(tmp) / "config.yaml"
             config_path.write_text("ai:\n  provider: openai\n", encoding="utf-8")
 
@@ -102,7 +102,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_load_config_defaults_to_not_allowing_internships(self):
         from bosshunter.config import load_config
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             config_path = Path(tmp) / "config.yaml"
             config_path.write_text("profile:\n  salary_min: 10\n", encoding="utf-8")
 
@@ -114,7 +114,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_load_config_defaults_to_disabled_follow_up(self):
         from bosshunter.config import load_config
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             config_path = Path(tmp) / "config.yaml"
             config_path.write_text("profile:\n  salary_min: 10\n", encoding="utf-8")
 

@@ -31,7 +31,7 @@ class CollectionSafetyTests(unittest.TestCase):
         self.assertNotIn("max_search_pages_per_cycle", collection)
 
     def test_retired_count_limits_are_removed_from_existing_config(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             config_path = Path(tmp) / "config.yaml"
             config_path.write_text(
                 """
@@ -63,7 +63,7 @@ platforms:
             self.assertNotIn("target_count", config["platforms"][platform]["search"])
 
     def test_daily_access_limit_stops_before_the_next_page(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")
             guard = PlatformAccessGuard(db, {"safety": {"daily_platform_page_limit": 500}}, "collection")
             for _ in range(30):
@@ -80,7 +80,7 @@ platforms:
             db.close()
 
     def test_global_page_budget_is_shared_across_workflows(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")
             config = {"safety": {"daily_platform_page_limit": 2}}
             PlatformAccessGuard(db, config, "collection").reserve("search_page")
@@ -93,7 +93,7 @@ platforms:
             db.close()
 
     def test_external_page_events_do_not_consume_boss_page_budget(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")
             add_platform_access(db, "collection", "search_page", platform="zhilian")
             guard = PlatformAccessGuard(db, {"safety": {"daily_platform_page_limit": 1}}, "collection")
@@ -106,7 +106,7 @@ platforms:
             db.close()
 
     def test_risk_lock_survives_a_new_database_connection(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "bosshunter.db"
             db = get_db(db_path)
             set_platform_safety_lock(db, "captcha", minutes=30)

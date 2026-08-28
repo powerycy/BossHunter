@@ -142,7 +142,7 @@ class ResumeArtifactTests(unittest.TestCase):
             f"{RESUME_COMPLETION_MARKER}"
         )
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             resume_path = root / "resume.md"
             resume_path.write_text(
@@ -187,7 +187,7 @@ class ResumeArtifactTests(unittest.TestCase):
         call_claude.return_value = "## 岗位匹配亮点\n以下内容基于原始简历整理。"
         render_pdf.return_value = False
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             resume_path = root / "resume.md"
             output_dir = root / "out"
@@ -227,7 +227,7 @@ class ResumeArtifactTests(unittest.TestCase):
         call_claude.return_value = "# 候选人\n\n## 基本信息\n\n面向周围神经外科领域专家及临床医生的专业学术交流项目，围绕周围神经疾病诊疗、手术技术、病例"
         render_pdf.return_value = False
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             resume_path = root / "resume.md"
             output_dir = root / "out"
@@ -283,7 +283,7 @@ class ResumeArtifactTests(unittest.TestCase):
         call_claude.return_value = tailored
         render_pdf.return_value = False
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             resume_path = root / "resume.md"
             output_dir = root / "out"
@@ -326,7 +326,7 @@ class ResumeArtifactTests(unittest.TestCase):
         get_db.return_value = db
         render_pdf.return_value = False
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             resume_path = root / "resume.md"
             output_dir = root / "out"
@@ -398,7 +398,7 @@ class ResumeArtifactTests(unittest.TestCase):
         call_claude.return_value = tailored
         render_pdf.return_value = False
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             resume_path = root / "resume.md"
             output_dir = root / "out"
@@ -472,7 +472,7 @@ class ResumeArtifactTests(unittest.TestCase):
         call_claude.side_effect = [overlong_tailored, compressed_tailored]
         render_pdf.return_value = False
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             resume_path = root / "resume.md"
             output_dir = root / "out"
@@ -546,7 +546,7 @@ class ResumeArtifactTests(unittest.TestCase):
 
         render_pdf.side_effect = write_four_page_pdf
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             resume_path = root / "resume.md"
             output_dir = root / "out"
@@ -581,7 +581,7 @@ class ResumePdfRuntimeTests(unittest.TestCase):
     def test_render_pdf_via_cdp_uses_browser_facade(self, new_tab, print_pdf, close_tab):
         from bosshunter.ai.resume import _render_pdf_via_cdp
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             output = Path(tmp) / "resume.pdf"
             new_tab.return_value = "target-1"
             print_pdf.side_effect = lambda target, file_path: output.write_bytes(b"pdf") or True
@@ -601,7 +601,7 @@ class ResumePdfRuntimeTests(unittest.TestCase):
     def test_render_pdf_via_cdp_rejects_missing_output_file(self, new_tab, print_pdf, close_tab):
         from bosshunter.ai.resume import _render_pdf_via_cdp
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             output = Path(tmp) / "missing.pdf"
             new_tab.return_value = "target-1"
             print_pdf.return_value = True

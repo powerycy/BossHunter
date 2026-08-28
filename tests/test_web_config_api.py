@@ -33,7 +33,7 @@ class WebConfigApiTests(unittest.TestCase):
 		self.assertNotIn("auth_token_masked", payload)
 
 	def test_write_config_replaces_the_file_without_leaving_a_temp_file(self):
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text("ai:\n  model: old\n", encoding="utf-8")
 
@@ -44,7 +44,7 @@ class WebConfigApiTests(unittest.TestCase):
 			self.assertEqual(list(Path(tmp).glob(".config.*.tmp")), [])
 
 	def test_sanitize_config_strips_display_fields_and_preserves_blank_key(self):
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text(
 				yaml.dump({"ai": {"api_key": "test-api-key-12345678", "model": "old"}}, sort_keys=False),
@@ -81,7 +81,7 @@ class WebConfigApiTests(unittest.TestCase):
 			self.assertEqual(cleaned["platforms"][platform]["search"], {})
 
 	def test_sanitize_config_preserves_omitted_api_key(self):
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text(
 				yaml.dump({"ai": {"api_key": "test-api-key-12345678", "model": "old"}}, sort_keys=False),
@@ -101,7 +101,7 @@ class WebConfigApiTests(unittest.TestCase):
 		self.assertNotIn("api_key_masked", cleaned["ai"])
 
 	def test_sanitize_config_accepts_new_api_key(self):
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text(
 				yaml.dump({"ai": {"api_key": "test-api-key-old", "model": "old"}}, sort_keys=False),
@@ -121,7 +121,7 @@ class WebConfigApiTests(unittest.TestCase):
 
 	def test_sanitize_config_forces_fixed_anthropic_provider(self):
 		# Arrange
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text(yaml.dump({"ai": {"provider": "anthropic"}}, sort_keys=False), encoding="utf-8")
 
@@ -134,7 +134,7 @@ class WebConfigApiTests(unittest.TestCase):
 		self.assertEqual(cleaned["ai"]["model"], "claude-sonnet-4-6")
 
 	def test_sanitize_config_maps_deepseek_service_and_clears_old_credentials(self):
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text(
 				yaml.dump(
@@ -166,7 +166,7 @@ class WebConfigApiTests(unittest.TestCase):
 		self.assertNotIn("clear_credentials", cleaned["ai"])
 
 	def test_sanitize_config_keeps_new_key_while_clearing_old_auth_token(self):
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text(
 				yaml.dump(
@@ -205,7 +205,7 @@ class WebConfigApiTests(unittest.TestCase):
 		self.assertEqual(config["ai"]["auth_token"], "auth-token-12345678")
 
 	def test_sanitize_config_strips_auth_token_display_fields_and_preserves_blank_token(self):
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text(
 				yaml.dump({"ai": {"auth_token": "auth-token-12345678", "model": "old"}}, sort_keys=False),

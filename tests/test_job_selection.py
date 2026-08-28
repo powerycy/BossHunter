@@ -539,7 +539,7 @@ class JobSelectionTests(unittest.TestCase):
         job = _job("retry-chat-input")
         job["greeting"] = "您好，我对这个岗位很感兴趣。"
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "bosshunter.db"
             db = get_db(db_path)
             try:
@@ -569,7 +569,7 @@ class JobSelectionTests(unittest.TestCase):
         job = _job("failed-first-contact")
         job["greeting"] = "您好，我对这个岗位很感兴趣。"
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "bosshunter.db"
             db = get_db(db_path)
             try:
@@ -603,7 +603,7 @@ class JobSelectionTests(unittest.TestCase):
         for job in jobs:
             job["greeting"] = f"您好，我对 {job['id']} 很感兴趣。"
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "bosshunter.db"
             db = get_db(db_path)
             try:
@@ -652,7 +652,7 @@ class JobSelectionTests(unittest.TestCase):
         self.assertEqual(report["stop_reason"], "daily_limit")
 
     def test_pending_confirmation_excludes_jobs_with_greetings(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")
             try:
                 insert_job(db, _job("scored"))
@@ -671,7 +671,7 @@ class JobSelectionTests(unittest.TestCase):
         self.assertEqual([job["id"] for job in jobs], ["scored"])
 
     def test_pending_confirmation_keeps_approved_jobs_without_greetings_recoverable(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")
             try:
                 insert_job(db, _job("approved"))
@@ -694,7 +694,7 @@ class JobSelectionTests(unittest.TestCase):
         self.assertEqual([job["id"] for job in jobs], ["approved"])
 
     def test_rescore_reset_only_requeues_jobs_filtered_by_ai_score(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")
             try:
                 for job_id, reason in (
@@ -726,7 +726,7 @@ class JobSelectionTests(unittest.TestCase):
         self.assertEqual(rows["ai-failed-spaced"]["status"], "filtered")
 
     def test_funnel_counts_ai_low_scores_but_excludes_prefilter_and_ai_failures(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")
             try:
                 for job_id, reason in (
@@ -748,7 +748,7 @@ class JobSelectionTests(unittest.TestCase):
         self.assertEqual(stats["AI评分"], 2)
 
     def test_ready_to_send_requires_a_non_empty_greeting(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")
             try:
                 insert_job(db, _job("no-greeting"))
@@ -773,7 +773,7 @@ class JobSelectionTests(unittest.TestCase):
         self.assertCountEqual([job["id"] for job in jobs], ["approved", "sendable"])
 
     def test_send_errors_return_only_jobs_with_generated_greetings(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")
             try:
                 insert_job(db, _job("send-failed"))
@@ -795,7 +795,7 @@ class JobSelectionTests(unittest.TestCase):
 
     def test_send_greetings_force_bypasses_send_window_restriction(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "bosshunter.db"
             db = get_db(db_path)
             try:

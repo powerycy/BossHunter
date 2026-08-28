@@ -35,7 +35,7 @@ class MonitorReplyDismissTests(unittest.TestCase):
         ]
         pending_detail = monitor._build_reply_detail(messages, "可以，我有AI内容运营经验。")
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "data" / "bosshunter.db"
             db = get_db(db_path)
             try:
@@ -94,7 +94,7 @@ class MonitorReplyDismissTests(unittest.TestCase):
         ]
         pending_detail = monitor._build_reply_detail(dismissed_messages, "可以，我有AI内容运营经验。")
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "data" / "bosshunter.db"
             db = get_db(db_path)
             try:
@@ -236,7 +236,7 @@ class MonitorReplyDismissTests(unittest.TestCase):
             {"sender": "hr", "text": "可以"},
         ]
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "data" / "bosshunter.db"
             generated_resume = Path(tmp) / "tailored.md"
             generated_resume.write_text("# 定制简历", encoding="utf-8")
@@ -289,7 +289,7 @@ class MonitorReplyDismissTests(unittest.TestCase):
             {"sender": "hr", "text": "方便发一份你的简历过来吗？"},
         ]
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "data" / "bosshunter.db"
             db = get_db(db_path)
             try:
@@ -343,7 +343,7 @@ class MonitorReplyDismissTests(unittest.TestCase):
             {"sender": "hr", "text": "请发一份简历。"},
         ]
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "data" / "bosshunter.db"
             db = get_db(db_path)
             try:

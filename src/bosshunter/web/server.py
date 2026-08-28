@@ -517,7 +517,7 @@ def _execute_monitor(task: WorkbenchTask, config: dict, *, initial_cooldown: boo
 	monitor_config["_workbench_stop_event"] = task.stop_requested
 	interval_min = get_effective_monitor_interval_minutes(config)
 	interval_sec = max(interval_min * 60, 1)
-	queue_lock = task.context.setdefault("monitor_queue_lock", Lock())
+	task.context.setdefault("monitor_queue_lock", Lock())
 	wakeup_event = task.context.setdefault("monitor_wakeup_event", Event())
 	task.context["monitoring"] = True
 	try:
@@ -1698,7 +1698,6 @@ def api_config_get():
 @app.route("/api/config", method="POST")
 def api_config_post():
 	try:
-		import yaml
 		data = request.json
 		if not data:
 			return _json_response({"error": "Empty body"}, 400)
@@ -2003,7 +2002,6 @@ def api_resume_get():
 @app.route("/api/resume/upload", method="POST")
 def api_resume_upload():
 	try:
-		import yaml
 		upload = request.files.get("file")
 		if not upload:
 			return _json_response({"error": "No file uploaded"}, 400)
@@ -2041,7 +2039,6 @@ def api_resume_upload():
 @app.route("/api/resume", method="DELETE")
 def api_resume_delete():
 	try:
-		import yaml
 		config = load_config(CONFIG_PATH)
 
 		# Never delete the master resume from disk; only detach it from config.

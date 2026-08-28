@@ -153,7 +153,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_missing_api_route_returns_json_404_not_spa_html(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             server.set_base_dir(Path(tmp))
 
             # Act
@@ -166,7 +166,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertNotIn("<!doctype html", body.lower())
 
     def test_web_assets_serve_javascript_with_windows_safe_mime_type(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             frontend_dir = Path(tmp)
             assets_dir = frontend_dir / "assets"
             assets_dir.mkdir()
@@ -181,7 +181,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_workbench_preflight_full_returns_json_payload(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             resume_path = base_dir / "resume.md"
             resume_path.write_text("# Resume", encoding="utf-8")
@@ -219,7 +219,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"ok": True, "messages": [], "checks": ready_checks})
 
     def test_web_api_workbench_preflight_supports_rescore_mode(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             resume_path = base_dir / "resume.md"
             resume_path.write_text("# Resume", encoding="utf-8")
@@ -256,7 +256,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_workbench_preflight_full_requires_ai_key(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             resume_path = base_dir / "resume.md"
             resume_path.write_text("# Resume", encoding="utf-8")
@@ -301,7 +301,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_ai_diagnostics_returns_structured_feedback(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
             server.set_base_dir(base_dir)
@@ -330,7 +330,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_activity_returns_json_without_runtime_name_error(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             server.set_base_dir(Path(tmp))
 
             # Act
@@ -342,7 +342,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(json.loads(body), [])
 
     def test_job_search_filters_keyword_score_salary_and_status(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -387,7 +387,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(payload["offset"], 0)
 
     def test_job_search_salary_overlap_excludes_unparseable_and_paginates(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -417,7 +417,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual([job["id"] for job in payload["items"]], ["middle", "low"])
 
     def test_job_search_supports_whitelisted_column_sorting(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -444,7 +444,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(invalid_order_status.startswith("400"), invalid_order_body)
 
     def test_job_search_decodes_chinese_keyword_as_utf8(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -462,7 +462,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual([job["id"] for job in payload["items"]], ["chinese-keyword"])
 
     def test_job_search_orders_newest_jobs_before_higher_scored_older_jobs(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -494,7 +494,7 @@ class WebApiRouteTests(unittest.TestCase):
         )
 
     def test_job_search_filters_jobs_by_collection_time(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -528,7 +528,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual([job["id"] for job in today_payload["items"]], ["today"])
 
     def test_job_search_rejects_invalid_numeric_ranges(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             server.set_base_dir(Path(tmp))
             paths = [
                 "/api/jobs/search?min_score=not-a-number",
@@ -544,7 +544,7 @@ class WebApiRouteTests(unittest.TestCase):
                 self.assertIn("error", json.loads(body))
 
     def test_legacy_jobs_endpoint_still_returns_an_array(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -560,7 +560,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_workbench_pending_confirmation_returns_ready_jobs(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -581,7 +581,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual([job["id"] for job in payload["pending_confirmation"]], ["ready-job"])
 
     def test_workbench_excludes_collection_only_platforms_from_automatic_delivery(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -601,7 +601,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(payload["pending_confirmation"], [])
 
     def test_web_api_workbench_reports_daily_send_quota(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -623,7 +623,7 @@ class WebApiRouteTests(unittest.TestCase):
         })
 
     def test_web_api_workbench_shows_approved_job_when_greeting_was_interrupted(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -644,7 +644,7 @@ class WebApiRouteTests(unittest.TestCase):
         )
 
     def test_workbench_returns_today_and_cumulative_funnel_counts(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -692,7 +692,7 @@ class WebApiRouteTests(unittest.TestCase):
         runner._executors["full"] = lambda task, config: server._execute_full(task, config)
 
         # Act
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -840,7 +840,7 @@ class WebApiRouteTests(unittest.TestCase):
         runner._executors["full"] = lambda task, config: server._execute_full(task, config)
 
         # Act
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             server.set_base_dir(Path(tmp))
             with patch.object(server, "_execute_collect", side_effect=fake_collect):
                 task = runner.start("full", {})
@@ -864,7 +864,7 @@ class WebApiRouteTests(unittest.TestCase):
         runner = WorkbenchTaskRunner()
         runner._tasks[full_task.id] = full_task
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -912,7 +912,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(json.loads(response_body)["id"], "full-task")
 
     def test_web_api_manual_sent_records_external_send_without_using_boss_quota(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -950,7 +950,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual([item["action"] for item in history], ["manual_sent"])
 
     def test_web_api_deliver_rejects_already_sent_jobs(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -971,7 +971,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["invalid_ids"], ["already-sent"])
 
     def test_web_api_direct_send_requires_a_retryable_greeting(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -995,7 +995,7 @@ class WebApiRouteTests(unittest.TestCase):
         runner = WorkbenchTaskRunner()
         runner._tasks[full_task.id] = full_task
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1040,7 +1040,7 @@ class WebApiRouteTests(unittest.TestCase):
         runner = WorkbenchTaskRunner()
         runner._tasks[full_task.id] = full_task
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1111,7 +1111,7 @@ class WebApiRouteTests(unittest.TestCase):
         runner = WorkbenchTaskRunner()
         runner._tasks[active_task.id] = active_task
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1201,7 +1201,7 @@ class WebApiRouteTests(unittest.TestCase):
         runner._tasks[stale_task.id] = stale_task
         runner._tasks[active_task.id] = active_task
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1255,7 +1255,7 @@ class WebApiRouteTests(unittest.TestCase):
         runner = WorkbenchTaskRunner()
         runner._tasks[active_task.id] = active_task
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1310,7 +1310,7 @@ class WebApiRouteTests(unittest.TestCase):
         runner._executors["full"] = lambda task, config: server._execute_full(task, config)
 
         # Act
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1350,7 +1350,7 @@ class WebApiRouteTests(unittest.TestCase):
             "delivery_requested": True,
         })
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1392,7 +1392,7 @@ class WebApiRouteTests(unittest.TestCase):
             calls.append("collect")
 
         # Act
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1466,7 +1466,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_workbench_reject_marks_selected_ready_jobs_rejected(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1542,7 +1542,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_workbench_reject_removes_jobs_from_pending_confirmation(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1591,7 +1591,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_resume_delete_only_detaches_config_and_keeps_master_resume_file(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             resume_path = base_dir / "data" / "resumes" / "_AI_Homepage.md"
             resume_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1614,7 +1614,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_resume_upload_preserves_chinese_markdown_filename(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
             server.set_base_dir(base_dir)
@@ -1651,7 +1651,7 @@ class WebApiRouteTests(unittest.TestCase):
         with ZipFile(docx_buffer, "w") as archive:
             archive.writestr("word/document.xml", document_xml)
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
             server.set_base_dir(base_dir)
@@ -1690,7 +1690,7 @@ class WebApiRouteTests(unittest.TestCase):
         pdf = io.BytesIO()
         writer.write(pdf)
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
             server.set_base_dir(base_dir)
@@ -1711,7 +1711,7 @@ class WebApiRouteTests(unittest.TestCase):
         pdf = io.BytesIO()
         writer.write(pdf)
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
             server.set_base_dir(base_dir)
@@ -1721,7 +1721,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"error": "PDF 已加密，请上传未加密的简历"})
 
     def test_web_api_resume_upload_rejects_damaged_pdf(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
             server.set_base_dir(base_dir)
@@ -1736,7 +1736,7 @@ class WebApiRouteTests(unittest.TestCase):
         pdf = io.BytesIO()
         writer.write(pdf)
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
             server.set_base_dir(base_dir)
@@ -1747,7 +1747,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_resume_upload_rejects_legacy_doc_format(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
             server.set_base_dir(base_dir)
@@ -1761,7 +1761,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_history_dismiss_reply_adds_dismissed_history_without_rejecting_job(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1831,7 +1831,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_history_reply_records_resolution_history(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1901,7 +1901,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_unresolved_count_includes_resume_failures_and_excludes_resolved_rows(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1928,7 +1928,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_history_can_include_unresolved_resume_failures_outside_recent_limit(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
@@ -1956,7 +1956,7 @@ class WebApiRouteTests(unittest.TestCase):
 
     def test_web_api_history_exposes_structured_failure_reason_and_resolution_state(self):
         # Arrange
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:

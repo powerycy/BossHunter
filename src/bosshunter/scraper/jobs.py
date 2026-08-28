@@ -10,7 +10,9 @@ from __future__ import annotations
 import time
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+
+# 模块内未直接使用，但 tests 通过 mock.patch("bosshunter.scraper.jobs.Progress") 依赖此属性
+from rich.progress import Progress, SpinnerColumn, TextColumn  # noqa: F401
 
 from bosshunter.browser import close_tab, evaluate, navigate, new_tab, scroll, wait_for_load
 from bosshunter.cancellation import get_stop_event

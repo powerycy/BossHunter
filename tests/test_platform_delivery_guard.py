@@ -45,7 +45,7 @@ class PlatformDeliveryGuardTests(TestCase):
             ("zhilian", "zhilian:zl-1", "https://www.zhaopin.com/jobdetail/zl-1.htm"),
             ("51job", "51job:job-1", "https://jobs.51job.com/shanghai/job-1.html"),
         ):
-            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
                 base_dir = Path(tmp)
                 db = get_db(base_dir / "data" / "bosshunter.db")
                 try:

@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from bosshunter.ai.prefilter import quick_score
 from bosshunter.browser import close_tab, evaluate, navigate, new_tab, scroll, wait_for_load
-from bosshunter.collection.base import CollectionError, CollectorHooks
+from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
 from bosshunter.config import CITY_CODES
 from bosshunter.db import add_risk_event
@@ -307,10 +307,13 @@ class BossCollector:
                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                     hooks.on_event(phase="loading_list", keyword=keyword, city=city, page=page)
                     search_url = SEARCH_URL.format(keyword=quote(keyword), city_code=city_code)
-                    if request.sort == "newest": search_url += "&sortType=2"
-                    if page > 1: search_url += f"&page={page}"
+                    if request.sort == "newest":
+                        search_url += "&sortType=2"
+                    if page > 1:
+                        search_url += f"&page={page}"
                     try:
-                        if guard is not None: guard.reserve("search_page", daily_limit=search_limit)
+                        if guard is not None:
+                            guard.reserve("search_page", daily_limit=search_limit)
                     except PlatformSafetyStop as exc:
                         return limited(exc.reason)
                     opened = self.browser.new_tab(search_url, background=True) if worker_target is None else self.browser.navigate(worker_target, search_url)
@@ -318,7 +321,8 @@ class BossCollector:
                         worker_target = str(opened)
                     if not opened or worker_target is None:
                         page_failures += 1
-                        if page_failures >= failure_limit: return page_failure_stop()
+                        if page_failures >= failure_limit:
+                            return page_failure_stop()
                         continue
                     if _wait_or_stop(hooks.stop_event, 3 * delay_multiplier, self.sleep):
                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
@@ -326,7 +330,8 @@ class BossCollector:
                     signal = confirm_risk(worker_target)
                     if signal and signal["kind"] == "user_stopped":
                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
-                    if signal: return risk(signal["kind"], signal["evidence"])
+                    if signal:
+                        return risk(signal["kind"], signal["evidence"])
                     self.browser.scroll(worker_target, y=2000)
                     if _wait_or_stop(hooks.stop_event, 1.5 * delay_multiplier, self.sleep):
                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
@@ -338,16 +343,19 @@ class BossCollector:
                         jobs = None
                     if not isinstance(jobs, list):
                         page_failures += 1
-                        if page_failures >= failure_limit: return page_failure_stop()
+                        if page_failures >= failure_limit:
+                            return page_failure_stop()
                         hooks.on_parse_failed("BOSS 列表解析失败")
                         continue
                     page_failures = 0
-                    if not jobs: break
+                    if not jobs:
+                        break
                     for raw in jobs:
                         if hooks.stop_event is not None and hooks.stop_event.is_set():
                             return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                         candidate = self._list_candidate(raw, city, city_code, keyword)
-                        if not candidate or not hooks.on_list_candidate(candidate): continue
+                        if not candidate or not hooks.on_list_candidate(candidate):
+                            continue
                         if self.config and quick_score(raw if isinstance(raw, dict) else {}, self.config)[0] <= 0:
                             hooks.on_event(message="BOSS 列表预筛不通过", increment_filtered=True)
                             continue
@@ -355,13 +363,15 @@ class BossCollector:
                             return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                         detail_url = f"https://www.zhipin.com{candidate.url}"
                         try:
-                            if guard is not None: guard.reserve("detail_page", daily_limit=detail_limit)
+                            if guard is not None:
+                                guard.reserve("detail_page", daily_limit=detail_limit)
                         except PlatformSafetyStop as exc:
                             return limited(exc.reason)
                         if not self.browser.navigate(worker_target, detail_url):
                             page_failures += 1
                             hooks.on_parse_failed("无法打开 BOSS 详情页")
-                            if page_failures >= failure_limit: return page_failure_stop()
+                            if page_failures >= failure_limit:
+                                return page_failure_stop()
                             continue
                         if _wait_or_stop(hooks.stop_event, 2 * delay_multiplier, self.sleep):
                             return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
@@ -369,7 +379,8 @@ class BossCollector:
                         signal = confirm_risk(worker_target)
                         if signal and signal["kind"] == "user_stopped":
                             return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
-                        if signal: return risk(signal["kind"], signal["evidence"])
+                        if signal:
+                            return risk(signal["kind"], signal["evidence"])
                         detail_result = self.browser.evaluate(worker_target, JS_EXTRACT_DETAIL)
                         try:
                             detail = json.loads(detail_result) if detail_result else None
@@ -378,7 +389,8 @@ class BossCollector:
                         if not isinstance(detail, dict):
                             page_failures += 1
                             hooks.on_parse_failed("BOSS 详情解析失败")
-                            if page_failures >= failure_limit: return page_failure_stop()
+                            if page_failures >= failure_limit:
+                                return page_failure_stop()
                             continue
                         page_failures = 0
                         merged = self._merge_detail(candidate, detail, detail_url)

@@ -13,7 +13,7 @@ from bosshunter.main import cli
 
 class AiServiceConfigTests(unittest.TestCase):
 	def test_legacy_openai_compatible_config_is_preserved_as_custom_service(self):
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text(
 				yaml.dump({"ai": {"provider": "openai_compatible", "model": "legacy-model"}}),
@@ -27,7 +27,7 @@ class AiServiceConfigTests(unittest.TestCase):
 		self.assertEqual(config["ai"]["model"], "legacy-model")
 
 	def test_deepseek_service_selects_openai_compatible_protocol(self):
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text(
 				yaml.dump({"ai": {"service": "deepseek", "model": "provider-current-model"}}),
@@ -43,7 +43,7 @@ class AiServiceConfigTests(unittest.TestCase):
 class AiStatusCliTests(unittest.TestCase):
 	def test_ai_status_reports_connection_without_printing_key(self):
 		original_cwd = Path.cwd()
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
 			config_path = Path(tmp) / "config.yaml"
 			config_path.write_text(
 				yaml.dump({"ai": {"service": "deepseek", "model": "provider-current-model"}}),

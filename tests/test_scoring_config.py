@@ -19,7 +19,7 @@ class ScoringConfigTests(unittest.TestCase):
         self.assertEqual(get_scoring_concurrency({"ai": {"scoring_concurrency": "invalid"}}), 1)
 
     def test_malformed_config_sections_fall_back_to_safe_defaults(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "config.yaml"
             path.write_text("profile: null\nai: invalid\nscoring: null\nmonitor: []\n", encoding="utf-8")
 

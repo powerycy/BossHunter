@@ -24,7 +24,7 @@ def _job(job_id: str, platform: str) -> dict:
 
 
 def test_external_manual_sent_is_atomic_and_idempotent():
-    with tempfile.TemporaryDirectory() as temporary:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
         db = get_db(Path(temporary) / "jobs.db")
         try:
             insert_job(db, _job("zhilian-manual", "zhilian"))
@@ -48,7 +48,7 @@ def test_external_manual_sent_is_atomic_and_idempotent():
 
 
 def test_manual_sent_rejects_boss_and_does_not_partially_update_external_jobs():
-    with tempfile.TemporaryDirectory() as temporary:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
         db = get_db(Path(temporary) / "jobs.db")
         try:
             insert_job(db, _job("external", "51job"))
@@ -70,7 +70,7 @@ def test_manual_sent_rejects_boss_and_does_not_partially_update_external_jobs():
 
 
 def test_manual_sent_requires_explicit_confirmation():
-    with tempfile.TemporaryDirectory() as temporary:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
         db = get_db(Path(temporary) / "jobs.db")
         try:
             insert_job(db, _job("external", "51job"))
