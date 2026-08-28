@@ -17,6 +17,7 @@ from bosshunter.collection.models import (
 )
 from bosshunter.collection.platforms.boss import BossCollector
 from bosshunter.collection.platforms.job51 import Job51Collector, get_51job_city_code
+from bosshunter.collection.platforms.liepin import LiepinCollector, get_liepin_city_code
 from bosshunter.collection.platforms.zhilian import ZhilianCollector, get_zhilian_city_code
 from bosshunter.collection.registry import CollectorRegistry
 from bosshunter.collection_run_store import create_collection_run, update_collection_run
@@ -24,11 +25,12 @@ from bosshunter.db import get_db, insert_job_if_new, job_identity_exists
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 
 
-SUPPORTED_PLATFORMS = {"boss", "zhilian", "51job"}
+SUPPORTED_PLATFORMS = {"boss", "zhilian", "51job", "liepin"}
 SORT_OPTIONS = {
     "boss": {"default", "newest"},
     "zhilian": {"default", "newest"},
     "51job": {"default"},
+    "liepin": {"default"},
 }
 
 
@@ -70,9 +72,10 @@ def normalize_collection_options(config: dict[str, Any], raw_options: dict[str, 
         boss_search = dict(legacy_search)
     zhilian_search = configured_platforms.get("zhilian", {}).get("search", {}) if isinstance(configured_platforms.get("zhilian"), dict) else {}
     job51_search = configured_platforms.get("51job", {}).get("search", {}) if isinstance(configured_platforms.get("51job"), dict) else {}
+    liepin_search = configured_platforms.get("liepin", {}).get("search", {}) if isinstance(configured_platforms.get("liepin"), dict) else {}
 
     platforms: dict[str, Any] = {}
-    for platform, fallback in (("boss", boss_search), ("zhilian", zhilian_search), ("51job", job51_search)):
+    for platform, fallback in (("boss", boss_search), ("zhilian", zhilian_search), ("51job", job51_search), ("liepin", liepin_search)):
         value = raw_platforms.get(platform) if isinstance(raw_platforms.get(platform), dict) else {}
         search = value.get("search") if isinstance(value.get("search"), dict) else value
         if not isinstance(search, dict):
@@ -129,7 +132,7 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
     if len(order) != len(set(order)):
         raise ValueError("采集平台顺序不能重复")
     if any(platform not in SUPPORTED_PLATFORMS for platform in order):
-        raise ValueError("采集平台只支持 boss、zhilian 或 51job")
+        raise ValueError("采集平台只支持 boss、zhilian、51job 或 liepin")
     if not isinstance(platforms, dict) or set(platforms) != set(order):
         raise ValueError("平台顺序与平台配置不一致")
     if not isinstance(options.get("auto_score", False), bool):
@@ -167,6 +170,15 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
             if missing_cities:
                 names = "、".join(missing_cities)
                 raise ValueError(f"51job 当前只开放已验证城市：{names} 尚未支持；不会猜测城市编码")
+        if platform == "liepin":
+            for city in cities:
+                resolved = get_liepin_city_code(city)
+                if resolved:
+                    city_codes[city] = resolved
+            missing_cities = [city for city in cities if not city_codes.get(city)]
+            if missing_cities:
+                names = "、".join(missing_cities)
+                raise ValueError(f"猎聘当前只开放已验证城市：{names} 尚未支持；不会猜测城市编码")
         try:
             max_pages = int(value.get("max_pages", 3))
         except (TypeError, ValueError) as exc:
@@ -288,6 +300,7 @@ class CollectionOrchestrator:
             "boss": BossCollector,
             "zhilian": ZhilianCollector,
             "51job": Job51Collector,
+            "liepin": LiepinCollector,
         })
         self.run_id = run_id or str(uuid4())
         self.task_id = task_id
