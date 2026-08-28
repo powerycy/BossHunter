@@ -50,3 +50,12 @@ Thumbs.db
 .superpowers/
 docs/superpowers/
 AGENTS.md
+
+# Local run logs & launcher scripts (keep local only)
+*.log
+start_*.bat
+start_*.ps1
+start_*.vbs
+watchdog_*.bat
+watchdog_*.ps1
+watchdog_*.vbs

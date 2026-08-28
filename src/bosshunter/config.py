@@ -82,6 +82,15 @@ DEFAULTS: dict[str, Any] = {
         "city_codes": {},
         "max_pages": 3,
         "sort": "default",
+        # BOSS直聘搜索页筛选条件(空/空列表 = 不限制)
+        "filters": {
+            "job_type": "",  # 求职类型: "" / "全职" / "兼职" / "实习"
+            "experience": [],  # 工作经验, 多选: 如 ["1-3年", "3-5年"]
+            "degree": [],  # 学历要求, 多选: 如 ["本科", "硕士"]
+            "scale": [],  # 公司规模, 多选: 如 ["100-499人", "500-999人"]
+            "salary": "",  # 薪资档位(可选): 如 "10-20K", 留空使用 profile.salary_min/max 本地过滤
+            "industry": [],  # 公司行业, 多选: 如 ["计算机软件"]
+        },
     },
     "collection": {
         "default_order": ["boss"],

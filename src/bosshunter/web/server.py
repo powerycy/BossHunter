@@ -36,6 +36,7 @@ from bosshunter.db import (
 	get_db,
 	get_funnel_stats,
 	get_jobs_needing_resume,
+	get_jobs_missing_greeting_by_ids,
 	get_jobs_pending_confirmation,
 	get_jobs_ready_to_send,
 	get_jobs_with_send_errors,
@@ -269,7 +270,7 @@ def _sanitize_config_for_write(data):
 def _preflight_messages(mode: str, config: dict, options: dict | None = None) -> list[str]:
 	"""Return user-actionable blockers before starting a dashboard task."""
 	messages: list[str] = []
-	if mode not in {"full", "collect", "rescore", "monitor"}:
+	if mode not in {"full", "collect", "score", "rescore", "monitor", "deliver_loop"}:
 		messages.append(f"不支持的任务模式：{mode}")
 	if mode == "collect":
 		try:
@@ -299,7 +300,7 @@ def _preflight_messages(mode: str, config: dict, options: dict | None = None) ->
 			if not full_options.get("platform_order"):
 				messages.append("运行全流程至少需要选择一个采集平台。")
 
-	if mode in {"full", "rescore"} and not get_ai_api_key(config):
+	if mode in {"full", "collect", "score", "rescore", "deliver_loop"} and not get_ai_api_key(config):
 		messages.append("请先在配置页填写当前 AI 服务的 API Key，或设置对应的标准环境变量。")
 
 	return messages
@@ -786,10 +787,16 @@ def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
 		_log(task, f"招呼语生成完成：{generated_count}/{len(selected_job_ids) or generated_count}")
 		if task.stop_requested.is_set():
 			return
-		if selected_job_ids and generated_count != len(selected_job_ids):
-			raise RuntimeError(
-				f"招呼语生成失败：选择 {len(selected_job_ids)} 个岗位，仅成功生成 {generated_count} 条；未发送任何消息"
-			)
+		if selected_job_ids:
+			missing_db = _get_web_db()
+			try:
+				missing_jobs = get_jobs_missing_greeting_by_ids(missing_db, selected_job_ids)
+			finally:
+				missing_db.close()
+			if missing_jobs:
+				raise RuntimeError(
+					f"招呼语生成失败：仍有 {len(missing_jobs)} 个选中的岗位缺少招呼语；未发送任何消息"
+				)
 	_log(task, "发送招呼语")
 	# The workbench must obey the same send window and day-off guard as the CLI.
 	# ``force`` remains an explicit CLI-only override and is never implied by a
@@ -838,13 +845,59 @@ def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
 		raise RuntimeError(f"发送已安全暂停：检测到{reason_labels[stop_reason]}")
 
 
+def _execute_deliver_loop(task: WorkbenchTask, config: dict) -> None:
+	"""持续监控：为已确认但未生成招呼语的岗位生成招呼语，然后投递。"""
+	from bosshunter.ai.greeter import generate_greetings
+	from bosshunter.executor.sender import send_greetings
+
+	interval_min = int(config.get("monitor", {}).get("interval", 30) or 30)
+	interval_sec = max(interval_min * 60, 1)
+
+	while not task.stop_requested.is_set():
+		_log(task, "检查已确认但未生成招呼语的岗位")
+		greet_config = dict(config)
+		greet_config["_workbench_stop_event"] = task.stop_requested
+		greet_config["_workbench_log"] = lambda message: _log(task, message)
+		greet_config["_workbench_greeting_progress"] = lambda state: _log(
+			task,
+			f"招呼语生成进度 {state['completed']}/{state['total']}：已生成 {state['generated']}，失败 {state['failed']}",
+		)
+		generated_count = generate_greetings(greet_config)
+		_log(task, f"招呼语生成完成：{generated_count} 条")
+		if task.stop_requested.is_set():
+			return
+
+		_log(task, "执行投递（发送已生成招呼语的岗位）")
+		deliver_config = dict(config)
+		deliver_config["_workbench_stop_event"] = task.stop_requested
+		deliver_config["_workbench_log"] = lambda message: _log(task, message)
+		deliver_config["_workbench_skip_greeting"] = True  # 招呼语已在上一步生成
+		sent_count = send_greetings(deliver_config, force=True)
+		report = deliver_config.get("_workbench_send_report", {})
+		failed_count = int(report.get("failed_count", 0) or 0)
+		deferred_count = int(report.get("deferred_count", 0) or 0)
+		_log(
+			task,
+			f"投递结果：成功 {sent_count}，失败 {failed_count}，待下次发送 {deferred_count}",
+		)
+		if task.stop_requested.is_set():
+			return
+
+		_log(task, f"本轮投递完成，{interval_min} 分钟后再次检查")
+		wakeup_event = task.context.setdefault("monitor_wakeup_event", Event())
+		wakeup_event.wait(interval_sec)
+		wakeup_event.clear()
+
+
 task_runner._executors.update({
 	"full": _execute_full,
 	"collect": _execute_collect,
+	"score": _execute_score,
 	"rescore": _execute_rescore,
 	"score": _execute_score,
 	"monitor": _execute_monitor,
 	"deliver": _execute_deliver,
+	"deliver_loop": _execute_deliver_loop,
 })
 
 

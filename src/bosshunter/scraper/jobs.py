@@ -58,6 +58,7 @@ def _legacy_request(config: dict, keywords: list[str]) -> PlatformCollectionRequ
         city_codes={str(city): str(code) for city, code in custom_codes.items()},
         max_pages=min(_positive_int(search_config.get("max_pages", 3), 3), 10),
         sort=str(search_config.get("sort") or "default"),
+        filters=search_config.get("filters") if isinstance(search_config.get("filters"), dict) else {},
     )
 
 

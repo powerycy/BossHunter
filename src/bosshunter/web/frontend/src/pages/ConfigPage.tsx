@@ -10,6 +10,20 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Save, RotateCcw, Upload, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
 import { useState, useEffect } from 'react'
 
+// City options
+const CITIES = [
+  '北京', '上海', '深圳', '广州', '杭州', '成都', '武汉', '南京',
+  '西安', '苏州', '天津', '重庆', '郑州', '长沙', '东莞', '佛山',
+  '合肥', '厦门', '青岛', '大连'
+]
+
+// BOSS直聘搜索页筛选选项(与 collection/platforms/boss.py 的 FILTER_MAPS 保持一致)
+const JOB_TYPE_OPTIONS = ['全职', '兼职', '实习']
+const EXPERIENCE_OPTIONS = ['应届生', '经验不限', '1年以内', '1-3年', '3-5年', '5-10年', '10年以上']
+const DEGREE_OPTIONS = ['学历不限', '初中及以下', '高中', '中专/中技', '大专', '本科', '硕士', '博士']
+const SCALE_OPTIONS = ['0-20人', '20-99人', '100-499人', '500-999人', '1000-9999人', '10000人以上']
+const SALARY_OPTIONS = ['3K以下', '3-5K', '5-10K', '10-20K', '20-50K', '50K以上']
+
 const AI_SERVICES = {
   anthropic: {
     label: 'Claude / Anthropic',
@@ -438,6 +452,102 @@ export default function ConfigPage() {
               <div className="flex items-center justify-between rounded-xl border border-card-border bg-[#FFFCFA] px-3 py-2 text-xs font-bold text-muted">
                 采集后自动评分
                 <Switch checked={config.collection?.auto_score_default ?? false} onChange={value => updateConfig('collection.auto_score_default', value)} />
+              </div>
+            </div>
+            <Field label="每关键词翻页数">
+              <Input type="number" value={config.search?.max_pages || 3} onChange={e => updateConfig('search.max_pages', Number(e.target.value))} min={1} max={10} />
+            </Field>
+
+            {/* BOSS直聘搜索页筛选条件 */}
+            <div className="rounded-2xl border border-card-border bg-[#FFFCFA] p-3">
+              <p className="mb-2 text-xs font-bold text-foreground">筛选条件(采集时按此过滤岗位)</p>
+              <div className="space-y-3">
+                <Field label="求职类型">
+                  <Select
+                    value={config.search?.filters?.job_type || ''}
+                    onChange={e => updateConfig('search.filters.job_type', e.target.value)}
+                  >
+                    <option value="">不限</option>
+                    {JOB_TYPE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                  </Select>
+                </Field>
+                <Field label="工作经验(可多选)">
+                  <div className="flex flex-wrap gap-2">
+                    {EXPERIENCE_OPTIONS.map(opt => {
+                      const selected = (config.search?.filters?.experience || []).includes(opt)
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => {
+                            const cur = config.search?.filters?.experience || []
+                            updateConfig('search.filters.experience', selected ? cur.filter((x: string) => x !== opt) : [...cur, opt])
+                          }}
+                          className={`px-2 py-1 text-xs rounded border transition-colors ${selected ? 'bg-primary/20 border-primary/50 text-primary' : 'border-card-border bg-white text-muted hover:border-primary/40 hover:text-foreground'}`}
+                        >
+                          {opt}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </Field>
+                <Field label="学历要求(可多选)">
+                  <div className="flex flex-wrap gap-2">
+                    {DEGREE_OPTIONS.map(opt => {
+                      const selected = (config.search?.filters?.degree || []).includes(opt)
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => {
+                            const cur = config.search?.filters?.degree || []
+                            updateConfig('search.filters.degree', selected ? cur.filter((x: string) => x !== opt) : [...cur, opt])
+                          }}
+                          className={`px-2 py-1 text-xs rounded border transition-colors ${selected ? 'bg-primary/20 border-primary/50 text-primary' : 'border-card-border bg-white text-muted hover:border-primary/40 hover:text-foreground'}`}
+                        >
+                          {opt}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </Field>
+                <Field label="公司规模(可多选)">
+                  <div className="flex flex-wrap gap-2">
+                    {SCALE_OPTIONS.map(opt => {
+                      const selected = (config.search?.filters?.scale || []).includes(opt)
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => {
+                            const cur = config.search?.filters?.scale || []
+                            updateConfig('search.filters.scale', selected ? cur.filter((x: string) => x !== opt) : [...cur, opt])
+                          }}
+                          className={`px-2 py-1 text-xs rounded border transition-colors ${selected ? 'bg-primary/20 border-primary/50 text-primary' : 'border-card-border bg-white text-muted hover:border-primary/40 hover:text-foreground'}`}
+                        >
+                          {opt}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </Field>
+                <Field label="薪资档位(可选,留空则用个人信息里的薪资范围)">
+                  <Select
+                    value={config.search?.filters?.salary || ''}
+                    onChange={e => updateConfig('search.filters.salary', e.target.value)}
+                  >
+                    <option value="">不限</option>
+                    {SALARY_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                  </Select>
+                </Field>
+                <Field label="公司行业(BOSS行业代码,可多选,如 100101)">
+                  <TagsInput
+                    value={config.search?.filters?.industry || []}
+                    onChange={v => updateConfig('search.filters.industry', v)}
+                    placeholder="如:100101,逗号/顿号分隔"
+                  />
+                  <p className="mt-1 text-xs text-muted">留空则不限制行业;数字代码对应 BOSS直聘行业分类。</p>
+                </Field>
               </div>
             </div>
           </div>

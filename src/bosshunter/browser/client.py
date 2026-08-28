@@ -27,7 +27,9 @@ class RuntimeClient:
         params: dict[str, str] = {"url": url}
         if background:
             params["background"] = "1"
-        data = self._get_json("/new", params=params, timeout=15)
+        # 放宽超时兜底：即使创建目标本身偏慢，也应拿到 targetId，
+        # 避免丢 ID 后标签页泄漏且详情页永不处理。
+        data = self._get_json("/new", params=params, timeout=30)
         return data.get("targetId") if isinstance(data, dict) else None
 
     def close_tab(self, target_id: str) -> bool:

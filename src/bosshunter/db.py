@@ -503,6 +503,23 @@ def get_jobs_by_status(conn: sqlite3.Connection, status: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def get_jobs_missing_greeting_by_ids(conn: sqlite3.Connection, job_ids: list[str]) -> list[dict]:
+    """Get jobs among the given ids that still have no greeting generated."""
+    if not job_ids:
+        return []
+    placeholders = ",".join("?" * len(job_ids))
+    rows = conn.execute(
+        f"""
+        SELECT * FROM jobs
+        WHERE id IN ({placeholders})
+          AND (greeting IS NULL OR TRIM(greeting) = '')
+        ORDER BY score DESC
+        """,
+        list(job_ids),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_jobs_pending_confirmation(conn: sqlite3.Connection) -> list[dict]:
     """Get selected jobs whose greeting workflow is not complete."""
     rows = conn.execute("""

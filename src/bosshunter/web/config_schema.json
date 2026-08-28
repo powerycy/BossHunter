@@ -26,7 +26,15 @@
         {"key": "keywords", "label": "搜索关键词", "type": "tags", "description": "BOSS 搜索框使用的关键词"},
         {"key": "cities", "label": "搜索城市", "type": "multi-select", "options_from": "cities", "description": "留空则使用目标城市"},
         {"key": "city_codes", "label": "自定义城市编码", "type": "object", "default": {}, "description": "由配置页查询并保存，不需要手工填写"},
-        {"key": "max_pages", "label": "每关键词翻页数", "type": "number", "min": 1, "max": 10, "default": 3}
+        {"key": "max_pages", "label": "每关键词翻页数", "type": "number", "min": 1, "max": 10, "default": 3},
+        {"key": "filters", "label": "筛选条件", "type": "object", "description": "BOSS直聘搜索页筛选(求职类型/经验/学历/规模/薪资/行业)", "fields": [
+          {"key": "job_type", "label": "求职类型", "type": "select", "options": ["", "全职", "兼职", "实习"], "description": "全职/兼职/实习,留空不限"},
+          {"key": "experience", "label": "工作经验", "type": "multi-select", "options": ["应届生", "经验不限", "1年以内", "1-3年", "3-5年", "5-10年", "10年以上"], "description": "可多选"},
+          {"key": "degree", "label": "学历要求", "type": "multi-select", "options": ["学历不限", "初中及以下", "高中", "中专/中技", "大专", "本科", "硕士", "博士"], "description": "可多选"},
+          {"key": "scale", "label": "公司规模", "type": "multi-select", "options": ["0-20人", "20-99人", "100-499人", "500-999人", "1000-9999人", "10000人以上"], "description": "可多选"},
+          {"key": "salary", "label": "薪资档位", "type": "select", "options": ["", "3K以下", "3-5K", "5-10K", "10-20K", "20-50K", "50K以上"], "description": "可选,留空使用个人信息里的薪资范围"},
+          {"key": "industry", "label": "公司行业", "type": "tags", "description": "BOSS行业数字代码,如 100101"}
+        ]}
       ]
     },
     {

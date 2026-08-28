@@ -309,6 +309,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const [statsScope, setStatsScope] = useState<StatsScope>('today')
   const [collectDialogOpen, setCollectDialogOpen] = useState(false)
   const [collectDialogMode, setCollectDialogMode] = useState<'collect' | 'full'>('collect')
+  const [pendingGreetingLimit, setPendingGreetingLimit] = useState(50)
 
   const todayJobs = useMemo(
     () => workbench.pending_confirmation.filter(job => !confirmedDeliveryIds.has(job.id)),
@@ -835,7 +836,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             </div>
           </div>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            {pendingGreetingJobs.map(job => (
+            {pendingGreetingJobs.slice(0, pendingGreetingLimit).map(job => (
               <div key={job.id} className="rounded-2xl border border-primary/20 bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -854,6 +855,13 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               </div>
             ))}
           </div>
+          {pendingGreetingJobs.length > pendingGreetingLimit && (
+            <div className="mt-4 text-center">
+              <Button variant="secondary" size="sm" onClick={() => setPendingGreetingLimit(pendingGreetingLimit + 50)}>
+                显示更多（已显示 {pendingGreetingLimit}/{pendingGreetingJobs.length}）
+              </Button>
+            </div>
+          )}
         </section>
       )}
 

@@ -23,6 +23,69 @@ from bosshunter.throttle import PageThrottle
 
 SEARCH_URL = "https://www.zhipin.com/web/geek/job?query={keyword}&city={city_code}"
 
+# BOSS直聘搜索页筛选参数映射(人类可读 -> URL 参数值)
+FILTER_MAPS = {
+    "job_type": {"全职": "0", "兼职": "1", "实习": "2"},
+    "experience": {
+        "在校生": "108", "应届生": "102", "经验不限": "101",
+        "1年以内": "103", "1-3年": "104", "3-5年": "105", "5-10年": "106", "10年以上": "107",
+    },
+    "degree": {
+        "学历不限": "201", "初中及以下": "209", "中专/中技": "208", "高中": "206",
+        "大专": "202", "本科": "203", "硕士": "204", "博士": "205",
+    },
+    "scale": {
+        "0-20人": "301", "20-99人": "302", "100-499人": "303", "500-999人": "304",
+        "1000-9999人": "305", "10000人以上": "306",
+    },
+    "salary": {
+        "3K以下": "402", "3-5K": "403", "5-10K": "404",
+        "10-20K": "405", "20-50K": "406", "50K以上": "407",
+    },
+}
+
+# BOSS直聘筛选参数在 URL 中的参数名
+FILTER_PARAM_NAMES = {
+    "job_type": "jobType",
+    "experience": "experience",
+    "degree": "degree",
+    "scale": "scale",
+    "salary": "salary",
+    "industry": "industry",
+}
+
+
+def _build_filter_query(filters: Any) -> str:
+    """Build BOSS直聘筛选参数 URL 片段 from search.filters.
+
+    Returns e.g. "jobType=0&experience=104,105&degree=206&scale=303,304".
+    Unrecognized values are skipped; empty config yields "".
+    """
+    if not isinstance(filters, dict):
+        return ""
+    parts: list[str] = []
+    for key, param in FILTER_PARAM_NAMES.items():
+        raw = filters.get(key)
+        if raw is None:
+            continue
+        if key == "industry":
+            # 行业:直接透传数字代码(逗号分隔),如 "100101,100102"
+            if isinstance(raw, list):
+                values = [str(v).strip() for v in raw if str(v).strip()]
+            else:
+                values = [v.strip() for v in str(raw).split(",") if v.strip()]
+            if values:
+                parts.append(f"{param}={','.join(values)}")
+            continue
+        if isinstance(raw, list):
+            values = [str(v).strip() for v in raw if str(v).strip()]
+        else:
+            values = [str(raw).strip()] if raw and str(raw).strip() else []
+        mapped = [FILTER_MAPS[key][v] for v in values if v in FILTER_MAPS[key]]
+        if mapped:
+            parts.append(f"{param}={','.join(mapped)}")
+    return "&".join(parts)
+
 JS_EXTRACT_LIST = """
 (() => {
     const wraps = document.querySelectorAll('.job-card-wrap');
@@ -307,6 +370,9 @@ class BossCollector:
                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                     hooks.on_event(phase="loading_list", keyword=keyword, city=city, page=page)
                     search_url = SEARCH_URL.format(keyword=quote(keyword), city_code=city_code)
+                    filter_qs = _build_filter_query(getattr(request, "filters", None))
+                    if filter_qs:
+                        search_url += f"&{filter_qs}"
                     if request.sort == "newest": search_url += "&sortType=2"
                     if page > 1: search_url += f"&page={page}"
                     try:

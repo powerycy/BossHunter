@@ -324,8 +324,10 @@ const server = http.createServer(async (req, res) => {
       const targetId = resp.result.targetId;
       if (targetUrl !== 'about:blank') {
         try {
-          const sessionId = await ensureSession(targetId);
-          await waitForLoad(sessionId);
+          // 仅建立会话（端口守卫），不阻塞等待页面加载——
+          // 页面就绪由调用方 wait_for_load 负责，避免 /new 响应超时
+          // 导致 Python 侧丢 targetId、标签页泄漏且详情永不采集。
+          await ensureSession(targetId);
         } catch {}
       }
       sendJson(res, { targetId });

@@ -129,6 +129,23 @@ def _notify(config: dict, message: str, *, error: bool = False) -> None:
         callback(message)
 
 
+def _report_greeting_progress(
+    config: dict,
+    completed: int,
+    total: int,
+    generated: int,
+    failed: int,
+) -> None:
+    callback = config.get("_workbench_greeting_progress")
+    if callable(callback):
+        callback({
+            "completed": completed,
+            "total": total,
+            "generated": generated,
+            "failed": failed,
+        })
+
+
 def _json_greeting_text(value: object) -> str | None:
     if isinstance(value, str):
         return value.strip() or None
@@ -504,6 +521,19 @@ def generate_greetings(config: dict) -> int:
     if _workbench_job_ids:
         jobs = [job for job in jobs if str(job["id"]) in _workbench_job_ids]
 
+    # 只生成尚未生成招呼语的岗位，避免把已有人工/AI 生成的招呼语覆盖重写
+    skipped_with_greeting = 0
+    jobs_without_greeting: list[dict] = []
+    for job in jobs:
+        if (job.get("greeting") or "").strip():
+            skipped_with_greeting += 1
+        else:
+            jobs_without_greeting.append(job)
+    jobs = jobs_without_greeting
+
+    if skipped_with_greeting:
+        _notify(config, f"跳过 {skipped_with_greeting} 个已有招呼语的岗位，仅对缺少招呼语的岗位生成。")
+
     if not jobs:
         console.print("[yellow]没有已确认的岗位可生成招呼语。请先运行 `bosshunter confirm`，或使用 `bosshunter run` 执行完整流程。[/yellow]")
         db.close()
@@ -616,6 +646,7 @@ def generate_greetings(config: dict) -> int:
                 if not pause_reason and not (stop_event is not None and stop_event.is_set()):
                     add_history(db, job["id"], "greeting_failed", "AI 未返回完整招呼语，岗位保留为待生成")
                 progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
+                _report_greeting_progress(config, index, len(jobs), count, failed)
                 if pause_reason:
                     break
                 continue
@@ -627,6 +658,7 @@ def generate_greetings(config: dict) -> int:
                 recent_openings.append(opening)
             count += 1
             progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
+            _report_greeting_progress(config, index, len(jobs), count, failed)
 
             if pause_after_current:
                 pause_reason = pause_after_current
