@@ -506,7 +506,13 @@ https://github.com/powerycy/BossHunter
 - 不接受收集、上传或外发用户隐私数据的 PR。
 - 建议先开 Issue 讨论再提交大改动。
 
-长期参与维护的社区成员可以查看 [项目治理与候选晋升规则](GOVERNANCE.md)。现任及历任维护者、任期与负责范围统一记录在 [MAINTAINERS.md](MAINTAINERS.md)，与下方贡献榜分开管理。
+### 🧩 维护者招募（进行中）
+
+首轮招募 **6 名候选维护者**：核心与安全 3 名、产品与 AI 2 名、平台适配 1 名。候选人先进入 2–4 周观察期，不会立即获得写权限；平台适配工作量增加后再补充第 7 名候选。
+
+[申请成为候选维护者](https://github.com/shengjidaguai-china/BossHunter/issues/new?template=maintainer_application.md) · [查看治理与晋升规则](GOVERNANCE.md) · [查看现任、候选及历任维护者](MAINTAINERS.md)
+
+维护者任期与负责范围从本制度启用后持续留档，并与下方贡献榜分开管理。
 
 ---
 
