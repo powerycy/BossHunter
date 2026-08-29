@@ -1,7 +1,7 @@
-# Ownership remains conservative while the first maintainer cohort is being
-# recruited. Named module maintainers share their domain with the global owner.
-
-* @powerycy
+# Only governance and high-risk runtime paths require owner approval.
+# Unlisted paths can be handled by module maintainers after PR + CI pass.
+# Replace individual owners with visible organization teams after the
+# corresponding maintainer teams exist and have Write access.
 
 # Governance, maintainer history, contributor ranking, and repository policy.
 /GOVERNANCE.md @powerycy
@@ -9,28 +9,38 @@
 /CONTRIBUTORS.md @powerycy
 /CONTRIBUTING.md @powerycy
 /README.md @powerycy
-/.github/ @powerycy
+/.github/CODEOWNERS @powerycy
+/.github/PUBLISH_CHECKLIST.md @powerycy
+/.github/workflows/ @powerycy
 
 # Core and safety: delivery, browser control, credentials, data, and releases.
 /src/bosshunter/executor/ @powerycy
 /src/bosshunter/browser/ @powerycy
 /src/bosshunter/throttle.py @powerycy
 /src/bosshunter/platform_safety.py @powerycy
+/src/bosshunter/collection/capabilities.py @powerycy
 /src/bosshunter/config.py @powerycy
 /src/bosshunter/db.py @powerycy
+/src/bosshunter/main.py @powerycy
+/src/bosshunter/pipeline.py @powerycy
+/src/bosshunter/cancellation.py @powerycy
+/src/bosshunter/collection_run_store.py @powerycy
+/src/bosshunter/scoring_run_store.py @powerycy
 /src/bosshunter/ai/credentials.py @powerycy
+/src/bosshunter/ai/scorer.py @powerycy
+/src/bosshunter/ai/greeter.py @powerycy
+/src/bosshunter/ai/resume.py @powerycy
 /src/bosshunter/web/server.py @powerycy
+/src/bosshunter/web/tasks.py @powerycy
+/src/bosshunter/web/preflight.py @powerycy
+/src/bosshunter/web/resume_upload.py @powerycy
+/src/bosshunter/web/config_schema.json @powerycy
+/src/bosshunter/ui/confirm.py @powerycy
+/config.example.yaml @powerycy
 /pyproject.toml @powerycy
+/src/bosshunter/web/frontend/package.json @powerycy
+/src/bosshunter/web/frontend/package-lock.json @powerycy
 
-# Platform adaptation. Cross-domain or high-risk changes still include the
-# global owner for core-and-safety review.
-/src/bosshunter/collection/ @yuppiez99999 @powerycy
-/src/bosshunter/scraper/ @yuppiez99999 @powerycy
-/src/bosshunter/cities.py @yuppiez99999 @powerycy
-/src/bosshunter/job_filters.py @yuppiez99999 @powerycy
-/src/bosshunter/data/ @yuppiez99999 @powerycy
-/scripts/windows/ @yuppiez99999 @powerycy
-/tests/test_*collector.py @yuppiez99999 @powerycy
-
-# Product/AI team owners will be added after their teams exist and have Write
-# access. The global owner remains enforceable until then.
+# Ordinary product/AI and platform-adapter paths intentionally have no required
+# owner during the current maintainer-candidate period. Their responsibility
+# boundaries remain documented in GOVERNANCE.md and MAINTAINERS.md.
