@@ -57,7 +57,11 @@ GREETING_PROMPT = """你是一位求职者，需要在{platform}上给HR发送�
 """
 
 URL_PATTERN = re.compile(
-    r"(?i)(?<![\w@.])(?:https?://|www\.)[^\s<>()\[\]{}\"'，。！？；]+"
+    r"(?i)(?<![\w@.])(?:"
+    r"(?:https?://|www\.)[^\s<>()\[\]{}\"'，。！？；]+|"
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z]{2,63}(?:[/:?#][^\s<>()\[\]{}\"'，。！？；]+)?"
+    r")"
 )
 
 REVIEW_PROMPT = """请评估以下{platform}招呼语的质量。
@@ -79,12 +83,17 @@ REVIEW_PROMPT = """请评估以下{platform}招呼语的质量。
 """
 
 
-def _get_resume_summary(config: dict) -> str:
-    """Get a brief resume summary for greeting generation."""
+def _get_resume_text(config: dict) -> str:
+    """Read the full resume for local-only validation."""
     resume_path = Path(config.get("profile", {}).get("resume_path", "./resume.md"))
     if not resume_path.exists():
         return ""
     return resume_path.read_text(encoding="utf-8")
+
+
+def _get_resume_summary(config: dict) -> str:
+    """Get the resume prefix allowed in the greeting prompt."""
+    return _get_resume_text(config)[:1500]
 
 
 def _call_claude(
@@ -154,6 +163,7 @@ def _has_untrusted_greeting_url(greeting: str, resume_text: str, config: dict) -
     if not generated_urls:
         return False
     trusted_urls = _extract_urls(resume_text)
+    trusted_urls.update(_extract_urls(_get_resume_text(config)))
     portfolio_url = str(config.get("profile", {}).get("portfolio_url", "") or "").strip()
     if portfolio_url:
         trusted_urls.add(_normalize_url(portfolio_url))

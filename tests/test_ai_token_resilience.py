@@ -841,16 +841,46 @@ class GreeterTokenResilienceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             resume_path = Path(tmp) / "resume.md"
             resume_path.write_text(
-                f"{'真实简历内容' * 300}\n项目地址：https://resume.example/late-project",
+                f"{'公开简历内容' * 300}\n项目地址：https://resume.example/late-project",
                 encoding="utf-8",
             )
+            config = {"profile": {"resume_path": str(resume_path)}}
+            resume_summary = greeter._get_resume_summary(config)
 
-            resume_text = greeter._get_resume_summary(
-                {"profile": {"resume_path": str(resume_path)}}
+            with patch(
+                "bosshunter.ai.greeter._call_claude",
+                return_value="项目介绍：https://resume.example/late-project",
+            ):
+                result = greeter._generate_greeting_once(
+                    _job("late-resume-url"),
+                    resume_summary,
+                    config,
+                )
+
+        self.assertNotIn("https://resume.example/late-project", resume_summary)
+        self.assertEqual(result, "项目介绍：https://resume.example/late-project")
+
+    def test_resume_tail_is_not_sent_to_model(self):
+        sensitive_tail = "敏感标识：身份证号123456789"
+        with tempfile.TemporaryDirectory() as tmp:
+            resume_path = Path(tmp) / "resume.md"
+            resume_path.write_text(
+                f"{'公开简历内容' * 300}\n{sensitive_tail}",
+                encoding="utf-8",
             )
+            config = {"profile": {"resume_path": str(resume_path)}}
 
-        self.assertIn("https://resume.example/late-project", resume_text)
-        self.assertGreater(len(resume_text), 1500)
+            with patch(
+                "bosshunter.ai.greeter._call_claude",
+                return_value="普通招呼语",
+            ) as call_ai:
+                greeter._generate_greeting_once(
+                    _job("private-resume-tail"),
+                    greeter._get_resume_summary(config),
+                    config,
+                )
+
+        self.assertNotIn(sensitive_tail, call_ai.call_args.args[0])
 
     def test_invented_greeting_url_is_rejected(self):
         logs: list[str] = []
@@ -869,9 +899,23 @@ class GreeterTokenResilienceTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertTrue(any("包含未提供的网址" in message for message in logs))
 
+    def test_invented_bare_domain_is_rejected(self):
+        with patch(
+            "bosshunter.ai.greeter._call_claude",
+            return_value="项目介绍：fake-portfolio.example/project",
+        ):
+            result = greeter._generate_greeting_once(
+                _job("invented-bare-domain"),
+                "这份简历不包含网址",
+                {},
+            )
+
+        self.assertIsNone(result)
+
     def test_resume_and_configured_urls_are_allowed(self):
         cases = (
             ("项目地址：https://resume.example/project", {}, "https://resume.example/project"),
+            ("项目地址：resume.example/project", {}, "resume.example/project"),
             (
                 "不含网址的简历",
                 {"profile": {"portfolio_url": "https://portfolio.example"}},
