@@ -146,6 +146,113 @@ class ScorerTokenResilienceTests(unittest.TestCase):
             scorer._validated_score_result('{"score": 82, "reason": "匹配", "missing": ""}')
         )
 
+    def test_field_alias_transferable_is_normalized_and_scored(self):
+        response = """{
+          "role_summary": "客户成功",
+          "core_duties": {"score": 30, "evidence": "较匹配"},
+          "transferable": {"score": 19, "evidence": "可迁移"},
+          "hard_requirements": {"score": 10, "evidence": "基本符合"},
+          "tools_industry": {"score": 7, "evidence": "相关"},
+          "practical_fit": {"score": 8, "evidence": "符合"},
+          "caps": [], "hard_gaps": [], "reason": "整体较匹配", "missing": ""
+        }"""
+
+        result = scorer._validated_score_result(response)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.components["transferable_evidence"], 19)
+        self.assertEqual(result.score, 74)
+        self.assertEqual(result.raw_score, 74)
+
+    def test_canonical_field_name_wins_over_alias(self):
+        response = """{
+          "role_summary": "客户成功",
+          "core_duties": {"score": 30, "evidence": "较匹配"},
+          "transferable": {"score": 5, "evidence": "别名值"},
+          "transferable_evidence": {"score": 22, "evidence": "正式字段值"},
+          "hard_requirements": {"score": 10, "evidence": "基本符合"},
+          "tools_industry": {"score": 7, "evidence": "相关"},
+          "practical_fit": {"score": 8, "evidence": "符合"},
+          "caps": [], "hard_gaps": [], "reason": "整体较匹配", "missing": ""
+        }"""
+
+        result = scorer._validated_score_result(response)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.components["transferable_evidence"], 22)
+
+    def test_failure_reason_lists_missing_fields(self):
+        response = '{"role_summary": "客户成功", "core_duties": {"score": 30, "evidence": "较匹配"}}'
+
+        self.assertIsNone(scorer._validated_score_result(response))
+        reason = scorer._score_validation_failure_reason(response)
+        self.assertIn("缺少字段", reason)
+        for key in ("transferable_evidence", "hard_requirements", "tools_industry", "practical_fit"):
+            self.assertIn(key, reason)
+
+    def test_failure_reason_reports_unparseable_json(self):
+        self.assertIsNone(scorer._validated_score_result("模型输出的不是 JSON"))
+        self.assertIn("JSON", scorer._score_validation_failure_reason("模型输出的不是 JSON"))
+
+    def test_failure_reason_reports_invalid_component_values(self):
+        response = """{
+          "role_summary": "客户成功",
+          "core_duties": {"score": 41, "evidence": "超过上限"},
+          "transferable_evidence": {"score": 20, "evidence": "匹配"},
+          "hard_requirements": {"score": 12, "evidence": "匹配"},
+          "tools_industry": {"score": 8, "evidence": "匹配"},
+          "practical_fit": {"score": 8, "evidence": "匹配"},
+          "caps": [], "hard_gaps": [], "reason": "匹配", "missing": ""
+        }"""
+
+        self.assertIsNone(scorer._validated_score_result(response))
+        self.assertIn("字段值无效", scorer._score_validation_failure_reason(response))
+
+    def test_failure_reason_reports_empty_response(self):
+        self.assertIn("AI 未返回评分内容", scorer._score_validation_failure_reason(None))
+        self.assertIn("AI 未返回评分内容", scorer._score_validation_failure_reason("   "))
+
+    def test_alias_response_scores_successfully_end_to_end(self):
+        db = MagicMock()
+        job = _job("alias")
+        response = """{
+          "role_summary": "客户成功",
+          "core_duties": {"score": 30, "evidence": "较匹配"},
+          "transferable": {"score": 19, "evidence": "可迁移"},
+          "hard_requirements": {"score": 10, "evidence": "基本符合"},
+          "tools_industry": {"score": 7, "evidence": "相关"},
+          "practical_fit": {"score": 8, "evidence": "符合"},
+          "caps": [], "hard_gaps": [], "reason": "整体较匹配", "missing": ""
+        }"""
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=[job]),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch("bosshunter.ai.scorer._call_claude", return_value=response),
+            patch("bosshunter.ai.scorer.update_job_quick_score"),
+            patch("bosshunter.ai.scorer.update_job_score"),
+            patch("bosshunter.ai.scorer.update_job_status"),
+        ):
+            scored, filtered = scorer.score_jobs(
+                {"ai": {"scoring_concurrency": 1}, "scoring": {"threshold": 71}}
+            )
+
+        self.assertEqual((scored, filtered), (1, 0))
+
+    def test_request_score_reports_specific_validation_failure(self):
+        job = _job("badjson")
+
+        with (
+            patch("bosshunter.ai.scorer._call_claude", return_value="模型输出的不是 JSON"),
+            patch("bosshunter.ai.scorer._notify"),
+        ):
+            outcome = scorer._request_score(job, "真实简历", {}, 3)
+
+        self.assertIn("JSON", outcome.failure_detail)
+        self.assertIn("无法解析", outcome.failure_detail)
+
     def test_borderline_structured_score_is_reviewed_and_averaged(self):
         db = MagicMock()
         job = _job("review")

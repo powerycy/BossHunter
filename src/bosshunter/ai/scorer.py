@@ -97,6 +97,11 @@ COMPONENT_LIMITS = {
     "tools_industry": 10,
     "practical_fit": 10,
 }
+# 部分模型（实测 minimaxi M3）会把 transferable_evidence 简写为 transferable，
+# 校验前按别名归一，避免有效评分被误判为解析失败（issue #107）。
+FIELD_ALIASES = {
+    "transferable": "transferable_evidence",
+}
 CAP_LIMITS = {
     "technical_required": (55, "硬技术缺口封顶55"),
     "sales_acquisition_core": (65, "核心销售获客封顶65"),
@@ -294,14 +299,37 @@ def _structured_score_result(result: dict, *, reviewed: bool = False) -> ScoreRe
     )
 
 
+def _apply_field_aliases(result: dict) -> dict:
+    """Normalize common model-side field shortenings (e.g. minimaxi M3's `transferable`)."""
+    for alias, canonical in FIELD_ALIASES.items():
+        if alias in result and canonical not in result:
+            result[canonical] = result[alias]
+    return result
+
+
 def _validated_score_result(text: str) -> ScoreResult | None:
     """Accept only complete structured evidence scores."""
     result = _parse_score_response(text)
     if not isinstance(result, dict):
         return None
+    _apply_field_aliases(result)
     if all(key in result for key in COMPONENT_LIMITS):
         return _structured_score_result(result)
     return None
+
+
+def _score_validation_failure_reason(text: str | None) -> str:
+    """Explain why a scoring response failed validation, for failure records."""
+    if not text or not str(text).strip():
+        return "AI 未返回评分内容"
+    result = _parse_score_response(text)
+    if not isinstance(result, dict):
+        return "AI 返回内容无法解析为 JSON"
+    _apply_field_aliases(result)
+    missing = [key for key in COMPONENT_LIMITS if key not in result]
+    if missing:
+        return "AI 评分 JSON 缺少字段: " + ", ".join(missing)
+    return "AI 评分 JSON 字段值无效（分数或理由不符合格式要求）"
 
 
 def _merge_review_results(first: ScoreResult, review: ScoreResult) -> ScoreResult:
@@ -442,7 +470,7 @@ def _request_score(
         result = _validated_score_result(response) if response else None
 
     if result is None:
-        return ScoreOutcome(failure_detail="AI 未返回完整、可解析的评分 JSON")
+        return ScoreOutcome(failure_detail=_score_validation_failure_reason(response))
     return ScoreOutcome(result=result)
 
 
