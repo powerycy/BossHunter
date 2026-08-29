@@ -752,7 +752,7 @@ class ScorerTokenResilienceTests(unittest.TestCase):
         self.assertEqual(update_score.call_count, 2)
         self.assertEqual(
             update_score.call_args_list[0].args,
-            (db, "1", 0, "AI评分失败: AI 未返回完整、可解析的评分 JSON"),
+            (db, "1", 0, "AI评分失败: AI 未返回评分内容"),
         )
         update_status.assert_called_once_with(db, "2", "ready")
         self.assertTrue(any("已跳过 公司 1｜AI 产品经理 1" in message for message in logs))
