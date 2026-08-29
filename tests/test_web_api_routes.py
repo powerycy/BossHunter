@@ -7,7 +7,7 @@ from socketserver import ThreadingMixIn
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from wsgiref.simple_server import WSGIServer
 from zipfile import ZipFile
 
@@ -27,6 +27,7 @@ from bosshunter.throttle import SendWindowChecker
 from bosshunter.web import server
 from threading import Event, Lock
 
+from bosshunter.scoring_run_store import create_scoring_run, get_scoring_run, update_scoring_run
 from bosshunter.web.tasks import TaskAlreadyRunningError, WorkbenchTask, WorkbenchTaskRunner
 
 
@@ -2116,6 +2117,144 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["collection_only_platforms"], ["zhilian"])
         start.assert_not_called()
         write_config.assert_not_called()
+
+    def _seed_scoring_base(self, base_dir: Path):
+        (base_dir / "config.yaml").write_text(
+            yaml.dump({"ai": {"api_key": "test-api-key"}}, allow_unicode=True),
+            encoding="utf-8",
+        )
+        server.set_base_dir(base_dir)
+        db = get_db(server.DATA_DIR / "bosshunter.db")
+        try:
+            insert_job(db, _job("p1"))
+        finally:
+            db.close()
+
+    def _seed_run(self, run_id: str, status: str):
+        db_path = server.DATA_DIR / "bosshunter.db"
+        create_scoring_run(
+            db_path,
+            run_id=run_id,
+            options={"scope": "pending", "limit": None, "force_rescore": False},
+            job_ids=["p1"],
+        )
+        update_scoring_run(db_path, run_id, status=status, pause_reason="AI 服务请求失败" if status == "paused" else None)
+
+    def test_scoring_start_reports_paused_run_with_machine_readable_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._seed_scoring_base(Path(tmp))
+            self._seed_run("run-paused", "paused")
+
+            with patch.object(server, "_preflight_messages", return_value=[]):
+                status, _, body = self._request(
+                    "/api/scoring/start",
+                    method="POST",
+                    json_body={"options": {"scope": "pending", "limit": None, "job_ids": [], "force_rescore": False}},
+                )
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("409"), body)
+        self.assertEqual(payload.get("code"), "scoring_run_paused")
+        self.assertIn("强制开始新任务", payload["error"])
+
+    def test_scoring_start_ignores_non_boolean_force_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._seed_scoring_base(Path(tmp))
+            self._seed_run("run-paused", "paused")
+            runner = MagicMock()
+
+            for bad_force in ("false", "true", 1):
+                with patch.object(server, "_preflight_messages", return_value=[]), patch.object(server, "task_runner", runner):
+                    status, _, body = self._request(
+                        "/api/scoring/start",
+                        method="POST",
+                        json_body={
+                            "force": bad_force,
+                            "options": {"scope": "pending", "limit": None, "job_ids": [], "force_rescore": False},
+                        },
+                    )
+
+                payload = json.loads(body)
+                self.assertTrue(status.startswith("409"), body)
+                self.assertEqual(payload.get("code"), "scoring_run_paused")
+
+            old_run = get_scoring_run(server.DATA_DIR / "bosshunter.db", "run-paused")
+            self.assertEqual(old_run["status"], "paused")
+            runner.start.assert_not_called()
+
+    def test_scoring_start_with_force_ends_paused_run_and_starts_new(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._seed_scoring_base(Path(tmp))
+            self._seed_run("run-paused", "paused")
+            runner = MagicMock()
+            runner.start.return_value = {"id": "task-1", "status": "running"}
+
+            with patch.object(server, "_preflight_messages", return_value=[]), patch.object(server, "task_runner", runner):
+                status, _, body = self._request(
+                    "/api/scoring/start",
+                    method="POST",
+                    json_body={
+                        "force": True,
+                        "options": {"scope": "pending", "limit": None, "job_ids": [], "force_rescore": False},
+                    },
+                )
+
+            payload = json.loads(body)
+            old_run = get_scoring_run(server.DATA_DIR / "bosshunter.db", "run-paused")
+            self.assertTrue(status.startswith("200"), body)
+            self.assertEqual(old_run["status"], "stopped")
+            self.assertIn("强制结束", old_run["error"])
+            self.assertEqual(payload["run"]["status"], "running")
+            self.assertNotEqual(payload["run"]["id"], "run-paused")
+            runner.start.assert_called_once()
+
+    def test_scoring_start_with_force_still_rejects_active_running_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._seed_scoring_base(Path(tmp))
+            self._seed_run("run-active", "running")
+            runner = MagicMock()
+
+            with patch.object(server, "_preflight_messages", return_value=[]), patch.object(server, "task_runner", runner):
+                status, _, body = self._request(
+                    "/api/scoring/start",
+                    method="POST",
+                    json_body={
+                        "force": True,
+                        "options": {"scope": "pending", "limit": None, "job_ids": [], "force_rescore": False},
+                    },
+                )
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("409"), body)
+        self.assertIn("正在运行", payload["error"])
+        runner.start.assert_not_called()
+
+    def test_score_checkpoint_writes_error_for_ai_pause_but_not_user_pause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._seed_scoring_base(Path(tmp))
+            self._seed_run("run-checkpoint", "running")
+            task = WorkbenchTask(id="task-ckpt", mode="score", label="单独 AI 评分")
+            ai_pause = "AI 服务请求失败 (request_failed, status=404)"
+            states = [
+                {"remaining_job_ids": ["p1"], "status": "paused", "pause_reason": ai_pause, "error": ai_pause},
+                {"remaining_job_ids": ["p1"], "status": "paused", "pause_reason": "用户暂停或任务中断", "error": ""},
+            ]
+
+            def fake_score_jobs(config, *args, **kwargs):
+                callback = config.get("_workbench_score_checkpoint")
+                for state in states:
+                    callback(dict(state))
+
+            with patch("bosshunter.ai.scorer.score_jobs", side_effect=fake_score_jobs), patch.object(
+                server, "update_scoring_run", return_value=None
+            ) as update_run:
+                server._execute_score(task, {"_score_run_id": "run-checkpoint", "_score_options": {}})
+
+            paused_calls = [call for call in update_run.call_args_list if call.kwargs.get("status") == "paused"]
+            self.assertEqual(paused_calls[0].kwargs.get("error"), ai_pause)
+            self.assertEqual(paused_calls[1].kwargs.get("error"), None)
+            self.assertEqual(task.error, ai_pause)
+            self.assertTrue(task.stop_requested.is_set())
 
 
 if __name__ == "__main__":
