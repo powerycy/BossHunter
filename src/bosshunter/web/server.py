@@ -1198,7 +1198,8 @@ def api_scoring_start():
 			raise ValueError("请求体必须是对象")
 		options = _scoring_options_from_body(body)
 		# force=true 允许结束已暂停的旧评分记录后强制开新任务；running 任务不在此列（issue #100）。
-		force = bool(body.get("force", False))
+		# 只接受真正的布尔 true：bool("false") 也为真，异常请求会误触发强制重启（#117 review）。
+		force = body.get("force", False) is True
 		config = load_config(CONFIG_PATH)
 		messages = _preflight_messages("rescore", config)
 		if messages:

@@ -2127,6 +2127,31 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(payload.get("code"), "scoring_run_paused")
         self.assertIn("强制开始新任务", payload["error"])
 
+    def test_scoring_start_ignores_non_boolean_force_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._seed_scoring_base(Path(tmp))
+            self._seed_run("run-paused", "paused")
+            runner = MagicMock()
+
+            for bad_force in ("false", "true", 1):
+                with patch.object(server, "_preflight_messages", return_value=[]), patch.object(server, "task_runner", runner):
+                    status, _, body = self._request(
+                        "/api/scoring/start",
+                        method="POST",
+                        json_body={
+                            "force": bad_force,
+                            "options": {"scope": "pending", "limit": None, "job_ids": [], "force_rescore": False},
+                        },
+                    )
+
+                payload = json.loads(body)
+                self.assertTrue(status.startswith("409"), body)
+                self.assertEqual(payload.get("code"), "scoring_run_paused")
+
+            old_run = get_scoring_run(server.DATA_DIR / "bosshunter.db", "run-paused")
+            self.assertEqual(old_run["status"], "paused")
+            runner.start.assert_not_called()
+
     def test_scoring_start_with_force_ends_paused_run_and_starts_new(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._seed_scoring_base(Path(tmp))
