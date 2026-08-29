@@ -390,8 +390,19 @@ def _generate_with_token_retry(
     recent_openings: list[str] | None = None,
 ) -> str | None:
     """Retry only request-size/output-limit failures without changing batch size."""
+
+    def _once_or_none(*args, **kwargs):
+        try:
+            return _generate_greeting_once(*args, **kwargs)
+        except AIRequestError as exc:
+            # 空响应用保持"空结果"语义：转成 None 走既有的按配置重试与岗位级失败记录，
+            # 不中断整批（#101 回归：整批暂停仅留给鉴权/额度/限流/网络等服务级故障）。
+            if exc.kind == "empty_response":
+                return None
+            raise
+
     try:
-        result = _generate_greeting_once(
+        result = _once_or_none(
             job,
             resume_summary,
             config,
@@ -410,7 +421,7 @@ def _generate_with_token_retry(
                 config,
                 f"{job['company']}｜{job['title']} 未返回完整招呼语，正在重试（{attempt}/{max_attempts}）。",
             )
-            result = _generate_greeting_once(
+            result = _once_or_none(
                 job,
                 resume_summary,
                 config,
@@ -445,7 +456,7 @@ def _generate_with_token_retry(
             raise
 
     try:
-        return _generate_greeting_once(
+        return _once_or_none(
             job,
             resume_summary,
             config,
@@ -567,7 +578,15 @@ def generate_greetings(config: dict) -> int:
                         cancelled = True
                         break
                     except AIRequestError as exc:
-                        pause_after_current = exc.user_message
+                        if exc.kind == "empty_response":
+                            # 质量复核不可用≠生成失败：保留已生成草稿并继续后续岗位（#101 回归）。
+                            _notify(
+                                config,
+                                f"{job['company']}｜{job['title']} 的质量检查未返回内容，已保留可用招呼语并继续。",
+                            )
+                            break
+                        # str(exc) 带 kind/status_code，暂停原因可区分鉴权/限流/额度等类别（issue #101）。
+                        pause_after_current = str(exc)
                         break
                     style_issues = _greeting_style_issues(best_greeting, recent_openings)
                     if review is None and not style_issues:
@@ -595,10 +614,11 @@ def generate_greetings(config: dict) -> int:
                     cancelled = True
                     break
                 except AIRequestError as exc:
+                    # str(exc) 带 kind/status_code，暂停原因可区分鉴权/限流/额度等类别（issue #101）。
                     if best_greeting:
-                        pause_after_current = exc.user_message
+                        pause_after_current = str(exc)
                     else:
-                        pause_reason = exc.user_message
+                        pause_reason = str(exc)
                     break
 
                 if not greeting:
@@ -615,6 +635,7 @@ def generate_greetings(config: dict) -> int:
             if not best_greeting:
                 if not pause_reason and not (stop_event is not None and stop_event.is_set()):
                     add_history(db, job["id"], "greeting_failed", "AI 未返回完整招呼语，岗位保留为待生成")
+                    _notify(config, f"已跳过 {job['company']}｜{job['title']}：AI 未返回完整招呼语，岗位保留为待生成。")
                 progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
                 if pause_reason:
                     break

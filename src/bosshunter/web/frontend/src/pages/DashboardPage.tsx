@@ -1234,14 +1234,24 @@ function JobsPoolView() {
     limit: number | null
     job_ids: string[]
     force_rescore: boolean
+    force?: boolean
   }) => {
     const res = await fetch('/api/scoring/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ options }),
+      body: JSON.stringify({ options, force: options.force ?? false }),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
+      if (res.status === 409 && data.code === 'scoring_run_paused' && !options.force) {
+        const confirmed = window.confirm(
+          `已有等待恢复的评分任务：${data.error || ''}\n是否结束该任务并强制开始新评分任务？（已完成的评分结果会保留）`,
+        )
+        if (confirmed) {
+          await startScoring({ ...options, force: true })
+          return
+        }
+      }
       const checks = Array.isArray(data.messages) ? data.messages.join('；') : ''
       throw new Error([data.error || '启动评分失败', checks].filter(Boolean).join('：'))
     }
