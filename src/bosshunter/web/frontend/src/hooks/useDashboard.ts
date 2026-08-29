@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useCallback, useState, useEffect, useRef } from 'react'
 
 interface FunnelData {
   [key: string]: number
@@ -105,12 +105,17 @@ interface WorkbenchData {
 
 interface HistoryDetailPayload {
   schema: string
-  hr_question: string
-  ai_reply: string
+  hr_question?: string
+  ai_reply?: string
+  pending_hr_question?: string
+  pending_history_id?: number
+  manual_reply?: string
   system_reason?: string
   conversation_tail?: Array<{
     sender: string
     text: string
+    time?: string
+    kind?: string
   }>
 }
 
@@ -123,6 +128,8 @@ interface HistoryItem {
   created_at: string
   company: string
   title: string
+  url?: string
+  source_platform?: string
   resume_path?: string
   resolved?: boolean
 }
@@ -150,7 +157,7 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null)
   const refreshingRef = useRef(false)
 
-  const fetchAll = async () => {
+  const fetchAll = useCallback(async () => {
     if (refreshingRef.current) return
     refreshingRef.current = true
     setRefreshing(true)
@@ -179,7 +186,7 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
       setRefreshing(false)
       setLoading(false)
     }
-  }
+  }, [scope])
 
   const startTask = async (mode: 'full' | 'collect' | 'rescore' | 'monitor' | 'deliver', options?: Record<string, unknown>) => {
     const res = await fetch('/api/workbench/task', {
@@ -211,10 +218,20 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
   }
 
   useEffect(() => {
-    fetchAll()
-    const interval = setInterval(fetchAll, 5000)
-    return () => clearInterval(interval)
-  }, [])
+    void fetchAll()
+    const pollIntervalMs = scope === 'monitor' ? 2000 : 5000
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void fetchAll()
+    }
+    const interval = window.setInterval(refreshWhenVisible, pollIntervalMs)
+    window.addEventListener('focus', refreshWhenVisible)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refreshWhenVisible)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [fetchAll, scope])
 
   return {
     workbench,

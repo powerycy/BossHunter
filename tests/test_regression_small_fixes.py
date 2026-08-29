@@ -398,7 +398,8 @@ class DashboardPageTests(unittest.TestCase):
     def test_dashboard_renders_monitor_execution_history(self):
         self.assertIn("MonitorExecutionView", self.source)
         self.assertIn("history", self.source)
-        self.assertIn("<MonitorExecutionView history={history}", self.source)
+        self.assertIn("<MonitorExecutionView", self.source)
+        self.assertIn("history={history}", self.source)
 
     def test_dashboard_exposes_manual_refresh_button(self):
         self.assertIn("RefreshCw", self.source)
@@ -428,6 +429,9 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("refreshingRef.current", hook_source)
         self.assertIn("setLastRefreshedAt", hook_source)
         self.assertIn("setWorkbench(prev => ({ ...prev, task, last_task: task }))", hook_source)
+        self.assertIn("scope === 'monitor' ? 2000 : 5000", hook_source)
+        self.assertIn("visibilitychange", hook_source)
+        self.assertIn("window.addEventListener('focus'", hook_source)
 
     def test_dashboard_filters_today_jobs_and_clears_hidden_selection(self):
         self.assertIn("filteredTodayJobs", self.source)
@@ -573,6 +577,45 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("/dismiss", self.source)
         self.assertIn("reply_dismissed", self.source)
         self.assertIn("放弃", self.source)
+
+    def test_monitor_cards_link_to_the_corresponding_chat_conversation(self):
+        self.assertIn("monitorChatUrl(item)", self.source)
+        self.assertIn("https://www.zhipin.com/web/geek/chat?jobId=${encodeURIComponent(item.job_id)}", self.source)
+        self.assertIn("打开聊天对话", self.source)
+        self.assertIn("window.open(targetUrl, '_blank', 'noopener,noreferrer')", self.source)
+
+    def test_monitor_cards_render_scrollable_hr_ai_conversation_history(self):
+        self.assertIn("monitorConversationMessages(item, history)", self.source)
+        self.assertIn("max-h-[260px]", self.source)
+        self.assertIn("overflow-y-auto", self.source)
+        self.assertNotIn("可上下滚动", self.source)
+        self.assertNotIn("{fromHr ? 'HR' : 'AI 已回答'}", self.source)
+        self.assertIn("{fromHr ? 'HR' : 'AI'}", self.source)
+        self.assertIn("grid-cols-[28px_minmax(0,1fr)]", self.source)
+        self.assertNotIn("{message.time || item.created_at}", self.source)
+        self.assertNotIn("监测记录时间", self.source)
+        self.assertIn("AI 建议回复（尚未回答）", self.source)
+
+    def test_monitor_replied_tab_keeps_each_outbound_round(self):
+        self.assertIn("const repliedRecords = history.filter(isOutboundReplyRecord)", self.source)
+        self.assertIn("parseHistoryDetail(item).schema.startsWith('replied.')", self.source)
+        self.assertIn("item.action === 'auto_replied'", self.source)
+
+    def test_monitor_resolution_parser_shows_manual_reply_and_hr_question(self):
+        history_detail_source = (
+            ROOT
+            / "src"
+            / "bosshunter"
+            / "web"
+            / "frontend"
+            / "src"
+            / "lib"
+            / "historyDetail.ts"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("item.detail_payload.manual_reply", history_detail_source)
+        self.assertIn("item.detail_payload.pending_hr_question", history_detail_source)
+        self.assertIn("item.detail_payload.pending_history_id", history_detail_source)
 
     def test_monitor_surfaces_resume_generation_failures_as_pending_items(self):
         # Arrange: DashboardPage source is loaded in setUp.

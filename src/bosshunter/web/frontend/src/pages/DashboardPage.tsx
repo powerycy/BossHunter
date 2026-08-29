@@ -53,6 +53,7 @@ function currentTaskStage(logs: string[] = []) {
     if (log.includes('招呼语发送结果')) return log
     if (log.includes('发送招呼语')) return '发送招呼语'
     if (log.includes('生成招呼语')) return '生成招呼语'
+    if (log.includes('本轮监测完成')) return log
     const stage = TASK_STAGE_LABELS.find(label => log.includes(label))
     if (stage) return stage
   }
@@ -180,6 +181,28 @@ const taskMetricItems = [
 
 function jobSubtitle(job: Job) {
   return [job.score ? `匹配 ${job.score}` : '', job.salary, job.hr_active || '活跃度未知', getStatusLabel(job.status)].filter(Boolean).join(' · ')
+}
+
+function safeExternalUrl(value?: string) {
+  if (!value) return ''
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : ''
+  } catch {
+    return ''
+  }
+}
+
+function monitorChatUrl(item: HistoryItem) {
+  const platform = item.source_platform || 'boss'
+  if (platform === 'boss' && /^[A-Za-z0-9_-]+$/.test(item.job_id || '')) {
+    return `https://www.zhipin.com/web/geek/chat?jobId=${encodeURIComponent(item.job_id)}`
+  }
+  return safeExternalUrl(item.url)
+}
+
+function monitorLinkLabel(item: HistoryItem) {
+  return (item.source_platform || 'boss') === 'boss' ? '打开聊天对话' : '打开对应页面'
 }
 
 async function parsePreflightResponse(res: Response) {
@@ -556,7 +579,14 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   }
 
   if (view === 'monitor') {
-    return <MonitorExecutionView history={history} refresh={refresh} />
+    return (
+      <MonitorExecutionView
+        history={history}
+        refresh={refresh}
+        refreshing={refreshing}
+        lastRefreshedAt={lastRefreshedAt}
+      />
+    )
   }
 
   return (
@@ -1434,13 +1464,57 @@ function isResumeFailureResolved(item: HistoryItem, history: HistoryItem[]) {
   )
 }
 
-function latestHrText(item: HistoryItem) {
-  const parsed = parseHistoryDetail(item)
-  const latestHr = [...parsed.conversationTail].reverse().find(message => message.sender === 'hr' && message.text.trim())
-  return parsed.hrQuestion || latestHr?.text || ''
+function isOutboundReplyRecord(item: HistoryItem) {
+  if (item.action === 'auto_replied') return true
+  return item.action === 'replied' && parseHistoryDetail(item).schema.startsWith('replied.')
 }
 
-function MonitorExecutionView({ history, refresh }: { history: HistoryItem[]; refresh: () => Promise<void> }) {
+type MonitorConversationMessage = {
+  sender: 'hr' | 'ai'
+  text: string
+  time?: string
+}
+
+function monitorConversationMessages(item: HistoryItem, history: HistoryItem[]): MonitorConversationMessage[] {
+  const parsed = parseHistoryDetail(item)
+  const pendingItem = parsed.pendingHistoryId
+    ? history.find(candidate => candidate.id === parsed.pendingHistoryId)
+    : undefined
+  const pendingParsed = pendingItem ? parseHistoryDetail(pendingItem) : null
+  const source = parsed.conversationTail.length ? parsed : (pendingParsed || parsed)
+  const messages: MonitorConversationMessage[] = []
+
+  const append = (sender: 'hr' | 'ai', text: string, time?: string) => {
+    const normalizedText = text.trim()
+    if (!normalizedText) return
+    const previous = messages[messages.length - 1]
+    if (previous?.sender === sender && previous.text === normalizedText) return
+    messages.push({ sender, text: normalizedText, time })
+  }
+
+  source.conversationTail.forEach(message => {
+    if (message.sender === 'hr') append('hr', message.text, message.time)
+    if (message.sender === 'me') append('ai', message.text, message.time)
+  })
+
+  const hrQuestion = parsed.hrQuestion || source.hrQuestion
+  if (!messages.some(message => message.sender === 'hr')) append('hr', hrQuestion)
+  if (isOutboundReplyRecord(item)) append('ai', parsed.aiReply, item.created_at)
+
+  return messages
+}
+
+function MonitorExecutionView({
+  history,
+  refresh,
+  refreshing,
+  lastRefreshedAt,
+}: {
+  history: HistoryItem[]
+  refresh: () => Promise<void>
+  refreshing: boolean
+  lastRefreshedAt: Date | null
+}) {
   const pendingReplies = uniqueLatestByJob(history.filter(item =>
     item.action === 'reply_pending' && !isReplyPendingResolved(item, history)
   ))
@@ -1453,12 +1527,8 @@ function MonitorExecutionView({ history, refresh }: { history: HistoryItem[]; re
   const resumeRequests = uniqueLatestByJob(history.filter(item =>
     item.action === 'needs_resume' || item.action === 'resume_sent' || item.action === 'resume_failed'
   ))
-  const resumeRequestJobIds = new Set(resumeRequests.map(item => item.job_id).filter(Boolean))
   const followUpRecords = uniqueLatestByJob(history.filter(item => item.action === 'follow_up_sent'))
-  const repliedRecords = uniqueLatestByJob(history.filter(item =>
-    (item.action === 'replied' || item.action === 'auto_replied')
-      && !resumeRequestJobIds.has(item.job_id)
-  ))
+  const repliedRecords = history.filter(isOutboundReplyRecord)
   const [activeMonitorFilter, setActiveMonitorFilter] = useState<MonitorFilter>('pending')
   const visibleHistory = activeMonitorFilter === 'resume'
     ? resumeRequests
@@ -1513,12 +1583,21 @@ function MonitorExecutionView({ history, refresh }: { history: HistoryItem[]; re
 
   return (
     <div className="rounded-3xl border border-card-border bg-white p-5">
-      <div className="mb-4 flex items-start justify-between gap-4">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-2xl font-black">监测执行</h2>
           <p className="mt-1 text-sm text-muted">这里不启动监测，只处理监测发现的 HR 问题、回复建议和结果。</p>
         </div>
-        <span className="rounded-full bg-[#FFF0E5] px-3 py-2 text-xs font-black text-primary">待处理 {pendingItems.length}</span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="text-xs text-muted">
+            {lastRefreshedAt ? `更新于 ${lastRefreshedAt.toLocaleTimeString('zh-CN', { hour12: false })}` : '正在读取'} · 每 2 秒刷新
+          </span>
+          <Button variant="secondary" size="sm" onClick={refresh} disabled={refreshing}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? '刷新中' : '立即刷新'}
+          </Button>
+          <span className="rounded-full bg-[#FFF0E5] px-3 py-2 text-xs font-black text-primary">待处理 {pendingItems.length}</span>
+        </div>
       </div>
       <div className="mb-4 flex flex-wrap gap-2">
         {[
@@ -1547,16 +1626,15 @@ function MonitorExecutionView({ history, refresh }: { history: HistoryItem[]; re
           const isFollowUp = item.action === 'follow_up_sent'
           const isResumeFailure = item.action === 'resume_failed'
           const isResumeRequest = item.action === 'needs_resume' || item.action === 'resume_sent' || isResumeFailure
-          const isReplied = item.action === 'replied' || item.action === 'auto_replied'
+          const isReplied = isOutboundReplyRecord(item)
           const parsed = parseHistoryDetail(item)
-          const hrText = latestHrText(item)
-          const isLegacyReplied = item.action === 'replied' && parsed.schema === 'legacy_text'
-          const hasGeneratedReply = Boolean(parsed.aiReply) && !isLegacyReplied
-          const showReplyContent = canReply || Boolean(parsed.hrQuestion) || hasGeneratedReply || isResumeRequest || isReplied
-          const aiReplyText = parsed.aiReply || item.detail || getActionLabel(item.action)
+          const hasGeneratedReply = Boolean(parsed.aiReply)
+          const conversationMessages = monitorConversationMessages(item, history)
+          const showReplyContent = canReply || Boolean(parsed.hrQuestion) || hasGeneratedReply || isResumeRequest || isReplied || conversationMessages.length > 0
           const systemFailureReason = parsed.systemReason || (isResumeFailure ? '未获得更具体的错误信息，请查看运行日志。' : '')
+          const targetUrl = monitorChatUrl(item)
           return (
-            <div key={`${item.created_at}-${index}`} className="grid gap-3 rounded-2xl border border-card-border bg-[#FFFCFA] p-4 lg:grid-cols-[130px_1fr_160px]">
+            <div key={item.id || `${item.created_at}-${index}`} className="grid gap-3 rounded-2xl border border-card-border bg-[#FFFCFA] p-4 lg:grid-cols-[130px_1fr_160px]">
               <div className="text-xs text-muted">
                 <div>{item.created_at}</div>
                 <div className="mt-2 rounded-full bg-white px-2 py-1 text-center font-bold text-primary">{getActionLabel(item.action)}</div>
@@ -1565,12 +1643,32 @@ function MonitorExecutionView({ history, refresh }: { history: HistoryItem[]; re
                 <div className="font-black">{item.company || '岗位'}｜{item.title || '监测记录'}</div>
                 {showReplyContent ? (
                   <div className="mt-3 space-y-3">
-                    {(isFollowUp || hrText) && (
+                    {isFollowUp && (
                       <div>
-                        <div className="text-xs font-black text-primary">{isFollowUp ? '自动跟进说明' : '对方问题 / HR'}</div>
+                        <div className="text-xs font-black text-primary">自动跟进说明</div>
                         <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-muted">
-                          {isFollowUp ? 'HR 超过设定时间未回复，系统已自动执行一次跟进。' : hrText}
+                          HR 超过设定时间未回复，系统已自动执行一次跟进。
                         </p>
+                      </div>
+                    )}
+                    {conversationMessages.length > 0 && (
+                      <div className="overflow-hidden rounded-2xl border border-card-border bg-white">
+                        <div className="flex items-center justify-between border-b border-card-border px-3 py-1.5">
+                          <span className="text-xs font-black text-foreground">聊天记录</span>
+                        </div>
+                        <div className="max-h-[260px] divide-y divide-card-border overflow-y-auto overscroll-contain">
+                          {conversationMessages.map((message, messageIndex) => {
+                            const fromHr = message.sender === 'hr'
+                            return (
+                              <div key={`${item.id}-${messageIndex}-${message.sender}`} className="grid grid-cols-[28px_minmax(0,1fr)] items-start gap-2 px-3 py-1.5">
+                                <div className={`flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-black ${fromHr ? 'bg-[#FFF0E5] text-primary' : 'bg-emerald-50 text-emerald-700'}`}>
+                                  {fromHr ? 'HR' : 'AI'}
+                                </div>
+                                <p className="min-w-0 whitespace-pre-wrap break-words text-[13px] leading-5 text-foreground">{message.text}</p>
+                              </div>
+                            )
+                          })}
+                        </div>
                       </div>
                     )}
                     {isResumeFailure && (
@@ -1581,19 +1679,14 @@ function MonitorExecutionView({ history, refresh }: { history: HistoryItem[]; re
                     )}
                     {canReply ? (
                       <div>
-                        <div className="mb-1 text-xs font-black text-primary">AI 建议回复</div>
+                        <div className="mb-1 text-xs font-black text-primary">AI 建议回复（尚未回答）</div>
                         <textarea
                           value={draftFor(item)}
                           onChange={event => setReplyDrafts(prev => ({ ...prev, [item.id]: event.target.value }))}
                           className="min-h-[92px] w-full rounded-2xl border border-card-border bg-white p-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                         />
                       </div>
-                    ) : isResumeRequest || !hasGeneratedReply ? null : (
-                      <div className="rounded-2xl border border-card-border bg-white p-3">
-                        <div className="text-xs font-black text-primary">AI 回复</div>
-                        <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-muted">{aiReplyText}</p>
-                      </div>
-                    )}
+                    ) : null}
                   </div>
                 ) : (
                   <p className="mt-2 text-sm leading-6 text-muted">{item.detail || getActionLabel(item.action)}</p>
@@ -1607,10 +1700,18 @@ function MonitorExecutionView({ history, refresh }: { history: HistoryItem[]; re
                 ) : isResumeFailure ? (
                   <p className="mt-2 text-xs text-danger">待处理：定制简历生成失败，尚无可下载文件，请手动处理或稍后重试生成。</p>
                 ) : isReplied ? (
-                  <p className="mt-2 text-xs text-primary">已回复：HR 已有反馈或系统已完成回复处理。</p>
+                  <p className="mt-2 text-xs text-primary">已回答：本轮 HR 与 AI 回复已保留在上方聊天记录中。</p>
                 ) : null}
               </div>
               <div className="grid gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={!targetUrl}
+                  onClick={() => window.open(targetUrl, '_blank', 'noopener,noreferrer')}
+                >
+                  <ExternalLink className="mr-2 h-4 w-4" />{monitorLinkLabel(item)}
+                </Button>
                 <Button size="sm" disabled={!canReply} onClick={() => sendManualReply(item)}><MessageCircle className="mr-2 h-4 w-4" />确认回复</Button>
                 <Button variant="secondary" size="sm" disabled={!canReply} onClick={() => setReplyDrafts(prev => ({ ...prev, [item.id]: draftFor(item) }))}>编辑回复</Button>
                 <Button variant="secondary" size="sm" disabled={!canReply} onClick={() => dismissPendingReply(item)}>放弃</Button>

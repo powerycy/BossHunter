@@ -654,6 +654,7 @@ export default function ConfigPage() {
           <div className="space-y-4">
             <Field label="检查间隔 (分钟)">
               <Input type="number" value={config.monitor?.interval || 30} onChange={e => updateConfig('monitor.interval', Number(e.target.value))} min={1} max={120} />
+              <p className="mt-1 text-xs text-muted">单独监测会立即检查一次；后续轮询还会乘以 BOSS 操作间隔倍率。</p>
             </Field>
             <Field label="全流程首次监测冷却 (分钟)">
               <Input type="number" value={config.monitor?.initial_cooldown_minutes ?? 10} onChange={e => updateConfig('monitor.initial_cooldown_minutes', Number(e.target.value))} min={0} max={120} />

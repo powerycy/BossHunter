@@ -40,6 +40,7 @@ from bosshunter.db import (
 	get_jobs_ready_to_send,
 	get_jobs_with_send_errors,
 	get_recent_history,
+	get_unresolved_reply_pending,
 	get_unresolved_resume_failures,
 	get_stats,
 	get_top_companies,
@@ -515,6 +516,8 @@ def _execute_monitor(task: WorkbenchTask, config: dict, *, initial_cooldown: boo
 
 	monitor_config = dict(config)
 	monitor_config["_workbench_stop_event"] = task.stop_requested
+	monitor_config["_monitor_reuse_chat_tab"] = True
+	monitor_config["_monitor_runtime_state"] = {}
 	interval_min = get_effective_monitor_interval_minutes(config)
 	interval_sec = max(interval_min * 60, 1)
 	queue_lock = task.context.setdefault("monitor_queue_lock", Lock())
@@ -556,6 +559,8 @@ def _execute_monitor(task: WorkbenchTask, config: dict, *, initial_cooldown: boo
 			wakeup_event.wait(interval_sec)
 			wakeup_event.clear()
 	finally:
+		from bosshunter.executor.monitor import close_monitor_chat_target
+		close_monitor_chat_target(monitor_config)
 		task.context["monitoring"] = False
 		task.context.pop("monitor_wakeup_event", None)
 		task.context.pop("monitor_queue_lock", None)
@@ -1059,11 +1064,12 @@ def api_history():
 		data = get_recent_history(db, limit)
 		if include_unresolved:
 			seen_ids = {item["id"] for item in data}
-			data.extend(
-				item
-				for item in get_unresolved_resume_failures(db)
-				if item["id"] not in seen_ids
-			)
+			for unresolved_items in (
+				get_unresolved_reply_pending(db),
+				get_unresolved_resume_failures(db),
+			):
+				data.extend(item for item in unresolved_items if item["id"] not in seen_ids)
+				seen_ids.update(item["id"] for item in unresolved_items)
 			data.sort(
 				key=lambda item: (str(item.get("created_at") or ""), int(item.get("id") or 0)),
 				reverse=True,
@@ -1615,6 +1621,11 @@ def api_job_resume_download(job_id):
 
 @app.route("/api/history/<history_id>/reply", method="POST")
 def api_history_reply(history_id):
+	with job_mutation_lock:
+		return _api_history_reply_locked(history_id)
+
+
+def _api_history_reply_locked(history_id):
 	db = _get_web_db()
 	try:
 		body = request.json or {}
@@ -1630,6 +1641,25 @@ def api_history_reply(history_id):
 			return _json_response({"error": "待回复记录不存在"}, 404)
 		if row["action"] != "reply_pending":
 			return _json_response({"error": "只能确认待回复记录"}, 400)
+		latest_pending = db.execute(
+			"SELECT MAX(id) AS id FROM history WHERE job_id = ? AND action = 'reply_pending'",
+			(row["job_id"],),
+		).fetchone()
+		if not latest_pending or int(latest_pending["id"] or 0) != int(row["id"]):
+			return _json_response({"error": "这条建议已不是最新一轮，请刷新后处理最新消息"}, 409)
+		already_resolved = db.execute(
+			"""
+			SELECT 1
+			FROM history
+			WHERE job_id = ?
+			  AND id > ?
+			  AND action IN ('reply_dismissed', 'replied', 'auto_replied')
+			LIMIT 1
+			""",
+			(row["job_id"], row["id"]),
+		).fetchone()
+		if already_resolved:
+			return _json_response({"success": True, "already_resolved": True, "message": "这轮回复已处理。"})
 
 		from bosshunter.executor.monitor import _build_reply_resolution_detail
 

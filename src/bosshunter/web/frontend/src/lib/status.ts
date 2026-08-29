@@ -24,6 +24,7 @@ export const ACTION_LABELS: Record<string, string> = {
   sent: '发送',
   manual_sent: '手动标记已发送',
   replied: '回复',
+  hr_reply_detected: 'HR 有新消息',
   reply_pending: '待确认回复',
   reply_dismissed: '已放弃回复',
   auto_replied: '自动回复',
