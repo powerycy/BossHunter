@@ -911,6 +911,36 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(full_task.context["confirmed_job_ids"], ["ready-job"])
         self.assertEqual(json.loads(response_body)["id"], "full-task")
 
+    def test_web_api_deliver_batch_continues_send_when_some_greetings_fail(self):
+        task = WorkbenchTask(id="deliver-partial", mode="full", label="运行全流程")
+        config = {
+            "_workbench_job_ids": ["job-1", "job-2"],
+            "_workbench_send_report": {
+                "requested_count": 1,
+                "sent_count": 1,
+                "failed_count": 0,
+                "deferred_count": 0,
+                "quota_deferred_count": 0,
+                "already_sent": 0,
+                "daily_limit": 0,
+                "remaining_quota": 0,
+            },
+        }
+        logs: list[str] = []
+        task.logs = logs
+
+        with (
+            patch("bosshunter.ai.greeter.generate_greetings", return_value=1) as generate,
+            patch("bosshunter.executor.sender.send_greetings", return_value=1) as send,
+        ):
+            server._execute_deliver_batch(task, config)
+
+        generate.assert_called_once()
+        send.assert_called_once()
+        self.assertTrue(any("未生成招呼语" in message and "手动填写" in message for message in logs))
+        self.assertTrue(any("继续进入发送流程" in message for message in logs))
+        self.assertEqual(task.metrics.get("send_success"), 1)
+
     def test_web_api_manual_sent_records_external_send_without_using_boss_quota(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)

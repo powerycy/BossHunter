@@ -786,9 +786,14 @@ def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
 		_log(task, f"招呼语生成完成：{generated_count}/{len(selected_job_ids) or generated_count}")
 		if task.stop_requested.is_set():
 			return
-		if selected_job_ids and generated_count != len(selected_job_ids):
-			raise RuntimeError(
-				f"招呼语生成失败：选择 {len(selected_job_ids)} 个岗位，仅成功生成 {generated_count} 条；未发送任何消息"
+		if selected_job_ids and generated_count < len(selected_job_ids):
+			missing_count = len(selected_job_ids) - generated_count
+			# 生成失败的岗位保留为待生成且无招呼语文本，本就不会进入发送；其余岗位继续走
+			# 现有人工确认、发送窗口与风控规则（#101 回归：不再因部分失败放弃整个批次）。
+			_log(
+				task,
+				f"{missing_count} 个岗位未生成招呼语，已保留为待生成，请在 BOSS 中手动填写；"
+				"其余岗位继续进入发送流程。",
 			)
 	_log(task, "发送招呼语")
 	# The workbench must obey the same send window and day-off guard as the CLI.

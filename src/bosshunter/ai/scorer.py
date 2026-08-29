@@ -403,26 +403,41 @@ def _request_score(
             try:
                 response = _call_claude(_build_scoring_prompt(job, resume, config), config, retry_tokens)
             except AIRequestError as retry_exc:
-                if retry_exc.kind in {"output_truncated", "output_limit", "context_limit"}:
+                if retry_exc.kind == "empty_response":
+                    # 空响应用保持"空结果"语义：落入下方按配置重试，仍空则岗位级失败（#101 回归）。
+                    response = None
+                elif retry_exc.kind in {"output_truncated", "output_limit", "context_limit"}:
                     return ScoreOutcome(failure_detail="调整输出 Token 后仍未获得完整评分")
-                # 带上"因截断进入重试"的上下文，否则只看得到重试时的错误（issue #101）。
-                return ScoreOutcome(pause_reason=f"增大输出 Token 重试后失败：{retry_exc}")
+                else:
+                    # 带上"因截断进入重试"的上下文，否则只看得到重试时的错误（issue #101）。
+                    return ScoreOutcome(pause_reason=f"增大输出 Token 重试后失败：{retry_exc}")
         elif exc.kind == "output_limit":
             _notify(config, f"{job['company']}｜{job['title']} 正在降低输出 Token 上限后重试评分。")
             try:
                 response = _call_claude(_build_scoring_prompt(job, resume, config), config, 128)
             except AIRequestError as retry_exc:
-                if retry_exc.kind == "output_limit":
+                if retry_exc.kind == "empty_response":
+                    response = None
+                elif retry_exc.kind == "output_limit":
                     return ScoreOutcome(failure_detail="当前模型不接受调整后的输出 Token 设置")
-                return ScoreOutcome(pause_reason=f"降低输出 Token 重试后失败：{retry_exc}")
+                else:
+                    return ScoreOutcome(pause_reason=f"降低输出 Token 重试后失败：{retry_exc}")
         elif exc.kind == "context_limit":
             _notify(config, f"{job['company']}｜{job['title']} 内容较长，正在压缩后重试评分。")
             try:
                 response = _call_claude(_build_scoring_prompt(job, resume, config, compact=True), config, 128)
             except AIRequestError as retry_exc:
-                if retry_exc.kind == "context_limit":
+                if retry_exc.kind == "empty_response":
+                    response = None
+                elif retry_exc.kind == "context_limit":
                     return ScoreOutcome(failure_detail="压缩请求后仍超过模型上下文限制")
-                return ScoreOutcome(pause_reason=f"压缩请求重试后失败：{retry_exc}")
+                else:
+                    return ScoreOutcome(pause_reason=f"压缩请求重试后失败：{retry_exc}")
+        elif exc.kind == "empty_response":
+            # 空响应用保持"空结果"语义：按 max_attempts 走下方重试，仍为空则只记当前岗位失败，
+            # 不中断整批（#101 回归：整批暂停仅留给鉴权/额度/限流/网络等服务级故障）。
+            _notify(config, f"{job['company']}｜{job['title']} 的 AI 回答没有文本内容，正在重试。")
+            response = None
         else:
             # str(exc) 现在带 kind/status_code，UI 才能区分限流/鉴权/额度等失败原因（issue #101）。
             return ScoreOutcome(pause_reason=str(exc))

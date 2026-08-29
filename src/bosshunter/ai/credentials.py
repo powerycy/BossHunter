@@ -138,15 +138,16 @@ def normalize_ai_error(exc: Exception, response: object | None = None) -> AIRequ
         "频率限制",
     )
 
-    # 判定顺序：额度/限流/鉴权先于上下文。真实错误体常混排多种提示（如"余额不足，请减少
-    # 输入过长内容"），先查 context marker 会把额度问题误报成上下文超限（issue #101）。
-    # quota marker 仍需优先于 429 状态码：OpenAI 的 insufficient_quota 实际就配 429 返回。
+    # 判定顺序：明确的 401/403 状态最先归为鉴权——错误体关键词只是启发式，401+「额度」类
+    # 混排错误体不应误导恢复建议。其后额度/限流先于上下文：真实错误体常混排多种提示（如
+    # "余额不足，请减少输入过长内容"），先查 context marker 会把额度问题误报成上下文超限
+    # （issue #101）。quota marker 仍优先于 429 状态码：OpenAI 的 insufficient_quota 实际就配 429 返回。
+    if status_code in {401, 403}:
+        return AIRequestError("auth", "AI API Key 无效或当前模型没有访问权限", status_code)
     if status_code == 402 or any(marker in raw for marker in quota_markers):
         return AIRequestError("token_quota", "AI Token 额度或账户余额不足", status_code)
     if status_code == 429 or any(marker in raw for marker in rate_markers):
         return AIRequestError("rate_limit", "AI 服务触发请求或 Token 频率限制", status_code)
-    if status_code in {401, 403}:
-        return AIRequestError("auth", "AI API Key 无效或当前模型没有访问权限", status_code)
     if any(marker in raw for marker in context_markers):
         return AIRequestError("context_limit", "请求内容超过当前模型的上下文限制", status_code)
     if any(marker in raw for marker in output_limit_markers):

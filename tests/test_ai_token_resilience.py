@@ -135,6 +135,26 @@ class AiCredentialErrorTests(unittest.TestCase):
 
         self.assertEqual(normalized.kind, "rate_limit")
 
+    def test_auth_status_wins_over_quota_and_rate_markers(self):
+        request = httpx.Request("POST", "https://api.example.com/v1/messages")
+        response = httpx.Response(
+            401,
+            request=request,
+            json={"error": {"message": "quota exceeded for this token"}},
+        )
+        error = httpx.HTTPStatusError("Unauthorized", request=request, response=response)
+
+        self.assertEqual(credentials.normalize_ai_error(error).kind, "auth")
+
+        response = httpx.Response(
+            403,
+            request=request,
+            json={"error": {"message": "rate limit policy rejected this key"}},
+        )
+        error = httpx.HTTPStatusError("Forbidden", request=request, response=response)
+
+        self.assertEqual(credentials.normalize_ai_error(error).kind, "auth")
+
 
 class ScorerTokenResilienceTests(unittest.TestCase):
     def test_structured_score_is_summed_and_hard_technical_gap_caps_at_55(self):
@@ -563,6 +583,101 @@ class ScorerTokenResilienceTests(unittest.TestCase):
         self.assertIn("增大输出 Token 重试后失败", pause_reason)
         self.assertIn("(auth, status=401)", pause_reason)
 
+    def test_empty_response_retries_then_scores_job(self):
+        db = MagicMock()
+        job = _job("empty-retry")
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=[job]),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch(
+                "bosshunter.ai.scorer._call_claude",
+                side_effect=[
+                    credentials.AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程"),
+                    _score_response(82),
+                ],
+            ) as call_ai,
+            patch("bosshunter.ai.scorer.update_job_quick_score"),
+            patch("bosshunter.ai.scorer.update_job_score"),
+            patch("bosshunter.ai.scorer.update_job_status") as update_status,
+        ):
+            scored, filtered = scorer.score_jobs({"scoring": {"threshold": 70}})
+
+        self.assertEqual((scored, filtered), (1, 0))
+        self.assertEqual(call_ai.call_count, 2)
+        update_status.assert_called_once_with(db, "empty-retry", "ready")
+
+    def test_persistent_empty_response_fails_single_job_and_continues_batch(self):
+        db = MagicMock()
+        jobs = [_job("1"), _job("2")]
+        logs: list[str] = []
+        checkpoints: list[dict] = []
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch(
+                "bosshunter.ai.scorer._call_claude",
+                side_effect=[
+                    credentials.AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程"),
+                    credentials.AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程"),
+                    _score_response(82),
+                ],
+            ) as call_ai,
+            patch("bosshunter.ai.scorer.update_job_quick_score"),
+            patch("bosshunter.ai.scorer.update_job_score") as update_score,
+            patch("bosshunter.ai.scorer.update_job_status") as update_status,
+        ):
+            scored, filtered = scorer.score_jobs(
+                {
+                    "scoring": {"threshold": 70},
+                    "_workbench_log": logs.append,
+                    "_workbench_score_checkpoint": checkpoints.append,
+                }
+            )
+
+        self.assertEqual((scored, filtered), (1, 0))
+        self.assertEqual(call_ai.call_count, 3)
+        self.assertEqual(update_score.call_count, 2)
+        self.assertEqual(
+            update_score.call_args_list[0].args,
+            (db, "1", 0, "AI评分失败: AI 未返回完整、可解析的评分 JSON"),
+        )
+        update_status.assert_called_once_with(db, "2", "ready")
+        self.assertTrue(any("已跳过 公司 1｜AI 产品经理 1" in message for message in logs))
+        self.assertEqual(checkpoints[-1]["status"], "completed_with_errors")
+
+    def test_truncation_retry_empty_response_stays_job_level(self):
+        db = MagicMock()
+        job = _job("1")
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=[job]),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch(
+                "bosshunter.ai.scorer._call_claude",
+                side_effect=[
+                    credentials.AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断"),
+                    credentials.AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程"),
+                    _score_response(82),
+                ],
+            ) as call_ai,
+            patch("bosshunter.ai.scorer.update_job_quick_score"),
+            patch("bosshunter.ai.scorer.update_job_score"),
+            patch("bosshunter.ai.scorer.update_job_status") as update_status,
+        ):
+            scored, filtered = scorer.score_jobs({"scoring": {"threshold": 70}})
+
+        self.assertEqual((scored, filtered), (1, 0))
+        self.assertEqual(call_ai.call_count, 3)
+        update_status.assert_called_once_with(db, "1", "ready")
+
 
 class GreeterTokenResilienceTests(unittest.TestCase):
     def test_style_guard_flags_template_language_and_technical_stacking(self):
@@ -821,6 +936,102 @@ class GreeterTokenResilienceTests(unittest.TestCase):
         self.assertEqual(call_ai.call_args_list[0].args[2], 8192)
         self.assertEqual(call_ai.call_args_list[1].args[2], 16384)
         self.assertTrue(any("回答被截断" in message and "增大输出 Token" in message for message in logs))
+
+    def test_empty_response_retries_then_generates_greeting(self):
+        db = MagicMock()
+        jobs = [_job("empty-retry")]
+
+        with (
+            patch("bosshunter.ai.greeter.get_db", return_value=db),
+            patch("bosshunter.ai.greeter.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.greeter._get_resume_summary", return_value="真实简历摘要"),
+            patch(
+                "bosshunter.ai.greeter._call_claude",
+                side_effect=[
+                    credentials.AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程"),
+                    "第二次生成成功的个性化招呼语",
+                ],
+            ) as call_ai,
+            patch("bosshunter.ai.greeter.update_job_greeting") as update_greeting,
+            patch("bosshunter.ai.greeter.update_job_status"),
+            patch("bosshunter.ai.greeter.add_history") as add_history,
+        ):
+            count = greeter.generate_greetings(
+                {"ai": {"greeting_max_attempts": 2, "greeting_max_iterations": 0}}
+            )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(call_ai.call_count, 2)
+        update_greeting.assert_called_once_with(db, "empty-retry", "第二次生成成功的个性化招呼语")
+        add_history.assert_not_called()
+
+    def test_persistent_empty_response_fails_job_and_continues_batch(self):
+        db = MagicMock()
+        jobs = [_job("1"), _job("2")]
+        logs: list[str] = []
+
+        with (
+            patch("bosshunter.ai.greeter.get_db", return_value=db),
+            patch("bosshunter.ai.greeter.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.greeter._get_resume_summary", return_value="真实简历摘要"),
+            patch(
+                "bosshunter.ai.greeter._call_claude",
+                side_effect=[
+                    credentials.AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程"),
+                    credentials.AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程"),
+                    "岗位2的个性化招呼语",
+                ],
+            ) as call_ai,
+            patch("bosshunter.ai.greeter.update_job_greeting") as update_greeting,
+            patch("bosshunter.ai.greeter.update_job_status") as update_status,
+            patch("bosshunter.ai.greeter.add_history") as add_history,
+        ):
+            count = greeter.generate_greetings(
+                {
+                    "ai": {"greeting_max_attempts": 2, "greeting_max_iterations": 0},
+                    "_workbench_log": logs.append,
+                }
+            )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(call_ai.call_count, 3)
+        update_greeting.assert_called_once_with(db, "2", "岗位2的个性化招呼语")
+        update_status.assert_called_once_with(db, "2", "ready")
+        add_history.assert_called_once_with(db, "1", "greeting_failed", "AI 未返回完整招呼语，岗位保留为待生成")
+        self.assertTrue(any("已跳过 公司 1｜AI 产品经理 1" in message for message in logs))
+        self.assertFalse(any("安全暂停" in message for message in logs))
+
+    def test_review_empty_response_keeps_draft_and_continues_batch(self):
+        db = MagicMock()
+        jobs = [_job("1"), _job("2")]
+        logs: list[str] = []
+
+        with (
+            patch("bosshunter.ai.greeter.get_db", return_value=db),
+            patch("bosshunter.ai.greeter.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.greeter._get_resume_summary", return_value="真实简历摘要"),
+            patch(
+                "bosshunter.ai.greeter._call_claude",
+                side_effect=[
+                    "这是岗位1的个性化招呼语。",
+                    credentials.AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程"),
+                    "这是岗位2的个性化招呼语。",
+                    credentials.AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程"),
+                ],
+            ) as call_ai,
+            patch("bosshunter.ai.greeter.update_job_greeting") as update_greeting,
+            patch("bosshunter.ai.greeter.update_job_status"),
+        ):
+            count = greeter.generate_greetings(
+                {"ai": {"greeting_max_iterations": 1}, "_workbench_log": logs.append}
+            )
+
+        self.assertEqual(count, 2)
+        self.assertEqual(call_ai.call_count, 4)
+        update_greeting.assert_any_call(db, "1", "这是岗位1的个性化招呼语。")
+        update_greeting.assert_any_call(db, "2", "这是岗位2的个性化招呼语。")
+        self.assertTrue(any("质量检查未返回内容，已保留可用招呼语并继续" in message for message in logs))
+        self.assertFalse(any("安全暂停" in message for message in logs))
 
 
 if __name__ == "__main__":
