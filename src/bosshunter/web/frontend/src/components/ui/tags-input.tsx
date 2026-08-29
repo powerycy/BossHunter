@@ -14,12 +14,13 @@ export function TagsInput({ value, onChange, placeholder = '输入后按回车�
   const [input, setInput] = useState('')
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && input.trim()) {
+    if (e.key === 'Enter' && input.trim() && !e.nativeEvent.isComposing) {
       e.preventDefault()
+      const tags = input.split(/[,，、;；]/).map(tag => tag.trim()).filter(Boolean)
       if (onAdd) {
-        onAdd(input.trim())
-      } else if (!value.includes(input.trim())) {
-        onChange([...value, input.trim()])
+        tags.forEach(onAdd)
+      } else {
+        onChange([...new Set([...value, ...tags])])
       }
       setInput('')
     } else if (e.key === 'Backspace' && !input && value.length > 0) {

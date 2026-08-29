@@ -1,3 +1,4 @@
+from threading import Event
 from unittest.mock import patch
 
 import pytest
@@ -114,8 +115,40 @@ def test_pause_checkpoint_keeps_current_and_unstarted_jobs_for_recovery(tmp_path
 
 	assert checkpoints[-1]["status"] == "paused"
 	assert checkpoints[-1]["pause_reason"] == "AI quota exhausted"
+	assert checkpoints[-1]["error"] == "AI quota exhausted"
 	assert len(checkpoints[-1]["remaining_job_ids"]) == 2
 	assert set(checkpoints[-1]["remaining_job_ids"]).issubset({"one", "two", "three"})
+
+
+def test_user_stop_pause_keeps_error_empty_for_clean_record(tmp_path):
+	db_path = tmp_path / "userstop.db"
+	db = get_db(db_path)
+	try:
+		for job_id in ("one", "two"):
+			insert_job(db, _job(job_id))
+	finally:
+		db.close()
+
+	checkpoints: list[dict] = []
+	stop_event = Event()
+	stop_event.set()
+	with (
+		patch("bosshunter.ai.scorer.get_db", side_effect=lambda: get_db(db_path)),
+		patch("bosshunter.ai.scorer._load_resume", return_value="real resume"),
+		patch("bosshunter.ai.scorer.quick_score", return_value=(80, "pass")),
+	):
+		score_jobs(
+			{
+				"ai": {"scoring_concurrency": 1},
+				"scoring": {"threshold": 60},
+				"_workbench_stop_event": stop_event,
+				"_workbench_score_checkpoint": checkpoints.append,
+			}
+		)
+
+	assert checkpoints[-1]["status"] == "paused"
+	assert checkpoints[-1]["pause_reason"] == "用户暂停或任务中断"
+	assert checkpoints[-1]["error"] == ""
 
 
 def test_restart_preserves_remaining_jobs_and_marks_run_recoverable(tmp_path):

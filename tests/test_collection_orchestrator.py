@@ -161,6 +161,25 @@ class CollectionOrchestratorTests(TestCase):
         self.assertEqual(result["platforms"]["boss"]["keywords"], ["后端"])
         self.assertEqual(result["platforms"]["boss"]["cities"], ["上海"])
 
+    def test_boss_filters_survive_normalization_and_invalid_values_are_removed(self):
+        result = normalize_collection_options({
+            "search": {
+                "keywords": ["后端"],
+                "cities": ["北京"],
+                "filters": {
+                    "job_type": ["全职"],
+                    "experience": ["1-3年", "任意经验"],
+                    "industry": ["100001", "bad&sortType=2"],
+                },
+            },
+        })
+
+        self.assertEqual(result["platforms"]["boss"]["filters"], {
+            "job_type": ["全职"],
+            "experience": ["1-3年"],
+            "industry": ["100001"],
+        })
+
     def test_zhilian_city_code_is_resolved_from_city_name(self):
         result = normalize_collection_options({}, {
             "platform_order": ["zhilian"],

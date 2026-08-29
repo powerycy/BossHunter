@@ -24,7 +24,7 @@ export function TrendChart({ data }: TrendChartProps) {
       const key = item.day
       if (!dayMap[key]) dayMap[key] = { day: key.slice(5), send: 0, reply: 0 }
       if (item.action === 'sent') dayMap[key].send += item.cnt
-      else if (item.action === 'replied') dayMap[key].reply += item.cnt
+      else if (item.action === 'replied' || item.action === 'auto_replied') dayMap[key].reply += item.cnt
     })
 
     return Object.values(dayMap).sort((a, b) => a.day.localeCompare(b.day))

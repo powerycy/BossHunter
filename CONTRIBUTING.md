@@ -12,6 +12,7 @@
 - Bug 报告请使用 [Bug 报告模板](.github/ISSUE_TEMPLATE/bug_report.md)
 - 选择器失效请使用 [选择器失效模板](.github/ISSUE_TEMPLATE/selector_broken.md)
 - 新功能建议请先开 Issue 讨论
+- 希望长期参与维护，请阅读 [项目治理](GOVERNANCE.md) 并使用 [候选维护者申请模板](.github/ISSUE_TEMPLATE/maintainer_application.md)
 
 ## 提交 Pull Request
 
@@ -34,8 +35,9 @@
 1. Fork 仓库
 2. 基于 `main` 创建功能分支：`git checkout -b feat/your-feature`
 3. 提交代码，确保 `bosshunter --help` 正常运行
-4. 推送并创建 Pull Request
-5. 等待 review
+4. 运行相关测试；涉及前端时同时确认前端可以构建
+5. 推送并创建 Pull Request
+6. 等待对应维护域的 review
 
 ### 代码风格
 
@@ -64,3 +66,11 @@ bosshunter --help
 3. 提交 PR 并说明变化
 
 这是最欢迎的贡献类型之一。
+
+## 成为维护者
+
+BossHunter 将维护责任划分为“核心与安全”“产品与 AI”“平台适配”三个维护域。候选维护者通常先以 `Triage` 权限进入 2–4 周观察期，不会因为贡献榜排名自动获得写权限。
+
+首轮计划招募 6 名候选维护者：核心与安全 3 名、产品与 AI 2 名、平台适配 1 名。平台适配工作量增加后再补充第 7 名候选。
+
+候选与晋升标准、权限范围和离任机制详见 [GOVERNANCE.md](GOVERNANCE.md)，现任及历任维护者记录见 [MAINTAINERS.md](MAINTAINERS.md)。

@@ -22,12 +22,19 @@ interface JobsTableProps {
   onSortChange: (sortBy: JobSortKey) => void
 }
 
-function safeExternalJobUrl(job: Job): string | null {
-  if (job.source_platform !== 'zhilian' && job.source_platform !== '51job') return null
+function safeJobUrl(job: Job): string | null {
+  const platform = job.source_platform || 'boss'
+  if (platform !== 'boss' && platform !== 'zhilian' && platform !== '51job') return null
   try {
-    const parsed = new URL(job.url || '')
+    const parsed = platform === 'boss'
+      ? new URL(job.url || '', 'https://www.zhipin.com')
+      : new URL(job.url || '')
     if (parsed.protocol !== 'https:') return null
-    const rootDomain = job.source_platform === 'zhilian' ? 'zhaopin.com' : '51job.com'
+    const rootDomain = platform === 'boss'
+      ? 'zhipin.com'
+      : platform === 'zhilian'
+        ? 'zhaopin.com'
+        : '51job.com'
     if (parsed.hostname !== rootDomain && !parsed.hostname.endsWith(`.${rootDomain}`)) return null
     return parsed.toString()
   } catch {
@@ -132,7 +139,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
               {jobs.map(job => {
                 const isExpanded = expanded === job.id
                 const isExternalPlatform = job.source_platform === 'zhilian' || job.source_platform === '51job'
-                const externalUrl = safeExternalJobUrl(job)
+                const jobUrl = safeJobUrl(job)
                 const alreadySent = ['sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent'].includes(job.status)
                 return (
                   <Fragment key={job.id}>
@@ -183,13 +190,18 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                       {hasActions && (
                         <td className="px-3 py-3" onClick={event => event.stopPropagation()}>
                           <div className="flex flex-wrap items-center justify-center gap-1.5">
-                            {isExternalPlatform && externalUrl && (
-                              <a href={externalUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-card-border px-2 py-1.5 text-[11px] font-bold text-primary hover:bg-[#FFF0E5]">
+                            {isExternalPlatform && jobUrl && (
+                              <a href={jobUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-card-border px-2 py-1.5 text-[11px] font-bold text-primary hover:bg-[#FFF0E5]">
                                 <ExternalLink className="h-3.5 w-3.5" />打开平台
                               </a>
                             )}
-                            {isExternalPlatform && !externalUrl && (
+                            {isExternalPlatform && !jobUrl && (
                               <span className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] font-bold text-amber-700">链接不可用</span>
+                            )}
+                            {!isExternalPlatform && jobUrl && (
+                              <a href={jobUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-card-border px-2 py-1.5 text-[11px] font-bold text-primary hover:bg-[#FFF0E5]">
+                                <ExternalLink className="h-3.5 w-3.5" />跳转岗位
+                              </a>
                             )}
                             {isExternalPlatform && onMarkManuallySent && (
                               <button

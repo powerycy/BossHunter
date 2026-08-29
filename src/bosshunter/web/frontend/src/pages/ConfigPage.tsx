@@ -44,6 +44,14 @@ const AI_SERVICES = {
 type AiService = keyof typeof AI_SERVICES
 type PlatformId = 'boss' | 'zhilian' | '51job'
 
+const BOSS_FILTER_OPTIONS = {
+  job_type: ['全职', '兼职', '实习'],
+  experience: ['经验不限', '应届生', '1年以内', '1-3年', '3-5年', '5-10年', '10年以上', '在校生'],
+  degree: ['学历不限', '大专', '本科', '硕士', '博士', '高中', '中专/中技', '初中及以下'],
+  scale: ['0-20人', '20-99人', '100-499人', '500-999人', '1000-9999人', '10000人以上'],
+  salary: ['3K以下', '3-5K', '5-10K', '10-20K', '20-50K', '50K以上'],
+} as const
+
 export default function ConfigPage() {
   const { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig } = useConfig()
   const requestedSection = new URLSearchParams(window.location.search).get('section')
@@ -181,6 +189,7 @@ export default function ConfigPage() {
     return {
       ...legacy,
       ...specific,
+      filters: { ...(legacy.filters || {}), ...(specific.filters || {}) },
       keywords: specific.keywords?.length ? specific.keywords : legacy.keywords,
       cities: specific.cities?.length ? specific.cities : legacy.cities,
       city_codes: Object.keys(specific.city_codes || {}).length ? specific.city_codes : legacy.city_codes,
@@ -192,6 +201,14 @@ export default function ConfigPage() {
   const updatePlatformSearch = (platform: PlatformId, key: string, value: any) => {
     updateConfig(`platforms.${platform}.search.${key}`, value)
     if (platform === 'boss') updateConfig(`search.${key}`, value)
+  }
+
+  const updateBossFilter = (search: any, key: keyof typeof BOSS_FILTER_OPTIONS | 'industry', value: string, multiple = true) => {
+    const current = Array.isArray(search.filters?.[key]) ? search.filters[key] : []
+    const next = multiple
+      ? (current.includes(value) ? current.filter((item: string) => item !== value) : [...current, value])
+      : (value ? [value] : [])
+    updatePlatformSearch('boss', `filters.${key}`, next)
   }
 
   const updatePlatformCities = (platform: PlatformId, cities: string[]) => {
@@ -370,6 +387,7 @@ export default function ConfigPage() {
                 ? search.cities
                 : platform === 'boss' ? (config.profile?.target_cities || []) : []
               const cityInput = cities.join(', ')
+              const bossFilters = search.filters && typeof search.filters === 'object' ? search.filters : {}
               return (
                 <div key={platform} className={`rounded-2xl border p-4 ${enabled ? 'border-primary/30 bg-[#FFFCFA]' : 'border-card-border bg-white opacity-70'}`}>
                   <div className="flex items-center justify-between gap-3">
@@ -412,6 +430,45 @@ export default function ConfigPage() {
                         </Select>
                       </Field>
                     </div>
+                    {platform === 'boss' && <div className="space-y-3 rounded-xl border border-card-border bg-white p-3">
+                      <p className="text-xs font-black text-foreground">BOSS 搜索筛选（可选）</p>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <Field label="职位类型">
+                          <Select value={Array.isArray(bossFilters.job_type) ? bossFilters.job_type[0] || '' : ''} onChange={event => updateBossFilter(search, 'job_type', event.target.value, false)}>
+                            <option value="">不限</option>
+                            {BOSS_FILTER_OPTIONS.job_type.map(option => <option key={option} value={option}>{option}</option>)}
+                          </Select>
+                        </Field>
+                        <Field label="薪资范围">
+                          <Select value={Array.isArray(bossFilters.salary) ? bossFilters.salary[0] || '' : ''} onChange={event => updateBossFilter(search, 'salary', event.target.value, false)}>
+                            <option value="">不限</option>
+                            {BOSS_FILTER_OPTIONS.salary.map(option => <option key={option} value={option}>{option}</option>)}
+                          </Select>
+                        </Field>
+                      </div>
+                      {(['experience', 'degree', 'scale'] as const).map(key => {
+                        const labels = { experience: '工作经验', degree: '学历要求', scale: '公司规模' }
+                        const selected: string[] = Array.isArray(bossFilters[key]) ? bossFilters[key] : []
+                        return <Field key={key} label={labels[key]}>
+                          <div className="flex flex-wrap gap-1.5">
+                            {BOSS_FILTER_OPTIONS[key].map(option => <button
+                              key={option}
+                              type="button"
+                              onClick={() => updateBossFilter(search, key, option)}
+                              className={`rounded-full border px-2.5 py-1 text-xs font-bold ${selected.includes(option) ? 'border-primary bg-[#FFF0E5] text-primary' : 'border-card-border bg-white text-muted hover:border-primary/40'}`}
+                            >{option}</button>)}
+                          </div>
+                        </Field>
+                      })}
+                      <Field label="行业编码">
+                        <TagsInput
+                          value={Array.isArray(bossFilters.industry) ? bossFilters.industry : []}
+                          onChange={value => updatePlatformSearch('boss', 'filters.industry', value)}
+                          placeholder="输入 BOSS 行业数字编码后按回车"
+                        />
+                        <p className="mt-1 text-xs text-muted">只接受数字编码；无效内容会被安全忽略。</p>
+                      </Field>
+                    </div>}
                     {platform === 'boss' && bossTheoreticalPages > 0 && (
                       <p className={`rounded-lg px-3 py-2 text-xs ${bossTheoreticalExceedsLimit ? 'bg-amber-50 font-bold text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>
                         理论最多 {bossTheoreticalPages} 页（{bossEstimateKeywords.length} 个关键词 × {bossEstimateCities.length} 个城市 × {bossEstimateMaxPages} 页）。
@@ -484,12 +541,14 @@ export default function ConfigPage() {
                 updateConfig('ai.api_key', e.target.value)
                 setAiTest({ testing: false })
               }} placeholder={config.ai?.api_key_masked || '也可通过环境变量设置'} />
+              <p className="mt-1 text-xs text-muted">填写后优先生效；留空时才读取环境变量。</p>
             </Field>
             <Field label="Base URL">
               <Input value={config.ai?.base_url || ''} onChange={e => {
                 updateConfig('ai.base_url', e.target.value)
                 setAiTest({ testing: false })
               }} placeholder="留空使用默认" />
+              <p className="mt-1 text-xs text-muted">填写后优先生效；留空时使用环境变量或服务商默认地址。</p>
             </Field>
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Thinking 模式">
@@ -654,6 +713,7 @@ export default function ConfigPage() {
           <div className="space-y-4">
             <Field label="检查间隔 (分钟)">
               <Input type="number" value={config.monitor?.interval || 30} onChange={e => updateConfig('monitor.interval', Number(e.target.value))} min={1} max={120} />
+              <p className="mt-1 text-xs text-muted">单独监测会立即检查一次；后续轮询还会乘以 BOSS 操作间隔倍率。</p>
             </Field>
             <Field label="全流程首次监测冷却 (分钟)">
               <Input type="number" value={config.monitor?.initial_cooldown_minutes ?? 10} onChange={e => updateConfig('monitor.initial_cooldown_minutes', Number(e.target.value))} min={0} max={120} />

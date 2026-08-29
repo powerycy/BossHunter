@@ -82,6 +82,7 @@ DEFAULTS: dict[str, Any] = {
         "city_codes": {},
         "max_pages": 3,
         "sort": "default",
+        "filters": {},
     },
     "collection": {
         "default_order": ["boss"],
@@ -104,6 +105,7 @@ DEFAULTS: dict[str, Any] = {
                 "city_codes": {},
                 "max_pages": 3,
                 "sort": "default",
+                "filters": {},
             },
         },
         "zhilian": {
