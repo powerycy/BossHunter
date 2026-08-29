@@ -1,6 +1,5 @@
-# Initial ownership is intentionally conservative while the first maintainer
-# cohort is being recruited. Replace @powerycy with visible organization teams
-# that have Write access only after candidates complete the documented trial.
+# Ownership remains conservative while the first maintainer cohort is being
+# recruited. Named module maintainers share their domain with the global owner.
 
 * @powerycy
 
@@ -23,5 +22,15 @@
 /src/bosshunter/web/server.py @powerycy
 /pyproject.toml @powerycy
 
-# Product/AI and platform-adapter team owners will be added after their teams
-# exist and have Write access. The global owner remains enforceable until then.
+# Platform adaptation. Cross-domain or high-risk changes still include the
+# global owner for core-and-safety review.
+/src/bosshunter/collection/ @yuppiez99999 @powerycy
+/src/bosshunter/scraper/ @yuppiez99999 @powerycy
+/src/bosshunter/cities.py @yuppiez99999 @powerycy
+/src/bosshunter/job_filters.py @yuppiez99999 @powerycy
+/src/bosshunter/data/ @yuppiez99999 @powerycy
+/scripts/windows/ @yuppiez99999 @powerycy
+/tests/test_*collector.py @yuppiez99999 @powerycy
+
+# Product/AI team owners will be added after their teams exist and have Write
+# access. The global owner remains enforceable until then.
