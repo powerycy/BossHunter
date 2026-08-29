@@ -107,7 +107,8 @@ ai:
   greeting_review_threshold: 7
   greeting_max_iterations: 2
   resume_max_pages: 3
-  # api_key 可通过对应环境变量设置（ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / ARK_API_KEY / OPENAI_API_KEY）
+  # api_key/base_url 填写后优先生效；留空时才读取对应环境变量或使用服务商默认地址
+  # （ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / ARK_API_KEY / OPENAI_API_KEY）
   # api_key: "your-api-key"
   # base_url: "https://api.anthropic.com"
 

@@ -484,12 +484,14 @@ export default function ConfigPage() {
                 updateConfig('ai.api_key', e.target.value)
                 setAiTest({ testing: false })
               }} placeholder={config.ai?.api_key_masked || '也可通过环境变量设置'} />
+              <p className="mt-1 text-xs text-muted">填写后优先生效；留空时才读取环境变量。</p>
             </Field>
             <Field label="Base URL">
               <Input value={config.ai?.base_url || ''} onChange={e => {
                 updateConfig('ai.base_url', e.target.value)
                 setAiTest({ testing: false })
               }} placeholder="留空使用默认" />
+              <p className="mt-1 text-xs text-muted">填写后优先生效；留空时使用环境变量或服务商默认地址。</p>
             </Field>
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Thinking 模式">

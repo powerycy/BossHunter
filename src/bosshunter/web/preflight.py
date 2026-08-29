@@ -13,6 +13,7 @@ import httpx
 from bosshunter.ai.credentials import (
 	get_ai_api_key,
 	get_ai_base_url,
+	get_ai_base_url_source,
 	get_ai_key_source,
 	get_ai_service,
 )
@@ -109,6 +110,7 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 	credential = get_ai_api_key(config)
 	key_source = get_ai_key_source(config)
 	base_url_value = get_ai_base_url(config)
+	base_url_source = get_ai_base_url_source(config)
 	model = str(ai_cfg.get("model") or "").strip()
 	if not credential:
 		return [
@@ -155,7 +157,11 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 			if base_url
 			else "https://api.anthropic.com/v1/models"
 		)
-		auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or ai_cfg.get("auth_token")
+		# 凭证块整体优先：config 任一凭证字段非空就不读 env，与 credentials 解析保持一致。
+		if ai_cfg.get("api_key") or ai_cfg.get("auth_token"):
+			auth_token = ai_cfg.get("auth_token")
+		else:
+			auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
 		headers = (
 			{"Authorization": f"Bearer {auth_token}"}
 			if auth_token
@@ -239,7 +245,7 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 			"AI 接口连接",
 			"pass",
 			"AI 接口连接正常",
-			f"已验证凭证和服务地址，当前模型：{model}；Key 来源：{key_source or '未知'}。",
+			f"已验证凭证和服务地址，当前模型：{model}；Key 来源：{key_source or '未知'}；Base URL 来源：{base_url_source or '官方默认'}。",
 		)
 	]
 

@@ -268,13 +268,13 @@ def _is_thinking_compatibility_error(exc: Exception, response: object | None = N
 
 
 def get_anthropic_api_key(config: dict) -> str | None:
-    """Resolve the Anthropic API key from env or config."""
+    """Resolve the Anthropic API key from config first, then env as fallback."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
     return (
-        os.environ.get("ANTHROPIC_API_KEY")
-        or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-        or ai_cfg.get("api_key")
+        ai_cfg.get("api_key")
         or ai_cfg.get("auth_token")
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("ANTHROPIC_AUTH_TOKEN")
     )
 
 
@@ -288,27 +288,27 @@ def get_ai_service(config: dict) -> str:
 
 
 def get_ai_api_key(config: dict) -> str | None:
-    """Resolve a standard API key without exposing or copying its value."""
+    """Resolve a standard API key from config first, then env, without exposing its value."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
     service = get_ai_service(config)
     if service == "deepseek":
         return (
-            os.environ.get("DEEPSEEK_API_KEY")
+            ai_cfg.get("api_key")
+            or os.environ.get("DEEPSEEK_API_KEY")
             or os.environ.get("OPENAI_API_KEY")
-            or ai_cfg.get("api_key")
         )
     if service == "doubao":
         return (
-            os.environ.get("ARK_API_KEY")
+            ai_cfg.get("api_key")
+            or os.environ.get("ARK_API_KEY")
             or os.environ.get("OPENAI_API_KEY")
-            or ai_cfg.get("api_key")
         )
     if service == "custom":
         return (
-            os.environ.get("OPENAI_API_KEY")
-            or os.environ.get("ANTHROPIC_API_KEY")
-            or ai_cfg.get("api_key")
+            ai_cfg.get("api_key")
             or ai_cfg.get("auth_token")
+            or os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
         )
     return get_anthropic_api_key(config)
 
@@ -316,6 +316,10 @@ def get_ai_api_key(config: dict) -> str | None:
 def get_ai_key_source(config: dict) -> str | None:
     """Return only the credential source name, never the credential value."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
+    if ai_cfg.get("api_key"):
+        return "本地配置"
+    if ai_cfg.get("auth_token"):
+        return "本地配置（Auth Token）"
     service = get_ai_service(config)
     candidates = {
         "deepseek": ("DEEPSEEK_API_KEY", "OPENAI_API_KEY"),
@@ -326,45 +330,65 @@ def get_ai_key_source(config: dict) -> str | None:
     for env_name in candidates:
         if os.environ.get(env_name):
             return env_name
-    if ai_cfg.get("api_key"):
-        return "本地配置"
-    if ai_cfg.get("auth_token"):
-        return "本地配置（Auth Token）"
     return None
 
 
 def get_ai_base_url(config: dict) -> str | None:
-    """Resolve the service-specific API base URL."""
+    """Resolve the service-specific API base URL from config first, then env, then preset."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
     service = get_ai_service(config)
     if service == "deepseek":
         return (
-            os.environ.get("DEEPSEEK_BASE_URL")
+            ai_cfg.get("base_url")
+            or os.environ.get("DEEPSEEK_BASE_URL")
             or os.environ.get("OPENAI_BASE_URL")
-            or ai_cfg.get("base_url")
             or AI_SERVICE_PRESETS[service]["base_url"]
         )
     if service == "doubao":
         return (
-            os.environ.get("ARK_BASE_URL")
+            ai_cfg.get("base_url")
+            or os.environ.get("ARK_BASE_URL")
             or os.environ.get("OPENAI_BASE_URL")
-            or ai_cfg.get("base_url")
             or AI_SERVICE_PRESETS[service]["base_url"]
         )
     if service == "custom":
         return (
-            os.environ.get("OPENAI_BASE_URL")
+            ai_cfg.get("base_url")
+            or os.environ.get("OPENAI_BASE_URL")
             or os.environ.get("ANTHROPIC_BASE_URL")
-            or ai_cfg.get("base_url")
         )
-    return os.environ.get("ANTHROPIC_BASE_URL") or ai_cfg.get("base_url")
+    return ai_cfg.get("base_url") or os.environ.get("ANTHROPIC_BASE_URL")
+
+
+def get_ai_base_url_source(config: dict) -> str | None:
+    """Return only the base URL source name, consistent with get_ai_base_url resolution."""
+    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
+    if ai_cfg.get("base_url"):
+        return "本地配置"
+    service = get_ai_service(config)
+    env_names = {
+        "deepseek": ("DEEPSEEK_BASE_URL", "OPENAI_BASE_URL"),
+        "doubao": ("ARK_BASE_URL", "OPENAI_BASE_URL"),
+        "custom": ("OPENAI_BASE_URL", "ANTHROPIC_BASE_URL"),
+        "anthropic": ("ANTHROPIC_BASE_URL",),
+    }[service]
+    for env_name in env_names:
+        if os.environ.get(env_name):
+            return env_name
+    if AI_SERVICE_PRESETS[service]["base_url"]:
+        return "服务商预设"
+    return None
 
 
 def build_anthropic_client_kwargs(config: dict) -> dict:
-    """Build Anthropic SDK client kwargs from env and config."""
+    """Build Anthropic SDK client kwargs from config first, then env."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
-    api_key = os.environ.get("ANTHROPIC_API_KEY") or ai_cfg.get("api_key")
-    auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or ai_cfg.get("auth_token")
+    # api_key/auth_token 是一对凭证：config 任一非空就整体不读 env，避免混用两个来源。
+    api_key = ai_cfg.get("api_key")
+    auth_token = ai_cfg.get("auth_token")
+    if not api_key and not auth_token:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
 
     kwargs = {}
     if api_key:
@@ -372,7 +396,7 @@ def build_anthropic_client_kwargs(config: dict) -> dict:
     if auth_token:
         kwargs["auth_token"] = auth_token
 
-    base_url = os.environ.get("ANTHROPIC_BASE_URL") or ai_cfg.get("base_url")
+    base_url = ai_cfg.get("base_url") or os.environ.get("ANTHROPIC_BASE_URL")
     if base_url:
         kwargs["base_url"] = base_url
 
@@ -382,12 +406,16 @@ def build_anthropic_client_kwargs(config: dict) -> dict:
 def resolve_anthropic_model(model: str, config: dict) -> str:
     """Resolve configured model name against compatible API model IDs when needed."""
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
-    base_url = os.environ.get("ANTHROPIC_BASE_URL") or ai_cfg.get("base_url")
+    base_url = ai_cfg.get("base_url") or os.environ.get("ANTHROPIC_BASE_URL")
     if not base_url:
         return model
 
-    auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or ai_cfg.get("auth_token")
-    api_key = os.environ.get("ANTHROPIC_API_KEY") or ai_cfg.get("api_key")
+    if ai_cfg.get("api_key") or ai_cfg.get("auth_token"):
+        auth_token = ai_cfg.get("auth_token")
+        api_key = ai_cfg.get("api_key")
+    else:
+        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
     cache_key = (base_url.rstrip("/"), model, _credential_fingerprint(auth_token or api_key or ""))
     if cache_key in _MODEL_RESOLVE_CACHE:
         return _MODEL_RESOLVE_CACHE[cache_key]
