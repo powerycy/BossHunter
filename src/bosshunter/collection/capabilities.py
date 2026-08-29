@@ -7,6 +7,7 @@ PLATFORM_CAPABILITIES: dict[str, frozenset[str]] = {
     # the maintainer explicitly enables those capabilities in a later change.
     "zhilian": frozenset({"collect", "score", "greet"}),
     "51job": frozenset({"collect", "score", "greet"}),
+    "liepin": frozenset({"collect", "score", "greet"}),
 }
 
 

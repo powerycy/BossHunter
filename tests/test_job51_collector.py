@@ -74,6 +74,7 @@ class Job51CollectorTests(TestCase):
         def evaluate(_target, script):
             return list_payload if ".joblist-item" in script else detail_payload
 
+        sleeps = []
         browser = Job51Browser(
             new_tab=lambda url, **_kwargs: url,
             close_tab=lambda _target: True,
@@ -172,6 +173,123 @@ class Job51CollectorTests(TestCase):
         self.assertEqual(sleeps, [0.75, 0.75])
 
 
+    def test_multi_page_collection_clicks_next_and_applies_pacing(self):
+        # 覆盖 page>1 的翻页分支（此前无测试）：第一页采集后点击下一页，
+        # 第二页再次渲染出岗位；翻页安全间隔应被施加一次。
+        list_calls = {"n": 0}
+        next_clicks = []
+
+        def evaluate(target, script):
+            if ".joblist-item" in script:
+                list_calls["n"] += 1
+                if list_calls["n"] == 1:
+                    return json.dumps({"status": "ready", "jobs": [{
+                        "source_job_id": "job-p1",
+                        "title": "AI 算法工程师",
+                        "company": "示例公司",
+                        "city": "上海",
+                        "url": "https://jobs.51job.com/shanghai/job-p1.html",
+                    }]})
+                return json.dumps({"status": "ready", "jobs": [{
+                    "source_job_id": "job-p2",
+                    "title": "AI 数据工程师",
+                    "company": "示例公司",
+                    "city": "上海",
+                    "url": "https://jobs.51job.com/shanghai/job-p2.html",
+                }]})
+            if "btn-next" in script:
+                next_clicks.append(script)
+                return True  # 模拟存在下一页按钮
+            return json.dumps({
+                "status": "ready", "title": "AI 工程师", "company": "示例公司",
+                "city": "上海", "jd": "负责 AI 平台研发。",
+            })
+
+        sleeps = []
+        browser = Job51Browser(
+            new_tab=lambda url, **_kwargs: url,
+            close_tab=lambda _target: True,
+            evaluate=evaluate,
+            scroll=lambda *_args, **_kwargs: True,
+            wait_for_load=lambda *_args, **_kwargs: True,
+        )
+        collected = []
+        hooks = CollectorHooks(
+            stop_event=None,
+            on_list_candidate=lambda _candidate: True,
+            on_candidate=lambda candidate: collected.append(candidate) or True,
+            on_parse_failed=lambda _reason: None,
+            on_event=lambda **_kwargs: None,
+        )
+        result = Job51Collector(
+            browser=browser,
+            sleep=sleeps.append,
+            uniform=lambda _low, _high: 33.0,
+        ).collect(
+            PlatformCollectionRequest("51job", ["AI"], ["上海"], {"上海": "020000"}, max_pages=2),
+            hooks,
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.reason_code, "search_exhausted")
+        self.assertEqual(
+            [c.storage_id for c in collected],
+            ["51job:job-p1", "51job:job-p2"],
+        )
+        # 第二页触发了一次 JS_CLICK_NEXT 调用
+        self.assertEqual(len(next_clicks), 1)
+        # 一次翻页间隔，另一次是第二个详情页之前的安全间隔。
+        self.assertEqual(sleeps, [33.0, 33.0])
+
+    def test_last_page_without_next_button_completes_gracefully(self):
+        # 翻到第二页时若已无下一页按钮（JS_CLICK_NEXT 返回 False），
+        # 应优雅结束而非报错。
+        list_calls = {"n": 0}
+
+        def evaluate(target, script):
+            if ".joblist-item" in script:
+                list_calls["n"] += 1
+                return json.dumps({"status": "ready", "jobs": [{
+                    "source_job_id": f"job-{list_calls['n']}",
+                    "title": "AI 工程师",
+                    "company": "示例公司",
+                    "city": "上海",
+                    "url": f"https://jobs.51job.com/shanghai/job-{list_calls['n']}.html",
+                }]})
+            if "btn-next" in script:
+                return False  # 最后一页，无下一页按钮
+            return json.dumps({
+                "status": "ready", "title": "AI 工程师", "company": "示例公司",
+                "city": "上海", "jd": "负责 AI 研发。",
+            })
+
+        browser = Job51Browser(
+            new_tab=lambda url, **_kwargs: url,
+            close_tab=lambda _target: True,
+            evaluate=evaluate,
+            scroll=lambda *_args, **_kwargs: True,
+            wait_for_load=lambda *_args, **_kwargs: True,
+        )
+        collected = []
+        hooks = CollectorHooks(
+            stop_event=None,
+            on_list_candidate=lambda _candidate: True,
+            on_candidate=lambda candidate: collected.append(candidate) or True,
+            on_parse_failed=lambda _reason: None,
+            on_event=lambda **_kwargs: None,
+        )
+        result = Job51Collector(
+            browser=browser,
+            sleep=lambda _s: None,
+            uniform=lambda _low, _high: 33.0,
+        ).collect(
+            PlatformCollectionRequest("51job", ["AI"], ["上海"], {"上海": "020000"}, max_pages=3),
+            hooks,
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.reason_code, "search_exhausted")
+        self.assertEqual([c.storage_id for c in collected], ["51job:job-1"])
 class JobDescriptionCleanupTests(TestCase):
     def test_known_platform_source_noise_is_removed(self):
         dirty = "[岗位kanzhun职责]1.公司业务后台开发 来自BOSS直聘 2.掌握 SQL"

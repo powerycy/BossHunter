@@ -350,7 +350,8 @@ def mark_external_jobs_sent(conn: sqlite3.Connection, job_ids: Any, *, confirmed
         for row in pending_rows:
             job_id = str(row["id"])
             platform = str(row.get("source_platform") or "")
-            detail = f"用户在{platform_labels[platform]}完成投递后手动标记"
+            platform_label = platform_labels.get(platform, platform)
+            detail = f"用户在{platform_label}完成投递后手动标记"
             conn.execute(
                 "UPDATE jobs SET status = 'sent', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
                 (job_id,),
@@ -879,7 +880,7 @@ def get_recent_history(conn: sqlite3.Connection, limit: int = 10) -> list[dict]:
     """Get recent history entries with job info."""
     rows = conn.execute("""
         SELECT h.id, h.job_id, h.action, h.detail, h.created_at, j.company, j.title,
-               j.resume_path,
+               j.resume_path, j.url, j.source_platform,
                CASE
                  WHEN h.action = 'resume_failed'
                   AND (
@@ -904,11 +905,38 @@ def get_recent_history(conn: sqlite3.Connection, limit: int = 10) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def get_unresolved_reply_pending(conn: sqlite3.Connection) -> list[dict]:
+    """Get each job's latest reply suggestion when no later decision resolved it."""
+    rows = conn.execute("""
+        SELECT h.id, h.job_id, h.action, h.detail, h.created_at, j.company, j.title,
+               j.resume_path, j.url, j.source_platform, 0 AS resolved
+        FROM history h
+        JOIN jobs j ON h.job_id = j.id
+        WHERE h.action = 'reply_pending'
+          AND j.deleted_at IS NULL
+          AND h.id = (
+            SELECT MAX(p.id)
+            FROM history p
+            WHERE p.job_id = h.job_id
+              AND p.action = 'reply_pending'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM history r
+            WHERE r.job_id = h.job_id
+              AND r.action IN ('reply_dismissed', 'replied', 'auto_replied')
+              AND r.id > h.id
+          )
+        ORDER BY h.created_at DESC, h.id DESC
+    """).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_unresolved_resume_failures(conn: sqlite3.Connection) -> list[dict]:
     """Get the latest resume generation failure for jobs not resolved by a later success."""
     rows = conn.execute("""
         SELECT h.id, h.job_id, h.action, h.detail, h.created_at, j.company, j.title,
-               j.resume_path, 0 AS resolved
+               j.resume_path, j.url, j.source_platform, 0 AS resolved
         FROM history h
         JOIN jobs j ON h.job_id = j.id
         WHERE h.action = 'resume_failed'
@@ -934,28 +962,7 @@ def get_unresolved_resume_failures(conn: sqlite3.Connection) -> list[dict]:
 
 def count_unresolved_reply_pending(conn: sqlite3.Connection) -> int:
     """Count latest reply_pending rows that have not been resolved for each job."""
-    row = conn.execute("""
-        SELECT COUNT(*) AS cnt
-        FROM history h
-        WHERE h.action = 'reply_pending'
-          AND EXISTS (
-            SELECT 1 FROM jobs j WHERE j.id = h.job_id AND j.deleted_at IS NULL
-          )
-          AND h.id = (
-            SELECT MAX(p.id)
-            FROM history p
-            WHERE p.job_id = h.job_id
-              AND p.action = 'reply_pending'
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM history r
-            WHERE r.job_id = h.job_id
-              AND r.action IN ('reply_dismissed', 'replied', 'auto_replied')
-              AND r.id > h.id
-          )
-    """).fetchone()
-    return int(row["cnt"] or 0)
+    return len(get_unresolved_reply_pending(conn))
 
 
 def count_unresolved_monitor_items(conn: sqlite3.Connection) -> int:

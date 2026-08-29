@@ -414,6 +414,44 @@ def _open_monitor_tab(url: str, config: dict) -> str | None:
     return target_id
 
 
+def _get_monitor_chat_target(chat_url: str, config: dict) -> tuple[str | None, bool]:
+    """Return a live chat-list tab, reusing it for Web monitor loops when enabled."""
+    if not config.get("_monitor_reuse_chat_tab"):
+        return _open_monitor_tab(chat_url, config), False
+
+    runtime_state = config.setdefault("_monitor_runtime_state", {})
+    target_id = runtime_state.get("chat_target_id")
+    if target_id:
+        try:
+            if get_page_info(str(target_id)):
+                return str(target_id), True
+        except Exception:
+            pass
+        runtime_state.pop("chat_target_id", None)
+
+    target_id = _open_monitor_tab(chat_url, config)
+    if target_id:
+        runtime_state["chat_target_id"] = target_id
+    return target_id, False
+
+
+def close_monitor_chat_target(config: dict) -> None:
+    """Close and forget the reusable chat-list tab, if one exists."""
+    runtime_state = config.get("_monitor_runtime_state")
+    if not isinstance(runtime_state, dict):
+        return
+    target_id = runtime_state.pop("chat_target_id", None)
+    if target_id:
+        close_tab(str(target_id))
+
+
+def _discard_monitor_chat_target(config: dict, target_id: str) -> None:
+    runtime_state = config.get("_monitor_runtime_state")
+    if isinstance(runtime_state, dict) and runtime_state.get("chat_target_id") == target_id:
+        runtime_state.pop("chat_target_id", None)
+    close_tab(target_id)
+
+
 def _detect_rejection(messages: list[dict]) -> bool:
     """Check if HR is rejecting in messages AFTER user's last reply."""
     rejection_keywords = ["不合适", "不匹配", "不太合适", "暂时没有", "不符合", "不太符合",
@@ -1076,15 +1114,18 @@ def _check_boss_replies(config: dict, tracked_jobs: list[dict] | None = None) ->
     console.print(f"[bold]监测 {len(all_tracked_jobs)} 个对话的回复情况...[/bold]")
 
     # Open chat page
-    target_id = _open_monitor_tab(chat_url, config)
+    target_id, reused_chat_target = _get_monitor_chat_target(chat_url, config)
     if not target_id:
         console.print("[red]无法打开聊天页面[/red]")
         db.close()
         _monitor_safety_guard(config).record_page_failure()
         return []
 
-    if _wait_or_stop(config, 3) or not _wait_for_page_or_stop(target_id, config, timeout=10):
-        close_tab(target_id)
+    if (
+        (not reused_chat_target and _wait_or_stop(config, 3))
+        or not _wait_for_page_or_stop(target_id, config, timeout=10)
+    ):
+        _discard_monitor_chat_target(config, target_id)
         db.close()
         if not stop_requested(config):
             _monitor_safety_guard(config).record_page_failure()
@@ -1092,23 +1133,26 @@ def _check_boss_replies(config: dict, tracked_jobs: list[dict] | None = None) ->
     try:
         _inspect_monitor_page(target_id, config)
     except MonitorRiskDetected:
-        close_tab(target_id)
+        _discard_monitor_chat_target(config, target_id)
         db.close()
         raise
-    if _wait_or_stop(config, 2):
-        close_tab(target_id)
+    if not reused_chat_target and _wait_or_stop(config, 2):
+        _discard_monitor_chat_target(config, target_id)
         db.close()
         return []
 
     # Extract chat list
     raw = evaluate(target_id, JS_EXTRACT_CHAT_LIST)
-    close_tab(target_id)
+    if not config.get("_monitor_reuse_chat_tab"):
+        close_tab(target_id)
     if stop_requested(config):
         db.close()
         return []
 
     if not raw:
         console.print("[yellow]未能获取聊天列表[/yellow]")
+        if config.get("_monitor_reuse_chat_tab"):
+            _discard_monitor_chat_target(config, target_id)
         db.close()
         _monitor_safety_guard(config).record_page_failure()
         return []
@@ -1117,12 +1161,16 @@ def _check_boss_replies(config: dict, tracked_jobs: list[dict] | None = None) ->
         conversations = json.loads(raw) if isinstance(raw, str) else raw
     except (json.JSONDecodeError, TypeError):
         console.print("[yellow]聊天列表解析失败[/yellow]")
+        if config.get("_monitor_reuse_chat_tab"):
+            _discard_monitor_chat_target(config, target_id)
         db.close()
         _monitor_safety_guard(config).record_page_failure()
         return []
 
     if not isinstance(conversations, list):
         console.print("[yellow]聊天列表格式异常[/yellow]")
+        if config.get("_monitor_reuse_chat_tab"):
+            _discard_monitor_chat_target(config, target_id)
         db.close()
         _monitor_safety_guard(config).record_page_failure()
         return []
@@ -1167,7 +1215,12 @@ def _check_boss_replies(config: dict, tracked_jobs: list[dict] | None = None) ->
             # Update status to replied if it was 'sent'
             if matched_job.get("status") == "sent":
                 update_job_status(db, matched_job["id"], "replied")
-                add_history(db, matched_job["id"], "replied", f"HR回复: {conv.get('last_message', '')[:50]}")
+                add_history(
+                    db,
+                    matched_job["id"],
+                    "hr_reply_detected",
+                    f"HR回复: {conv.get('last_message', '')[:50]}",
+                )
 
             results.append({
                 "job": matched_job,
@@ -1303,6 +1356,14 @@ def _handle_conversation(job: dict, config: dict, conversation: dict | None = No
         console.print("[dim]    相同HR消息已有待确认回复，跳过重复处理[/dim]")
         close_tab(target_id)
         return "skipped_existing_pending"
+
+    db = get_db()
+    already_handled_reply = _has_handled_reply_for_messages(db, job["id"], messages)
+    db.close()
+    if already_handled_reply:
+        console.print("[dim]    相同HR消息已处理过，跳过重复回复[/dim]")
+        close_tab(target_id)
+        return "skipped_handled_reply"
 
     # Check if HR is rejecting
     if _detect_rejection(messages):
@@ -1460,7 +1521,12 @@ def _handle_conversation(job: dict, config: dict, conversation: dict | None = No
     if _send_message_in_chat(target_id, reply):
         console.print("[green]    ✓ 自动回复已发送[/green]")
         db = get_db()
-        add_history(db, job["id"], "auto_replied", _build_reply_detail(messages, reply))
+        add_history(
+            db,
+            job["id"],
+            "auto_replied",
+            _build_reply_detail(messages, reply, "auto_replied.v1", conversation=conversation),
+        )
         db.close()
         close_tab(target_id)
         return "auto_replied"
@@ -1516,6 +1582,19 @@ def _get_latest_handled_reply(db, job_id: str):
         """,
         (job_id,),
     ).fetchone()
+
+
+def _has_handled_reply_for_messages(db, job_id: str, messages: list[dict]) -> bool:
+    """Keep one outbound decision per HR turn while allowing later HR turns."""
+    handled = _get_latest_handled_reply(db, job_id)
+    if handled is None:
+        return False
+    if _row_text(handled, "action") not in {"replied", "auto_replied"}:
+        return False
+    handled_fingerprint = _reply_fingerprint_from_detail(_row_text(handled, "detail"))
+    if not handled_fingerprint:
+        return False
+    return handled_fingerprint == _reply_fingerprint_from_messages(messages)
 
 
 def _pending_matches_chat_list(pending_detail: str, conversation: dict) -> bool:
@@ -1801,6 +1880,7 @@ def monitor_and_send_resumes(config: dict) -> dict:
                 "skipped_user_replied",
                 "skipped_existing_resume",
                 "skipped_existing_pending",
+                "skipped_handled_reply",
                 "skipped_dismissed_reply",
             ):
                 summary["skipped"] += 1

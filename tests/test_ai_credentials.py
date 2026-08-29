@@ -11,7 +11,7 @@ class AnthropicCredentialTests(unittest.TestCase):
         if cache is not None:
             cache.clear()
 
-    def test_prefers_documented_api_key_env_var(self):
+    def test_config_api_key_takes_precedence_over_env_vars(self):
         with patch.dict(
             "os.environ",
             {
@@ -22,11 +22,22 @@ class AnthropicCredentialTests(unittest.TestCase):
         ):
             result = credentials.get_anthropic_api_key({"ai": {"api_key": "from-config"}})
 
-        self.assertEqual(result, "from-api-key")
+        self.assertEqual(result, "from-config")
+
+    def test_falls_back_to_env_api_key_when_config_empty(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "ANTHROPIC_API_KEY": "from-api-key",
+                "ANTHROPIC_AUTH_TOKEN": "from-auth-token",
+            },
+            clear=True,
+        ):
+            self.assertEqual(credentials.get_anthropic_api_key({"ai": {}}), "from-api-key")
 
     def test_keeps_auth_token_as_backward_compatible_fallback(self):
         with patch.dict("os.environ", {"ANTHROPIC_AUTH_TOKEN": "from-auth-token"}, clear=True):
-            result = credentials.get_anthropic_api_key({"ai": {"api_key": "from-config"}})
+            result = credentials.get_anthropic_api_key({"ai": {}})
 
         self.assertEqual(result, "from-auth-token")
 
@@ -41,6 +52,92 @@ class AnthropicCredentialTests(unittest.TestCase):
             result = credentials.get_anthropic_api_key({"ai": {"auth_token": "from-config-token"}})
 
         self.assertEqual(result, "from-config-token")
+
+    def test_config_credentials_block_excludes_env_credentials_in_build_kwargs(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "ANTHROPIC_API_KEY": "from-api-key",
+                "ANTHROPIC_AUTH_TOKEN": "from-auth-token",
+                "ANTHROPIC_BASE_URL": "https://env-gateway.example.com",
+            },
+            clear=True,
+        ):
+            result = credentials.build_anthropic_client_kwargs(
+                {"ai": {"api_key": "from-config", "base_url": "https://config-gateway.example.com"}}
+            )
+
+        self.assertEqual(result["api_key"], "from-config")
+        self.assertNotIn("auth_token", result)
+        self.assertEqual(result["base_url"], "https://config-gateway.example.com")
+
+    def test_build_kwargs_falls_back_to_env_when_config_credentials_empty(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "ANTHROPIC_API_KEY": "from-api-key",
+                "ANTHROPIC_AUTH_TOKEN": "from-auth-token",
+            },
+            clear=True,
+        ):
+            result = credentials.build_anthropic_client_kwargs({"ai": {}})
+
+        self.assertEqual(result["api_key"], "from-api-key")
+        self.assertEqual(result["auth_token"], "from-auth-token")
+
+    def test_config_base_url_takes_precedence_over_env(self):
+        with patch.dict("os.environ", {"ANTHROPIC_BASE_URL": "https://env-gateway.example.com"}, clear=True):
+            result = credentials.get_ai_base_url({"ai": {"base_url": "https://config-gateway.example.com"}})
+
+        self.assertEqual(result, "https://config-gateway.example.com")
+
+    def test_base_url_falls_back_to_env_when_config_empty(self):
+        with patch.dict("os.environ", {"ANTHROPIC_BASE_URL": "https://env-gateway.example.com"}, clear=True):
+            result = credentials.get_ai_base_url({"ai": {}})
+
+        self.assertEqual(result, "https://env-gateway.example.com")
+
+    def test_key_source_prefers_local_config_over_env(self):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "from-api-key"}, clear=True):
+            self.assertEqual(credentials.get_ai_key_source({"ai": {"api_key": "from-config"}}), "本地配置")
+            self.assertEqual(credentials.get_ai_key_source({"ai": {}}), "ANTHROPIC_API_KEY")
+
+    def test_base_url_source_reflects_resolution_order(self):
+        with patch.dict("os.environ", {"ANTHROPIC_BASE_URL": "https://env-gateway.example.com"}, clear=True):
+            self.assertEqual(credentials.get_ai_base_url_source({"ai": {"base_url": "https://config-gateway.example.com"}}), "本地配置")
+            self.assertEqual(credentials.get_ai_base_url_source({"ai": {}}), "ANTHROPIC_BASE_URL")
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(credentials.get_ai_base_url_source({"ai": {}}))
+            self.assertEqual(credentials.get_ai_base_url_source({"ai": {"service": "deepseek"}}), "服务商预设")
+
+    def test_resolve_anthropic_model_uses_config_url_and_credentials_first(self):
+        class ModelsResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": [{"id": "Claude Sonnet 4.6"}]}
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "ANTHROPIC_BASE_URL": "https://env-gateway.example.com",
+                    "ANTHROPIC_AUTH_TOKEN": "from-env-token",
+                },
+                clear=True,
+            ),
+            patch("httpx.get", return_value=ModelsResponse()) as models_get,
+        ):
+            result = credentials.resolve_anthropic_model(
+                "claude-sonnet-4-6",
+                {"ai": {"base_url": "https://config-gateway.example.com", "api_key": "from-config"}},
+            )
+
+        self.assertEqual(result, "Claude Sonnet 4.6")
+        self.assertEqual(models_get.call_args.args[0], "https://config-gateway.example.com/v1/models")
+        self.assertEqual(models_get.call_args.kwargs["headers"]["x-api-key"], "from-config")
+        self.assertNotIn("Authorization", models_get.call_args.kwargs["headers"])
 
     def test_build_anthropic_client_kwargs_includes_auth_token_when_configured(self):
         with patch.dict(
@@ -483,10 +580,64 @@ class AnthropicCredentialTests(unittest.TestCase):
         with (
             patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
             patch("bosshunter.ai.credentials.httpx.post", return_value=CompletionResponse()),
+            self.assertRaises(credentials.AIRequestError) as raised,
         ):
-            result = credentials.call_openai_compatible_text("prompt", config, 123)
+            credentials.call_openai_compatible_text("prompt", config, 123)
 
-        self.assertIsNone(result)
+        self.assertEqual(raised.exception.kind, "empty_response")
+        self.assertNotIn("这只是模型思考过程", str(raised.exception))
+
+    def test_openai_empty_choices_raises_empty_response(self):
+        class EmptyChoicesResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": []}
+
+        config = {
+            "ai": {
+                "service": "deepseek",
+                "provider": "openai_compatible",
+                "model": "deepseek-chat",
+            }
+        }
+        with (
+            patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
+            patch("bosshunter.ai.credentials.httpx.post", return_value=EmptyChoicesResponse()),
+            self.assertRaises(credentials.AIRequestError) as raised,
+        ):
+            credentials.call_openai_compatible_text("prompt", config, 256)
+
+        self.assertEqual(raised.exception.kind, "empty_response")
+
+    def test_anthropic_thinking_only_response_raises_empty_response(self):
+        class Client:
+            def __init__(self, **kwargs):
+                self.messages = self
+
+            def create(self, **kwargs):
+                return SimpleNamespace(content=[SimpleNamespace(thinking="只是思考过程")])
+
+        config = {
+            "ai": {
+                "api_key": "key",
+                "model": "claude-sonnet-4-6",
+                "thinking": "auto",
+                "thinking_budget": 2048,
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(credentials, "resolve_anthropic_model", return_value="claude-sonnet-4-6"),
+            patch.dict("sys.modules", {"anthropic": SimpleNamespace(Anthropic=Client)}),
+            self.assertRaises(credentials.AIRequestError) as raised,
+        ):
+            credentials.call_anthropic_text("prompt", config, 256)
+
+        self.assertEqual(raised.exception.kind, "empty_response")
 
     def test_openai_compatible_auto_thinking_falls_back_only_for_compatibility_error(self):
         class UnsupportedThinkingResponse:
