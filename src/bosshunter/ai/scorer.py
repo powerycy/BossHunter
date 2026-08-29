@@ -364,6 +364,7 @@ def _report_checkpoint(
     *,
     status: str,
     pause_reason: str = "",
+    error: str | None = None,
 ) -> None:
     callback = config.get("_workbench_score_checkpoint")
     if callable(callback):
@@ -371,6 +372,8 @@ def _report_checkpoint(
             "remaining_job_ids": list(remaining_job_ids),
             "status": status,
             "pause_reason": pause_reason,
+            # 只有 AI 失败导致的暂停才带 error；用户手动暂停不应记为错误（issue #100）。
+            "error": error or "",
         })
 
 
@@ -659,6 +662,8 @@ def score_jobs(
                 remaining_job_ids,
                 status="paused",
                 pause_reason=pause_reason or "用户暂停或任务中断",
+                # pause_reason 非空即 AI 失败暂停（用户停止走 stop_event，reason 为空）。
+                error=pause_reason or None,
             )
         else:
             _report_checkpoint(

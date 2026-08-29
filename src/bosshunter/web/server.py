@@ -436,16 +436,22 @@ def _execute_score(task: WorkbenchTask, config: dict) -> None:
 	def checkpoint(state: dict) -> None:
 		remaining = [str(job_id) for job_id in state.get("remaining_job_ids", []) if str(job_id)]
 		status = str(state.get("status") or "running")
+		pause_reason = str(state.get("pause_reason") or "") if status == "paused" else None
+		# AI 失败暂停时同步写入 error 列与 task.error，前端任务列表才能看到真实原因（issue #100）。
+		error = str(state.get("error") or "") if status == "paused" else None
 		update_scoring_run(
 			db_path,
 			run_id,
 			status=status,
 			remaining_job_ids=remaining,
 			progress={**task.metrics, "remaining": len(remaining)},
-			pause_reason=str(state.get("pause_reason") or "") if status == "paused" else None,
+			pause_reason=pause_reason,
+			error=error or None,
 		)
 		if status == "paused":
 			task.stop_reason = str(state.get("pause_reason") or "评分任务已暂停")
+			if error:
+				task.error = error
 			task.stop_requested.set()
 
 	score_config = dict(config)
@@ -1191,13 +1197,30 @@ def api_scoring_start():
 		if not isinstance(body, dict):
 			raise ValueError("请求体必须是对象")
 		options = _scoring_options_from_body(body)
+		# force=true 允许结束已暂停的旧评分记录后强制开新任务；running 任务不在此列（issue #100）。
+		force = bool(body.get("force", False))
 		config = load_config(CONFIG_PATH)
 		messages = _preflight_messages("rescore", config)
 		if messages:
 			return _json_response({"error": "请先处理评分启动检查", "messages": messages}, 400)
 		active_runs = [run for run in list_scoring_runs(db_path, limit=100) if run.get("status") in {"running", "paused"}]
-		if active_runs:
-			return _json_response({"error": "已有独立评分任务正在运行或等待恢复，请先继续或结束该任务"}, 409)
+		running_runs = [run for run in active_runs if run.get("status") == "running"]
+		paused_runs = [run for run in active_runs if run.get("status") == "paused"]
+		if running_runs:
+			return _json_response({"error": "已有独立评分任务正在运行，请等待其结束或先停止该任务"}, 409)
+		if paused_runs:
+			if not force:
+				return _json_response({
+					"error": "已有等待恢复的评分任务，请先继续或结束该任务；确认问题已修复后也可强制开始新任务",
+					"code": "scoring_run_paused",
+				}, 409)
+			for run in paused_runs:
+				update_scoring_run(
+					db_path,
+					str(run.get("id") or ""),
+					status="stopped",
+					error="已被新的评分任务强制结束",
+				)
 		db = _get_web_db()
 		try:
 			selected = select_scoring_jobs(db, **options)
