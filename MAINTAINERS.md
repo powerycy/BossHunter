@@ -11,6 +11,7 @@
 | GitHub | 角色 | 负责范围 | 任期 | 状态 |
 |---|---|---|---|---|
 | [@powerycy](https://github.com/powerycy) | 项目负责人 | 全项目；核心与安全最终审批；候选维护者招募 | 项目发起至今；2026-08-28 起正式建档 | Active |
+| [@yuppiez99999](https://github.com/yuppiez99999) | 平台适配维护者 | 招聘平台采集器、城市数据、适配测试与平台域 PR 治理 | 2026-08-29 起 | Active（Write） |
 
 ## 首轮招募名额
 
@@ -20,7 +21,7 @@
 |---|:---:|---:|---|
 | 核心与安全 | 3 | 1 | 项目负责人负责最终审批 |
 | 产品与 AI | 2 | 0 | 项目负责人代管 |
-| 平台适配 | 2 | 0 | 招募中 |
+| 平台适配 | 2 | 1 | 继续招募第 2 名维护者 |
 
 ## 候选维护者（观察期）
 
@@ -29,7 +30,6 @@
 | GitHub | 维护域 | 观察期开始 | 推荐/带教人 | 状态 |
 |---|---|---|---|---|
 | [@yukinoshi](https://github.com/yukinoshi) | 核心与安全 | 2026-08-28 | [@powerycy](https://github.com/powerycy) | 观察中（Triage） |
-| [@yuppiez99999](https://github.com/yuppiez99999) | 平台适配 | 2026-08-28 | [@powerycy](https://github.com/powerycy) | 观察中（Triage；[申请 #96](https://github.com/shengjidaguai-china/BossHunter/issues/96)） |
 
 ## 历任维护者
 
@@ -50,6 +50,7 @@
 | 周期 | 维护者 | 负责范围 | 维护与治理摘要 | 证据 | 周期结论 |
 |---|---|---|---|---|---|
 | 2026-08-28 起 | [@powerycy](https://github.com/powerycy) | 全项目；核心与安全最终审批 | 首个统计周期进行中 | 待周期结束后由治理 PR 汇总 | 进行中 |
+| 2026-08-29 起 | [@yuppiez99999](https://github.com/yuppiez99999) | 平台适配 | 正式维护首周期进行中；晋升依据包括平台实现、适配测试、跨域风险识别、利益冲突披露与 Issue 治理 | [申请 #113](https://github.com/shengjidaguai-china/BossHunter/issues/113)、[PR #111](https://github.com/shengjidaguai-china/BossHunter/pull/111)、[PR #81 Review](https://github.com/shengjidaguai-china/BossHunter/pull/81#issuecomment-5459820689)、[PR #89 Review](https://github.com/shengjidaguai-china/BossHunter/pull/89#issuecomment-5459791861)、[PR #104 Review](https://github.com/shengjidaguai-china/BossHunter/pull/104#issuecomment-5459833276)、[Issue #78 Triage](https://github.com/shengjidaguai-china/BossHunter/issues/78#issuecomment-5459841957) | 进行中 |
 
 记录摘要应覆盖适用的维度：PR 审核、模块交付、Issue 治理、安全与质量、社区协作。没有发生的维度保持空缺，不以机械数量补齐。
 
