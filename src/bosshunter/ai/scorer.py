@@ -405,7 +405,8 @@ def _request_score(
             except AIRequestError as retry_exc:
                 if retry_exc.kind in {"output_truncated", "output_limit", "context_limit"}:
                     return ScoreOutcome(failure_detail="调整输出 Token 后仍未获得完整评分")
-                return ScoreOutcome(pause_reason=retry_exc.user_message)
+                # 带上"因截断进入重试"的上下文，否则只看得到重试时的错误（issue #101）。
+                return ScoreOutcome(pause_reason=f"增大输出 Token 重试后失败：{retry_exc}")
         elif exc.kind == "output_limit":
             _notify(config, f"{job['company']}｜{job['title']} 正在降低输出 Token 上限后重试评分。")
             try:
@@ -413,7 +414,7 @@ def _request_score(
             except AIRequestError as retry_exc:
                 if retry_exc.kind == "output_limit":
                     return ScoreOutcome(failure_detail="当前模型不接受调整后的输出 Token 设置")
-                return ScoreOutcome(pause_reason=retry_exc.user_message)
+                return ScoreOutcome(pause_reason=f"降低输出 Token 重试后失败：{retry_exc}")
         elif exc.kind == "context_limit":
             _notify(config, f"{job['company']}｜{job['title']} 内容较长，正在压缩后重试评分。")
             try:
@@ -421,9 +422,10 @@ def _request_score(
             except AIRequestError as retry_exc:
                 if retry_exc.kind == "context_limit":
                     return ScoreOutcome(failure_detail="压缩请求后仍超过模型上下文限制")
-                return ScoreOutcome(pause_reason=retry_exc.user_message)
+                return ScoreOutcome(pause_reason=f"压缩请求重试后失败：{retry_exc}")
         else:
-            return ScoreOutcome(pause_reason=exc.user_message)
+            # str(exc) 现在带 kind/status_code，UI 才能区分限流/鉴权/额度等失败原因（issue #101）。
+            return ScoreOutcome(pause_reason=str(exc))
 
     result = _validated_score_result(response) if response else None
     for attempt in range(2, max_attempts + 1):
@@ -437,7 +439,7 @@ def _request_score(
             response = _call_claude(_build_scoring_prompt(job, resume, config), config)
         except AIRequestError as retry_exc:
             if retry_exc.kind in {"token_quota", "rate_limit", "auth", "network", "request_failed"}:
-                return ScoreOutcome(pause_reason=retry_exc.user_message)
+                return ScoreOutcome(pause_reason=str(retry_exc))
             response = None
         result = _validated_score_result(response) if response else None
 
@@ -467,7 +469,7 @@ def _score_job_with_ai(
         response = _call_claude(_build_review_prompt(job, resume, first, config), config)
     except AIRequestError as exc:
         if exc.kind in {"token_quota", "rate_limit", "auth", "network", "request_failed"}:
-            return ScoreOutcome(result=first, pause_reason=exc.user_message)
+            return ScoreOutcome(result=first, pause_reason=str(exc))
         _notify(config, f"{job['company']}｜{job['title']} 二次复核未完成，保留第一次评分。")
         return outcome
 

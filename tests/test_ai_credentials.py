@@ -483,10 +483,64 @@ class AnthropicCredentialTests(unittest.TestCase):
         with (
             patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
             patch("bosshunter.ai.credentials.httpx.post", return_value=CompletionResponse()),
+            self.assertRaises(credentials.AIRequestError) as raised,
         ):
-            result = credentials.call_openai_compatible_text("prompt", config, 123)
+            credentials.call_openai_compatible_text("prompt", config, 123)
 
-        self.assertIsNone(result)
+        self.assertEqual(raised.exception.kind, "empty_response")
+        self.assertNotIn("这只是模型思考过程", str(raised.exception))
+
+    def test_openai_empty_choices_raises_empty_response(self):
+        class EmptyChoicesResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": []}
+
+        config = {
+            "ai": {
+                "service": "deepseek",
+                "provider": "openai_compatible",
+                "model": "deepseek-chat",
+            }
+        }
+        with (
+            patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
+            patch("bosshunter.ai.credentials.httpx.post", return_value=EmptyChoicesResponse()),
+            self.assertRaises(credentials.AIRequestError) as raised,
+        ):
+            credentials.call_openai_compatible_text("prompt", config, 256)
+
+        self.assertEqual(raised.exception.kind, "empty_response")
+
+    def test_anthropic_thinking_only_response_raises_empty_response(self):
+        class Client:
+            def __init__(self, **kwargs):
+                self.messages = self
+
+            def create(self, **kwargs):
+                return SimpleNamespace(content=[SimpleNamespace(thinking="只是思考过程")])
+
+        config = {
+            "ai": {
+                "api_key": "key",
+                "model": "claude-sonnet-4-6",
+                "thinking": "auto",
+                "thinking_budget": 2048,
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(credentials, "resolve_anthropic_model", return_value="claude-sonnet-4-6"),
+            patch.dict("sys.modules", {"anthropic": SimpleNamespace(Anthropic=Client)}),
+            self.assertRaises(credentials.AIRequestError) as raised,
+        ):
+            credentials.call_anthropic_text("prompt", config, 256)
+
+        self.assertEqual(raised.exception.kind, "empty_response")
 
     def test_openai_compatible_auto_thinking_falls_back_only_for_compatibility_error(self):
         class UnsupportedThinkingResponse:

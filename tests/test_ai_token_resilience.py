@@ -62,7 +62,7 @@ class AiCredentialErrorTests(unittest.TestCase):
                 credentials.call_openai_compatible_text("prompt", config, 256)
 
         self.assertEqual(raised.exception.kind, "token_quota")
-        self.assertEqual(str(raised.exception), "AI Token 额度或账户余额不足")
+        self.assertEqual(str(raised.exception), "AI Token 额度或账户余额不足 (token_quota, status=429)")
         self.assertNotIn("secret", str(raised.exception))
 
     def test_context_limit_error_has_actionable_category(self):
@@ -103,6 +103,37 @@ class AiCredentialErrorTests(unittest.TestCase):
                 credentials.call_openai_compatible_text("prompt", config, 256)
 
         self.assertEqual(raised.exception.kind, "output_truncated")
+
+    def test_error_str_and_repr_carry_kind_and_status(self):
+        error = credentials.AIRequestError("request_failed", "AI 服务请求失败", 404)
+
+        self.assertEqual(str(error), "AI 服务请求失败 (request_failed, status=404)")
+        self.assertEqual(
+            str(credentials.AIRequestError("network", "AI 服务连接失败或超时")),
+            "AI 服务连接失败或超时 (network)",
+        )
+        self.assertIn("kind='request_failed'", repr(error))
+        self.assertIn("status_code=404", repr(error))
+
+    def test_quota_marker_wins_over_context_marker(self):
+        error = RuntimeError("余额不足，请减少输入过长内容")
+
+        normalized = credentials.normalize_ai_error(error)
+
+        self.assertEqual(normalized.kind, "token_quota")
+
+    def test_rate_limit_status_wins_over_context_marker(self):
+        request = httpx.Request("POST", "https://api.example.com/chat/completions")
+        response = httpx.Response(
+            429,
+            request=request,
+            json={"error": {"message": "请求过于频繁，输入过长"}},
+        )
+        error = httpx.HTTPStatusError("Too Many Requests", request=request, response=response)
+
+        normalized = credentials.normalize_ai_error(error)
+
+        self.assertEqual(normalized.kind, "rate_limit")
 
 
 class ScorerTokenResilienceTests(unittest.TestCase):
@@ -465,6 +496,72 @@ class ScorerTokenResilienceTests(unittest.TestCase):
         self.assertEqual(call_ai.call_count, 1)
         update_status.assert_not_called()
         self.assertTrue(any("安全暂停" in message and "下次运行会继续处理" in message for message in logs))
+
+    def test_pause_reason_carries_error_kind_and_status_code(self):
+        db = MagicMock()
+        job = _job("1")
+        checkpoints: list[dict] = []
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=[job]),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch(
+                "bosshunter.ai.scorer._call_claude",
+                side_effect=credentials.AIRequestError("request_failed", "AI 服务请求失败", 404),
+            ),
+            patch("bosshunter.ai.scorer.update_job_quick_score"),
+            patch("bosshunter.ai.scorer.update_job_score"),
+            patch("bosshunter.ai.scorer.update_job_status"),
+        ):
+            scored, filtered = scorer.score_jobs(
+                {
+                    "scoring": {"threshold": 70},
+                    "_workbench_score_checkpoint": checkpoints.append,
+                }
+            )
+
+        self.assertEqual((scored, filtered), (0, 0))
+        self.assertEqual(checkpoints[-1]["status"], "paused")
+        self.assertEqual(
+            checkpoints[-1]["pause_reason"],
+            "AI 服务请求失败 (request_failed, status=404)",
+        )
+
+    def test_truncation_retry_pause_keeps_retry_context(self):
+        db = MagicMock()
+        job = _job("1")
+        checkpoints: list[dict] = []
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=[job]),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch(
+                "bosshunter.ai.scorer._call_claude",
+                side_effect=[
+                    credentials.AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断"),
+                    credentials.AIRequestError("auth", "AI API Key 无效或当前模型没有访问权限", 401),
+                ],
+            ),
+            patch("bosshunter.ai.scorer.update_job_quick_score"),
+            patch("bosshunter.ai.scorer.update_job_score"),
+            patch("bosshunter.ai.scorer.update_job_status"),
+        ):
+            scored, filtered = scorer.score_jobs(
+                {
+                    "scoring": {"threshold": 70},
+                    "_workbench_score_checkpoint": checkpoints.append,
+                }
+            )
+
+        self.assertEqual((scored, filtered), (0, 0))
+        self.assertEqual(checkpoints[-1]["status"], "paused")
+        pause_reason = checkpoints[-1]["pause_reason"]
+        self.assertIn("增大输出 Token 重试后失败", pause_reason)
+        self.assertIn("(auth, status=401)", pause_reason)
 
 
 class GreeterTokenResilienceTests(unittest.TestCase):

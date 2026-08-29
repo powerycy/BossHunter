@@ -567,7 +567,7 @@ def generate_greetings(config: dict) -> int:
                         cancelled = True
                         break
                     except AIRequestError as exc:
-                        pause_after_current = exc.user_message
+                        pause_after_current = str(exc)
                         break
                     style_issues = _greeting_style_issues(best_greeting, recent_openings)
                     if review is None and not style_issues:
@@ -595,10 +595,11 @@ def generate_greetings(config: dict) -> int:
                     cancelled = True
                     break
                 except AIRequestError as exc:
+                    # str(exc) 带 kind/status_code，暂停原因可区分鉴权/限流/额度等类别（issue #101）。
                     if best_greeting:
-                        pause_after_current = exc.user_message
+                        pause_after_current = str(exc)
                     else:
-                        pause_reason = exc.user_message
+                        pause_reason = str(exc)
                     break
 
                 if not greeting:

@@ -22,6 +22,18 @@ class AIRequestError(RuntimeError):
         self.user_message = user_message
         self.status_code = status_code
 
+    # kind/status_code 不进 __str__ 的话，raise 链下游只能拿到兜底文案，
+    # UI 永远分不清是限流、鉴权还是额度问题（issue #101）。
+    def __str__(self) -> str:
+        suffix = f" ({self.kind}" + (f", status={self.status_code}" if self.status_code else "") + ")"
+        return self.user_message + suffix
+
+    def __repr__(self) -> str:
+        return (
+            f"AIRequestError(kind={self.kind!r}, status_code={self.status_code!r}, "
+            f"user_message={self.user_message!r})"
+        )
+
 
 def _extract_text_content(value: object) -> str | None:
     """Normalize provider text blocks without treating reasoning as final output."""
@@ -126,16 +138,19 @@ def normalize_ai_error(exc: Exception, response: object | None = None) -> AIRequ
         "频率限制",
     )
 
-    if any(marker in raw for marker in context_markers):
-        return AIRequestError("context_limit", "请求内容超过当前模型的上下文限制", status_code)
-    if any(marker in raw for marker in output_limit_markers):
-        return AIRequestError("output_limit", "当前模型不接受设置的输出 Token 上限", status_code)
+    # 判定顺序：额度/限流/鉴权先于上下文。真实错误体常混排多种提示（如"余额不足，请减少
+    # 输入过长内容"），先查 context marker 会把额度问题误报成上下文超限（issue #101）。
+    # quota marker 仍需优先于 429 状态码：OpenAI 的 insufficient_quota 实际就配 429 返回。
     if status_code == 402 or any(marker in raw for marker in quota_markers):
         return AIRequestError("token_quota", "AI Token 额度或账户余额不足", status_code)
     if status_code == 429 or any(marker in raw for marker in rate_markers):
         return AIRequestError("rate_limit", "AI 服务触发请求或 Token 频率限制", status_code)
     if status_code in {401, 403}:
         return AIRequestError("auth", "AI API Key 无效或当前模型没有访问权限", status_code)
+    if any(marker in raw for marker in context_markers):
+        return AIRequestError("context_limit", "请求内容超过当前模型的上下文限制", status_code)
+    if any(marker in raw for marker in output_limit_markers):
+        return AIRequestError("output_limit", "当前模型不接受设置的输出 Token 上限", status_code)
     if isinstance(exc, httpx.RequestError):
         return AIRequestError("network", "AI 服务连接失败或超时", status_code)
     return AIRequestError("request_failed", "AI 服务请求失败", status_code)
@@ -474,7 +489,9 @@ def call_anthropic_text(
         raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
     if compatibility_error is not None:
         raise normalize_ai_error(compatibility_error) from compatibility_error
-    return None
+    # 所有策略都没有产出文本时显式报错：静默 return None 会让调用方把
+    # thinking-only 响应记成无理由失败，截断和空响应全都不可见（issue #102）。
+    raise AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程")
 
 
 def call_openai_compatible_text(
@@ -548,7 +565,9 @@ def call_openai_compatible_text(
         raise AIRequestError("output_truncated", "AI 返回内容因输出 Token 上限被截断")
     if compatibility_error is not None:
         raise normalize_ai_error(compatibility_error) from compatibility_error
-    return None
+    # 同 call_anthropic_text：OpenAI 兼容路径此前在这里静默 return None，
+    # 截断后空 choices、thinking-only 响应全部无声失败（issue #102）。
+    raise AIRequestError("empty_response", "AI 服务没有返回文本内容，可能只返回了思考过程")
 
 
 def get_openai_compatible_model(config: dict) -> str:
