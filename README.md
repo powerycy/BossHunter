@@ -122,6 +122,8 @@ bosshunter run
 | [@powerycy](https://github.com/powerycy) 跑跑蹦蹦跳跳 | 项目负责人 | 全项目；核心与安全最终审批 | 项目发起至今 |
 | [@yuppiez99999](https://github.com/yuppiez99999) | 平台适配维护者 | 招聘平台采集器、城市数据、适配测试与平台域 PR 治理 | 2026-08-29 起 |
 | [@yukinoshi](https://github.com/yukinoshi) | 产品与 AI 维护者 | AI 评分、招呼语、错误恢复与产品域 PR 治理；高风险路径转核心与安全复核 | 2026-08-29 起 |
+| [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 核心与安全维护者 | 发送安全、运行时、数据库、监测链路与核心域 PR 治理；高风险修改与项目负责人共同复核 | 2026-08-30 起 |
+| [@bianshilong0604](https://github.com/bianshilong0604) | 产品与 AI 维护者 | Web 工作台、AI 评分、招呼语与产品域 PR 治理；高风险路径转核心与安全复核 | 2026-08-30 起 |
 
 [查看候选与历任维护者、任期和治理贡献](MAINTAINERS.md) · [查看维护者统计与治理规则](GOVERNANCE.md)
 
@@ -131,20 +133,20 @@ bosshunter run
 
 | 排名 | 贡献者 | 贡献度 | 主要贡献方向 |
 |:---:|---|:---:|---|
-| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | **12.5%** | 岗位导出、城市目录、回收站、独立 AI 评分与多平台采集架构 |
-| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | **12%** | AI 兼容、评分恢复、错误传播、凭据优先级与 Windows 运行时兼容 |
-| 🥉 | [@GioiaZheng](https://github.com/GioiaZheng) | **11%** | API Key 安全、PDF 依赖降级与人工确认流程修复 |
-| 4 | [@atticus-zhou](https://github.com/atticus-zhou) | **9%** | AI 重试、浏览器交互、送达验证与防重复发送 |
-| 5 | [@haohao-fly](https://github.com/haohao-fly) | **8%** | 岗位筛选、评分重试、投递队列与任务保护 |
-| 6 | [@meixiaoxie](https://github.com/meixiaoxie) | **7%** | 配置安全、公司屏蔽、城市查询与 Windows 回归测试 |
-| 6 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | **7%** | 送达确认、消息方向识别与招呼语约束 |
-| 6 | [@hdfhssg](https://github.com/hdfhssg) | **7%** | 学历与招聘类型筛选、岗位池与投递队列 |
+| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | **12%** | 岗位导出、城市目录、回收站、独立 AI 评分与多平台采集架构 |
+| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | **11.5%** | AI 兼容、评分恢复、错误传播、凭据优先级与 Windows 运行时兼容 |
+| 🥉 | [@GioiaZheng](https://github.com/GioiaZheng) | **10.5%** | API Key 安全、PDF 依赖降级与人工确认流程修复 |
+| 4 | [@atticus-zhou](https://github.com/atticus-zhou) | **8.5%** | AI 重试、浏览器交互、送达验证与防重复发送 |
+| 5 | [@haohao-fly](https://github.com/haohao-fly) | **7.5%** | 岗位筛选、评分重试、投递队列与任务保护 |
+| 6 | [@meixiaoxie](https://github.com/meixiaoxie) | **6.5%** | 配置安全、公司屏蔽、城市查询与 Windows 回归测试 |
+| 6 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | **6.5%** | 送达确认、消息方向识别与招呼语约束 |
+| 6 | [@hdfhssg](https://github.com/hdfhssg) | **6.5%** | 学历与招聘类型筛选、岗位池与投递队列 |
 | 9 | [@yuppiez99999](https://github.com/yuppiez99999) | **5%** | 平台安全回归、采集器测试、运行边界与猎聘适配验证 |
-| 10 | [@Nourishman](https://github.com/Nourishman) | **4%** | PDF 简历、模型规范化与确认流程竞态修复 |
+| 10 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | **4.5%** | 招呼语发送队列进度、任务状态与生成网址安全校验 |
 
 ## 🔥 近 30 天贡献榜 Top 10
 
-统计窗口：**2026-07-31 至 2026-08-29（Asia/Shanghai）**。采用与总榜相同的影响维度，只计算该窗口内被主线采纳的部分。
+统计窗口：**2026-08-01 至 2026-08-30（Asia/Shanghai）**。采用与总榜相同的影响维度，只计算该窗口内被主线采纳的部分。
 
 | 排名 | 贡献者 | 本期主要贡献 |
 |:---:|---|---|
@@ -156,8 +158,8 @@ bosshunter run
 | 5 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | 会话送达、消息方向与招呼语约束 |
 | 5 | [@hdfhssg](https://github.com/hdfhssg) | 学历、招聘类型与岗位池增强 |
 | 8 | [@yuppiez99999](https://github.com/yuppiez99999) | BOSS/51job/猎聘采集测试、运行边界与平台治理 |
-| 9 | [@Nourishman](https://github.com/Nourishman) | PDF 简历与确认流程修复 |
-| 10 | [@likris588-ux](https://github.com/likris588-ux) | 猎聘只读采集器与城市适配 |
+| 9 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | 招呼语队列体验与虚构网址防护 |
+| 10 | [@Nourishman](https://github.com/Nourishman) | PDF 简历与确认流程修复 |
 
 [查看完整榜单、证据链接、历月快照与计算口径](CONTRIBUTORS.md)
 

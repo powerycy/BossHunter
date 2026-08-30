@@ -1084,6 +1084,7 @@ def send_greetings(config: dict, force: bool = False) -> int:
     throttle = RequestThrottle(delay_min=interval_min, delay_max=interval_max)
     backoff = ProgressiveBackoff()
     sent_count = 0
+    workbench_log = config.get("_workbench_log")
 
     console.print(f"[bold]准备发送 {len(jobs_to_send)} 条招呼语[/bold] (今日已发 {already_sent}/{daily_limit})")
 
@@ -1096,7 +1097,7 @@ def send_greetings(config: dict, force: bool = False) -> int:
     ) as progress:
         task = progress.add_task("发送中", total=len(jobs_to_send))
 
-        for job in jobs_to_send:
+        for index, job in enumerate(jobs_to_send):
             if _stop_requested(stop_event):
                 console.print("[yellow]已请求停止，结束发送[/yellow]")
                 send_report["stop_reason"] = "stopped"
@@ -1110,14 +1111,29 @@ def send_greetings(config: dict, force: bool = False) -> int:
                 progress.update(task, advance=1)
                 continue
 
+            current_job = f"{job.get('company') or '公司未知'}｜{job.get('title') or '职位未知'}"
+            next_job = jobs_to_send[index + 1] if index + 1 < len(jobs_to_send) else None
+            next_label = (
+                f"下一条：{next_job.get('company') or '公司未知'}｜{next_job.get('title') or '职位未知'}"
+                if next_job else "下一条：无"
+            )
+
             # Wait between sends (except first)
             if sent_count > 0:
+                if callable(workbench_log):
+                    workbench_log(
+                        f"招呼语进度 {index + 1}/{len(jobs_to_send)}\n等待发送：{current_job}\n{next_label}"
+                    )
                 progress.update(task, description="等待间隔...")
                 if throttle.wait(stop_event):
                     console.print("[yellow]已请求停止，结束发送[/yellow]")
                     send_report["stop_reason"] = "stopped"
                     break
 
+            if callable(workbench_log):
+                workbench_log(
+                    f"招呼语进度 {index + 1}/{len(jobs_to_send)}\n正在发送：{current_job}\n{next_label}"
+                )
             progress.update(task, description=f"发送: {job['company'][:10]} - {job['title'][:15]}")
 
             result_data, failed_target_id = _send_greeting_once(job, greeting, throttle_config)

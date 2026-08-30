@@ -408,6 +408,19 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("最后刷新：", self.source)
         self.assertIn("refreshing && 'animate-spin'", self.source)
 
+    def test_dashboard_shows_detailed_greeting_queue_progress(self):
+        self.assertIn("if (log.includes('招呼语进度')) return log", self.source)
+        self.assertIn("whitespace-pre-line text-lg", self.source)
+
+    def test_dashboard_falls_back_to_concrete_task_status(self):
+        self.assertNotIn("return '等待后端返回阶段'", self.source)
+        self.assertIn("`${task.label}正在启动`", self.source)
+        self.assertIn("`${task.label}正在停止`", self.source)
+        self.assertIn("`${task.label}已完成`", self.source)
+        self.assertIn("`${task.label}已停止`", self.source)
+        self.assertIn("`${task.label}运行失败`", self.source)
+        self.assertIn("currentTaskStage(visibleTask)", self.source)
+
     def test_dashboard_can_stop_after_start_response_arrives(self):
         active_branch = self.source.index("if (activeTask?.mode === mode)")
         pending_guard = self.source.index("if (modePending) return")

@@ -42,5 +42,5 @@
 /src/bosshunter/web/frontend/package-lock.json @powerycy
 
 # Ordinary product/AI and platform-adapter paths intentionally have no required
-# owner during the current maintainer-candidate period. Their responsibility
-# boundaries remain documented in GOVERNANCE.md and MAINTAINERS.md.
+# owner. Module maintainers can approve and merge them after PR + CI; the
+# high-risk paths above continue to require the current project owner.
