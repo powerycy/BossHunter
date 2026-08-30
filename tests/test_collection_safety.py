@@ -22,7 +22,7 @@ class CollectionSafetyTests(unittest.TestCase):
     def test_default_limits_are_daily_only(self):
         collection = DEFAULTS["collection"]
         self.assertNotIn("daily_new_jobs_limit", collection)
-        self.assertEqual(collection["daily_search_page_limit"], 30)
+        self.assertEqual(collection["daily_search_page_limit"], 60)
         self.assertEqual(collection["daily_detail_page_limit"], 150)
         self.assertEqual(collection["risk_pause_min_minutes"], 5)
         self.assertEqual(collection["risk_pause_max_minutes"], 10)

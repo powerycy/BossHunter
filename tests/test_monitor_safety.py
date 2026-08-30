@@ -118,6 +118,25 @@ class MonitorThrottleTests(unittest.TestCase):
 
         self.assertEqual(events, ["open", "mark", "wait", "open", "mark"])
 
+    def test_web_monitor_reuses_one_live_chat_list_tab(self):
+        from bosshunter.executor import monitor
+
+        config = {
+            "_monitor_reuse_chat_tab": True,
+            "_monitor_runtime_state": {},
+        }
+        with patch.object(monitor, "_open_monitor_tab", return_value="chat-target") as open_tab, \
+             patch.object(monitor, "get_page_info", return_value={"url": "https://www.zhipin.com/web/geek/chat"}), \
+             patch.object(monitor, "close_tab") as close_tab:
+            first = monitor._get_monitor_chat_target("https://www.zhipin.com/web/geek/chat", config)
+            second = monitor._get_monitor_chat_target("https://www.zhipin.com/web/geek/chat", config)
+            monitor.close_monitor_chat_target(config)
+
+        self.assertEqual(first, ("chat-target", False))
+        self.assertEqual(second, ("chat-target", True))
+        open_tab.assert_called_once()
+        close_tab.assert_called_once_with("chat-target")
+
 
 class MonitorIdempotencyAndLimitTests(unittest.TestCase):
     def test_same_unresolved_reply_is_skipped_but_new_hr_message_is_processed(self):
@@ -186,6 +205,83 @@ class MonitorIdempotencyAndLimitTests(unittest.TestCase):
         self.assertEqual(pending_count, 2)
         generate_reply.assert_called_once()
 
+    def test_same_auto_reply_is_not_sent_twice_but_later_hr_turn_is_processed(self):
+        from bosshunter.executor import monitor
+
+        original_messages = [
+            {"sender": "me", "text": "你好，我对岗位感兴趣。"},
+            {"sender": "hr", "text": "请介绍一下相关经验。"},
+        ]
+        later_messages = [
+            *original_messages,
+            {"sender": "hr", "text": "也请补充一个最近的项目案例。"},
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data" / "bosshunter.db"
+            db = get_db(db_path)
+            try:
+                insert_job(db, _job("auto-round"))
+                update_job_status(db, "auto-round", "replied")
+                add_history(
+                    db,
+                    "auto-round",
+                    "auto_replied",
+                    monitor._build_reply_detail(
+                        original_messages,
+                        "第一轮自动回复",
+                        "auto_replied.v1",
+                    ),
+                )
+            finally:
+                db.close()
+
+            def open_db():
+                return get_db(db_path)
+
+            config = {"monitor": {"auto_reply_hr_questions": True}}
+            with patch.object(monitor, "get_db", side_effect=open_db), \
+                 patch.object(monitor, "_open_conversation", return_value="same-target"), \
+                 patch.object(monitor, "_wait_or_stop", return_value=False), \
+                 patch.object(monitor, "evaluate", return_value=json.dumps(original_messages)), \
+                 patch.object(monitor, "close_tab"), \
+                 patch.object(monitor, "_generate_auto_reply") as generate_reply, \
+                 patch.object(monitor, "_send_message_in_chat") as send_message:
+                same_action = monitor._handle_conversation(
+                    _job("auto-round") | {"status": "replied"},
+                    config,
+                )
+
+            self.assertEqual(same_action, "skipped_handled_reply")
+            generate_reply.assert_not_called()
+            send_message.assert_not_called()
+
+            with patch.object(monitor, "get_db", side_effect=open_db), \
+                 patch.object(monitor, "_open_conversation", return_value="later-target"), \
+                 patch.object(monitor, "_wait_or_stop", return_value=False), \
+                 patch.object(monitor, "evaluate", return_value=json.dumps(later_messages)), \
+                 patch.object(monitor, "close_tab"), \
+                 patch.object(monitor, "_generate_auto_reply", return_value="第二轮自动回复") as generate_reply, \
+                 patch.object(monitor, "_send_message_in_chat", return_value=True) as send_message:
+                later_action = monitor._handle_conversation(
+                    _job("auto-round") | {"status": "replied"},
+                    config,
+                )
+
+            verify_db = get_db(db_path)
+            try:
+                auto_reply_count = verify_db.execute(
+                    "SELECT COUNT(*) FROM history WHERE job_id = ? AND action = 'auto_replied'",
+                    ("auto-round",),
+                ).fetchone()[0]
+            finally:
+                verify_db.close()
+
+        self.assertEqual(later_action, "auto_replied")
+        self.assertEqual(auto_reply_count, 2)
+        generate_reply.assert_called_once()
+        send_message.assert_called_once_with("later-target", "第二轮自动回复")
+
     def test_chat_list_skips_same_pending_before_opening_and_caps_new_items(self):
         from bosshunter.executor import monitor
 
@@ -233,7 +329,20 @@ class MonitorIdempotencyAndLimitTests(unittest.TestCase):
                  patch.object(monitor, "close_tab"):
                 results = monitor.check_replies({"monitor": {"max_conversations_per_cycle": 1}})
 
+            verify_db = get_db(db_path)
+            try:
+                detected_actions = [
+                    row["action"]
+                    for row in verify_db.execute(
+                        "SELECT action FROM history WHERE job_id = ? ORDER BY id",
+                        ("two",),
+                    ).fetchall()
+                ]
+            finally:
+                verify_db.close()
+
         self.assertEqual([item["job"]["id"] for item in results], ["two"])
+        self.assertEqual(detected_actions, ["hr_reply_detected"])
 
 
 class MonitorRiskTests(unittest.TestCase):

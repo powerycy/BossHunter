@@ -257,6 +257,14 @@ class BrowserRuntimeSourceTests(unittest.TestCase):
         self.assertIn("process.platform === 'darwin'", source)
         self.assertIn("pathname === '/key'", source)
 
+    def test_cdp_proxy_returns_new_target_without_waiting_for_full_page_load(self):
+        script = Path(__file__).parents[1] / "src" / "bosshunter" / "browser" / "runtime" / "cdp-proxy.mjs"
+        source = script.read_text(encoding="utf-8")
+        new_route = source.split("pathname === '/new'", 1)[1].split("pathname === '/close'", 1)[0]
+
+        self.assertIn("ensureSession(targetId)", new_route)
+        self.assertNotIn("waitForLoad", new_route)
+
     def test_check_runtime_requires_bosshunter_runtime_identity(self):
         script = Path(__file__).parents[1] / "src" / "bosshunter" / "browser" / "runtime" / "check-runtime.mjs"
         source = script.read_text(encoding="utf-8")

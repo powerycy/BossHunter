@@ -27,7 +27,7 @@ class RuntimeClient:
         params: dict[str, str] = {"url": url}
         if background:
             params["background"] = "1"
-        data = self._get_json("/new", params=params, timeout=15)
+        data = self._get_json("/new", params=params, timeout=30)
         return data.get("targetId") if isinstance(data, dict) else None
 
     def close_tab(self, target_id: str) -> bool:

@@ -3,6 +3,16 @@ from unittest.mock import Mock, patch
 
 
 class BrowserFacadeTests(unittest.TestCase):
+    @patch("bosshunter.browser.client.httpx.get")
+    def test_runtime_client_allows_slow_new_tab_creation(self, get):
+        from bosshunter.browser.client import RuntimeClient
+
+        get.return_value.status_code = 200
+        get.return_value.json.return_value = {"targetId": "target-1"}
+
+        self.assertEqual(RuntimeClient({}).new_tab("https://example.com"), "target-1")
+        self.assertEqual(get.call_args.kwargs["timeout"], 30)
+
     @patch("bosshunter.browser.RuntimeClient")
     @patch("bosshunter.browser.ensure_runtime")
     def test_new_tab_returns_target_id_from_runtime_client(self, ensure_runtime, client_cls):
