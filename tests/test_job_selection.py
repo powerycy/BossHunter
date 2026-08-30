@@ -651,6 +651,44 @@ class JobSelectionTests(unittest.TestCase):
         self.assertEqual(report["remaining_quota"], 2)
         self.assertEqual(report["stop_reason"], "daily_limit")
 
+    def test_send_greetings_reports_current_and_next_job_to_workbench(self):
+        jobs = [_job("first", "AI Agent"), _job("second", "Backend")]
+        jobs[0]["company"] = "First Company"
+        jobs[1]["company"] = "Second Company"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "bosshunter.db"
+            db = get_db(db_path)
+            try:
+                for score, job in zip((90, 80), jobs):
+                    insert_job(db, job)
+                    update_job_score(db, job["id"], score, "match")
+                    update_job_status(db, job["id"], "ready")
+                    update_job_greeting(db, job["id"], "您好，我对这个岗位很感兴趣。")
+            finally:
+                db.close()
+
+            logs = []
+            config = {
+                "_workbench_log": logs.append,
+                "throttle": {"daily_limit": 10, "interval_min": 0, "interval_max": 0},
+            }
+            with patch("bosshunter.db.DB_PATH", db_path), \
+                 patch("bosshunter.executor.sender.should_take_day_off", return_value=False), \
+                 patch("bosshunter.executor.sender.SendWindowChecker.is_active", return_value=True), \
+                 patch("bosshunter.executor.sender._send_greeting_once", return_value=({"success": True}, None)):
+                sent = send_greetings(config, force=True)
+
+        self.assertEqual(sent, 2)
+        self.assertIn(
+            "招呼语进度 1/2\n正在发送：First Company｜AI Agent\n下一条：Second Company｜Backend",
+            logs,
+        )
+        self.assertIn(
+            "招呼语进度 2/2\n等待发送：Second Company｜Backend\n下一条：无",
+            logs,
+        )
+
     def test_pending_confirmation_excludes_jobs_with_greetings(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = get_db(Path(tmp) / "bosshunter.db")

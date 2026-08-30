@@ -47,9 +47,11 @@ const TASK_STAGE_LABELS = [
   '本轮监测完成，30 分钟后再次检查',
 ]
 
-function currentTaskStage(logs: string[] = []) {
+function currentTaskStage(task: WorkbenchTask) {
+  const logs = task.logs || []
   for (const log of logs.slice().reverse()) {
     if (log.includes('AI 评分进度')) return log
+    if (log.includes('招呼语进度')) return log
     if (log.includes('招呼语发送结果')) return log
     if (log.includes('发送招呼语')) return '发送招呼语'
     if (log.includes('生成招呼语')) return '生成招呼语'
@@ -57,7 +59,12 @@ function currentTaskStage(logs: string[] = []) {
     const stage = TASK_STAGE_LABELS.find(label => log.includes(label))
     if (stage) return stage
   }
-  return '等待后端返回阶段'
+  if (task.status === 'running') return `${task.label}正在启动`
+  if (task.status === 'stopping') return `${task.label}正在停止`
+  if (task.status === 'completed') return `${task.label}已完成`
+  if (task.status === 'stopped') return `${task.label}已停止`
+  if (task.status === 'failed') return `${task.label}运行失败`
+  return `${task.label}状态未知`
 }
 
 function taskStatusText(status: string) {
@@ -685,7 +692,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             </div>
             <div className={`mt-3 rounded-2xl border px-4 py-3 ${taskStatusClass(visibleTask.status)}`}>
               <div className="text-xs font-black text-primary">{taskStatusTitle(visibleTask.status)}</div>
-              <div className="mt-1 text-lg font-black text-foreground">{currentTaskStage(visibleTask.logs)}</div>
+              <div className="mt-1 whitespace-pre-line text-lg font-black leading-7 text-foreground">{currentTaskStage(visibleTask)}</div>
               <div className="mt-1 text-xs font-bold text-muted">任务状态：{taskStatusText(visibleTask.status)}</div>
               {visibleTask.deadline_at && (
                 <div className="mt-1 text-xs font-bold text-muted">
