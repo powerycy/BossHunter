@@ -2374,6 +2374,78 @@ class WebApiRouteTests(unittest.TestCase):
             self.assertTrue(status.startswith("400"), body)
             self.assertEqual(json.loads(body), {"error": "仅支持 .md、.docx 或 .pdf 格式"})
 
+    def test_web_api_history_open_chat_selects_the_recorded_boss_conversation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("open-chat"))
+                add_history(db, "open-chat", "replied", "已回复")
+                history_id = db.execute(
+                    "SELECT id FROM history WHERE job_id = ?",
+                    ("open-chat",),
+                ).fetchone()["id"]
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch.object(server.task_runner, "status", return_value={"active": None}), \
+                 patch(
+                     "bosshunter.executor.monitor._open_conversation_from_chat_list",
+                     return_value="chat-target",
+                 ) as open_conversation:
+                status, _, body = self._request(
+                    f"/api/history/{history_id}/open-chat",
+                    method="POST",
+                    json_body={},
+                )
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertTrue(json.loads(body)["success"])
+        selected_job = open_conversation.call_args.args[0]
+        self.assertEqual(selected_job["id"], "open-chat")
+        self.assertFalse(open_conversation.call_args.kwargs["background"])
+
+    def test_web_api_detected_reply_prepares_only_that_conversation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("prepare-reply"))
+                add_history(db, "prepare-reply", "hr_reply_detected", "检测到新消息")
+                history_id = db.execute(
+                    "SELECT id FROM history WHERE job_id = ?",
+                    ("prepare-reply",),
+                ).fetchone()["id"]
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch.object(server.task_runner, "status", return_value={"active": None}), \
+                 patch(
+                     "bosshunter.executor.monitor.process_detected_reply",
+                     return_value={"pending": 1, "failed": 0},
+                 ) as process_reply:
+                status, _, body = self._request(
+                    f"/api/history/{history_id}/prepare-reply",
+                    method="POST",
+                    json_body={},
+                )
+                process_reply.return_value = {"pending": 0, "failed": 1}
+                failed_status, _, failed_body = self._request(
+                    f"/api/history/{history_id}/prepare-reply",
+                    method="POST",
+                    json_body={},
+                )
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertTrue(json.loads(body)["success"])
+        self.assertTrue(failed_status.startswith("502"), failed_body)
+        self.assertEqual(process_reply.call_count, 2)
+        self.assertEqual(process_reply.call_args.args[0], "prepare-reply")
+
     def test_web_api_history_dismiss_reply_adds_dismissed_history_without_rejecting_job(self):
         # Arrange
         with tempfile.TemporaryDirectory() as tmp:
@@ -2679,6 +2751,63 @@ class WebApiRouteTests(unittest.TestCase):
                 ("resume-failed-open", "resume_failed"),
             },
         )
+
+    def test_web_api_history_includes_last_week_replies_outside_recent_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                for job_id in ("recent-reply", "recent-resume-sent", "expired-reply", "recent-noise"):
+                    insert_job(db, _job(job_id))
+                add_history(
+                    db,
+                    "recent-reply",
+                    "auto_replied",
+                    json.dumps({"schema": "auto_replied.v1", "ai_reply": "近一周回复"}),
+                )
+                add_history(
+                    db,
+                    "expired-reply",
+                    "replied",
+                    json.dumps({"schema": "replied.external.v1", "manual_reply": "过期回复"}),
+                )
+                add_history(
+                    db,
+                    "recent-resume-sent",
+                    "needs_resume",
+                    json.dumps({"schema": "needs_resume.v1", "conversation_tail": [{"sender": "hr", "text": "请发简历"}]}),
+                )
+                add_history(db, "recent-resume-sent", "resume_sent", "简历已发送")
+                db.execute(
+                    "UPDATE history SET created_at = datetime('now', '-8 days') WHERE job_id = ?",
+                    ("expired-reply",),
+                )
+                db.commit()
+                add_history(db, "recent-noise", "sent", "最近普通记录")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/history?limit=1&include_monitor_conversations=1"
+            )
+            full_status, _, full_body = self._request(
+                "/api/history?limit=50&include_monitor_conversations=1"
+            )
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertTrue(full_status.startswith("200"), full_body)
+        expected = {
+            ("recent-noise", "sent"),
+            ("recent-reply", "auto_replied"),
+            ("recent-resume-sent", "needs_resume"),
+            ("recent-resume-sent", "resume_sent"),
+        }
+        for payload in (body, full_body):
+            self.assertEqual(
+                {(item["job_id"], item["action"]) for item in json.loads(payload)},
+                expected,
+            )
 
     def test_web_api_history_exposes_structured_failure_reason_and_resolution_state(self):
         # Arrange

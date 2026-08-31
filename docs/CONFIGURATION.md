@@ -2,6 +2,8 @@
 
 推荐运行 `bosshunter web`，在 `http://127.0.0.1:8686` 的本地面板完成配置。需要手动编辑时，可复制仓库根目录的 [`config.example.yaml`](../config.example.yaml) 为 `config.yaml`。
 
+面板中填写的 AI API Key 或 Auth Token 会保存在与配置文件同目录的隐藏凭据文件（默认 `.config.credentials.yaml`），并以仅当前用户可读写的权限写入；普通 `config.yaml`、配置下载和浏览器接口都不包含原始凭据。旧版写在 `config.yaml` 中的凭据会在下次启动 BossHunter 时自动迁移。不要分享隐藏凭据文件。
+
 ## 核心配置
 
 | 配置段 | 关键字段 | 说明 |
@@ -12,7 +14,7 @@
 | `collection` | `daily_search_page_limit`, `risk_pause_*` | 采集额度与风险暂停策略 |
 | `scoring` | `threshold`, `max_candidates` | 评分阈值与候选数量 |
 | `throttle` | `daily_limit`, `interval_min/max`, `send_windows` | 低频发送策略 |
-| `ai` | `service`, `provider`, `model`, `api_key`, `base_url` | AI 服务与接口 |
+| `ai` | `service`, `provider`, `model`, `base_url` | AI 服务与接口；凭据由本地面板单独保存 |
 | `monitor` | `interval`, `max_resume_sends_per_cycle` | 回复监听设置 |
 | `follow_up` | `enabled`, `interval_hours`, `skip_weekends` | 跟进策略 |
 | `browser` | `chrome_ports`, `proxy_port` | Chrome 与本地代理连接 |

@@ -139,7 +139,7 @@ def _load_resume(config: dict) -> str:
 def _call_claude(prompt: str, config: dict, max_tokens: int | None = None) -> str | None:
     """Call Claude API and return response text."""
     if not get_ai_api_key(config):
-        console.print("[red]未设置当前 AI 服务所需的 API Key 环境变量或 config.yaml ai.api_key[/red]")
+        console.print("[red]未设置当前 AI 服务所需的 API Key 环境变量或本地凭据[/red]")
         return None
     ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
     token_limit = max_tokens if max_tokens is not None else ai_cfg.get("scoring_max_tokens", 8192)

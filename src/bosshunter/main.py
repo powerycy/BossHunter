@@ -7,7 +7,7 @@ import click
 from rich.console import Console
 
 from bosshunter import __version__
-from bosshunter.config import load_config
+from bosshunter.config import load_config, migrate_legacy_credentials
 
 console = Console()
 GITHUB_URL = "https://github.com/powerycy/BossHunter"
@@ -80,12 +80,14 @@ def _prompt_setup(port: int = 8686) -> None:
 def cli(ctx: click.Context, config_path: str | None) -> None:
     """BossHunter - 某直聘智能求职Agent"""
     ctx.ensure_object(dict)
-    path = Path(config_path) if config_path else None
+    path = Path(config_path).resolve() if config_path else None
     base_dir = _runtime_base_dir(path)
     if path is None and (base_dir / "config.yaml").exists():
         path = base_dir / "config.yaml"
     ctx.obj["base_dir"] = base_dir
     os.chdir(base_dir)
+    if path is not None:
+        migrate_legacy_credentials(path)
     ctx.obj["config"] = load_config(path)
     from bosshunter.browser import configure
     configure(ctx.obj["config"])

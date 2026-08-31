@@ -107,7 +107,8 @@ ai:
   greeting_review_threshold: 7
   greeting_max_iterations: 2
   resume_max_pages: 3
-  # api_key/base_url 填写后优先生效；留空时才读取对应环境变量或使用服务商默认地址
+  # 建议在本地面板填写 api_key；它会单独保存在忽略提交的本地凭据文件中，不写入 config.yaml
+  # base_url 填写后优先生效；留空时才读取对应环境变量或使用服务商默认地址
   # （ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / ARK_API_KEY / OPENAI_API_KEY）
   # api_key: "your-api-key"
   # base_url: "https://api.anthropic.com"

@@ -21,6 +21,7 @@ env/
 
 # Config with secrets
 config.yaml
+.*.credentials.yaml
 
 # Personal resume
 resume.md

@@ -8,9 +8,7 @@ Serves:
 import json
 import math
 import mimetypes
-import os
 import random
-import tempfile
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -25,7 +23,7 @@ from bottle import Bottle, request, response, static_file, abort
 from bosshunter import __version__
 from bosshunter.ai.credentials import get_ai_api_key
 from bosshunter.cities import CityRefreshError, get_city_map, load_city_snapshot, refresh_city_cache
-from bosshunter.config import AI_SERVICE_PRESETS, load_config, remove_retired_collection_settings
+from bosshunter.config import AI_SERVICE_PRESETS, load_config, remove_retired_collection_settings, save_config
 from bosshunter.db import (
 	GREETING_ALLOWED_STATUSES,
 	REJECT_ALLOWED_STATUSES,
@@ -42,6 +40,7 @@ from bosshunter.db import (
 	get_jobs_ready_to_send,
 	get_jobs_with_send_errors,
 	get_recent_history,
+	get_recent_monitor_replies,
 	get_unresolved_reply_pending,
 	get_unresolved_resume_failures,
 	get_stats,
@@ -199,30 +198,8 @@ def _config_download_payload(config: dict) -> str:
 
 
 def _write_config(config: dict) -> None:
-	"""Atomically replace config.yaml so an interrupted write cannot corrupt it."""
-	CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-	temporary_path = None
-	try:
-		with tempfile.NamedTemporaryFile(
-			"w",
-			encoding="utf-8",
-			dir=CONFIG_PATH.parent,
-			prefix=f".{CONFIG_PATH.name}.",
-			suffix=".tmp",
-			delete=False,
-		) as temporary:
-			temporary_path = Path(temporary.name)
-			yaml.dump(config, temporary, allow_unicode=True, default_flow_style=False, sort_keys=False)
-			temporary.flush()
-			os.fsync(temporary.fileno())
-		os.replace(temporary_path, CONFIG_PATH)
-		temporary_path = None
-	finally:
-		if temporary_path is not None:
-			try:
-				temporary_path.unlink()
-			except FileNotFoundError:
-				pass
+	"""Persist public settings separately from local AI credentials."""
+	save_config(config, CONFIG_PATH)
 
 
 def _sanitize_config_for_write(data):
@@ -1124,17 +1101,30 @@ def api_top_companies():
 def api_history():
 	limit = int(request.params.get("limit", 15))
 	include_unresolved = request.params.get("include_unresolved", "").lower() in ("1", "true", "yes")
+	include_monitor_conversations = request.params.get("include_monitor_conversations", "").lower() in ("1", "true", "yes")
 	db = _get_web_db()
 	try:
 		data = get_recent_history(db, limit)
-		if include_unresolved:
+		if include_unresolved or include_monitor_conversations:
+			monitor_replies = get_recent_monitor_replies(db) if include_monitor_conversations else []
+			if include_monitor_conversations:
+				retained_reply_ids = {item["id"] for item in monitor_replies}
+				data = [
+					item for item in data
+					if item["action"] not in ("replied", "auto_replied", "resume_sent") or item["id"] in retained_reply_ids
+				]
 			seen_ids = {item["id"] for item in data}
-			for unresolved_items in (
-				get_unresolved_reply_pending(db),
-				get_unresolved_resume_failures(db),
-			):
-				data.extend(item for item in unresolved_items if item["id"] not in seen_ids)
-				seen_ids.update(item["id"] for item in unresolved_items)
+			extra_groups = []
+			if include_unresolved:
+				extra_groups.extend((
+					get_unresolved_reply_pending(db),
+					get_unresolved_resume_failures(db),
+				))
+			if include_monitor_conversations:
+				extra_groups.append(monitor_replies)
+			for extra_items in extra_groups:
+				data.extend(item for item in extra_items if item["id"] not in seen_ids)
+				seen_ids.update(item["id"] for item in extra_items)
 			data.sort(
 				key=lambda item: (str(item.get("created_at") or ""), int(item.get("id") or 0)),
 				reverse=True,
@@ -1151,6 +1141,97 @@ def api_history_unresolved_replies_count():
 		return _json_response({"count": count_unresolved_monitor_items(db)})
 	finally:
 		db.close()
+
+
+@app.route("/api/history/<history_id>/open-chat", method="POST")
+def api_history_open_chat(history_id):
+	with job_mutation_lock:
+		conflict = _active_task_mutation_error()
+		if conflict is not None:
+			return conflict
+		db = _get_web_db()
+		try:
+			row = db.execute(
+				"""
+				SELECT j.*
+				FROM history h
+				JOIN jobs j ON j.id = h.job_id
+				WHERE h.id = ? AND j.deleted_at IS NULL
+				""",
+				(history_id,),
+			).fetchone()
+			if not row:
+				return _json_response({"error": "监测记录或岗位不存在"}, 404)
+			job = dict(row)
+		finally:
+			db.close()
+
+		if str(job.get("source_platform") or "boss") != "boss":
+			return _json_response({"error": "该平台不支持聊天定位"}, 400)
+
+		from bosshunter.executor.monitor import MonitorRiskDetected, _open_conversation_from_chat_list
+
+		try:
+			target_id = _open_conversation_from_chat_list(
+				job,
+				load_config(CONFIG_PATH),
+				background=False,
+			)
+		except MonitorRiskDetected as exc:
+			return _json_response({"error": f"BOSS 页面出现风险提示：{exc.kind}"}, 409)
+		if not target_id:
+			return _json_response({"error": "已打开 BOSS 聊天页，但没有找到对应联系人"}, 404)
+		return _json_response({"success": True, "message": "已定位到对应聊天对话"})
+
+
+@app.route("/api/history/<history_id>/prepare-reply", method="POST")
+def api_history_prepare_reply(history_id):
+	with job_mutation_lock:
+		conflict = _active_task_mutation_error()
+		if conflict is not None:
+			return conflict
+		db = _get_web_db()
+		try:
+			row = db.execute(
+				"SELECT id, job_id, action FROM history WHERE id = ?",
+				(history_id,),
+			).fetchone()
+			if not row:
+				return _json_response({"error": "待处理记录不存在"}, 404)
+			if row["action"] != "hr_reply_detected":
+				return _json_response({"error": "只能处理刚检测到的 HR 消息"}, 400)
+			resolved = db.execute(
+				"""
+				SELECT 1 FROM history
+				WHERE job_id = ? AND id > ?
+				  AND action IN (
+				    'reply_pending', 'needs_resume', 'resume_failed', 'resume_sent',
+				    'reply_dismissed', 'replied', 'auto_replied', 'rejected'
+				  )
+				LIMIT 1
+				""",
+				(row["job_id"], row["id"]),
+			).fetchone()
+			if resolved:
+				return _json_response({"success": True, "already_processed": True})
+			job_id = str(row["job_id"])
+		finally:
+			db.close()
+
+		from bosshunter.executor.monitor import process_detected_reply
+
+		summary = process_detected_reply(job_id, load_config(CONFIG_PATH))
+		if summary.get("stop_reason"):
+			return _json_response({"error": "读取 BOSS 对话时触发安全停止", "summary": summary}, 409)
+		processed = sum(
+			int(summary.get(key, 0) or 0)
+			for key in ("skipped", "pending", "needs_resume", "rejected", "replied")
+		)
+		if not processed and summary.get("failed"):
+			return _json_response({"error": "读取或处理对话失败，请先打开聊天对话检查", "summary": summary}, 502)
+		if not processed:
+			return _json_response({"error": "没有找到对应的新 HR 对话，请先用“打开聊天对话”检查"}, 404)
+		return _json_response({"success": True, "summary": summary})
 
 
 @app.route("/api/workbench")

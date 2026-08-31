@@ -592,13 +592,16 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("放弃", self.source)
 
     def test_monitor_cards_link_to_the_corresponding_chat_conversation(self):
-        self.assertIn("monitorChatUrl(item)", self.source)
-        self.assertIn("https://www.zhipin.com/web/geek/chat?jobId=${encodeURIComponent(item.job_id)}", self.source)
+        self.assertIn("openMonitorConversation", self.source)
+        self.assertIn("/open-chat", self.source)
         self.assertIn("打开聊天对话", self.source)
-        self.assertIn("window.open(targetUrl, '_blank', 'noopener,noreferrer')", self.source)
+        self.assertIn("已在 BOSS 中定位到对应聊天对话。", self.source)
+        self.assertNotIn("https://www.zhipin.com/web/geek/chat?jobId=${encodeURIComponent(item.job_id)}", self.source)
 
     def test_monitor_cards_render_scrollable_hr_ai_conversation_history(self):
         self.assertIn("monitorConversationMessages(item, history)", self.source)
+        self.assertIn("const resumeRequestParsed", self.source)
+        self.assertIn("candidate.action === 'needs_resume'", self.source)
         self.assertIn("max-h-[260px]", self.source)
         self.assertIn("overflow-y-auto", self.source)
         self.assertNotIn("可上下滚动", self.source)
@@ -608,11 +611,26 @@ class DashboardPageTests(unittest.TestCase):
         self.assertNotIn("{message.time || item.created_at}", self.source)
         self.assertNotIn("监测记录时间", self.source)
         self.assertIn("AI 建议回复（尚未回答）", self.source)
+        self.assertIn("已回复：定制简历已发送，本轮聊天记录保留在上方。", self.source)
 
     def test_monitor_replied_tab_keeps_each_outbound_round(self):
         self.assertIn("const repliedRecords = history.filter(isOutboundReplyRecord)", self.source)
+        self.assertIn("暂无近 7 天已回复对话。", self.source)
         self.assertIn("parseHistoryDetail(item).schema.startsWith('replied.')", self.source)
         self.assertIn("item.action === 'auto_replied'", self.source)
+        self.assertIn("item.action === 'resume_sent'", self.source)
+        self.assertIn("item.action === 'needs_resume' && !isResumeRequestResolved(item, history)", self.source)
+
+    def test_monitor_shows_detected_hr_messages_while_full_chat_is_loading(self):
+        self.assertIn("item.action === 'hr_reply_detected'", self.source)
+        self.assertIn("isDetectedReplyResolved", self.source)
+        self.assertIn("detectedReplies", self.source)
+        self.assertIn("detectedReplyPreview", self.source)
+        self.assertIn("已检测到 HR 新消息，等待继续读取完整对话并生成处理结果。", self.source)
+        self.assertIn("prepareDetectedReply", self.source)
+        self.assertIn("/prepare-reply", self.source)
+        self.assertIn("读取并生成建议", self.source)
+        self.assertNotIn("disabled={!canReply}", self.source)
 
     def test_monitor_resolution_parser_shows_manual_reply_and_hr_question(self):
         history_detail_source = (
