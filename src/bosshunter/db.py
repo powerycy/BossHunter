@@ -906,15 +906,35 @@ def get_recent_history(conn: sqlite3.Connection, limit: int = 10) -> list[dict]:
 
 
 def get_recent_monitor_replies(conn: sqlite3.Connection) -> list[dict]:
-    """Get all reply rounds still inside the monitor retention window."""
+    """Get retained reply rounds and the resume-request context they need."""
     rows = conn.execute(
         """
         SELECT h.id, h.job_id, h.action, h.detail, h.created_at, j.company, j.title,
                j.resume_path, j.url, j.source_platform, 0 AS resolved
         FROM history h
         JOIN jobs j ON h.job_id = j.id
-        WHERE h.action IN ('replied', 'auto_replied')
-          AND h.created_at >= datetime('now', '-7 days')
+        WHERE (
+            (
+                h.action IN ('replied', 'auto_replied', 'resume_sent')
+                AND h.created_at >= datetime('now', '-7 days')
+            ) OR (
+                h.action = 'needs_resume'
+                AND EXISTS (
+                    SELECT 1
+                    FROM history sent
+                    WHERE sent.job_id = h.job_id
+                      AND sent.action = 'resume_sent'
+                      AND sent.created_at >= datetime('now', '-7 days')
+                      AND h.id = (
+                          SELECT MAX(request.id)
+                          FROM history request
+                          WHERE request.job_id = h.job_id
+                            AND request.action = 'needs_resume'
+                            AND request.id < sent.id
+                      )
+                )
+            )
+        )
           AND j.deleted_at IS NULL
         ORDER BY h.created_at DESC, h.id DESC
         """

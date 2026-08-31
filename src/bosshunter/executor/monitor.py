@@ -27,6 +27,15 @@ from bosshunter.platform_safety import (
 console = Console()
 
 PORTFOLIO_URL = None  # Set via config: profile.portfolio_url
+_SHARED_MONITOR_TARGETS: set[str] = set()
+_browser_close_tab = close_tab
+
+
+def close_tab(target_id: str) -> bool:
+    """Keep the shared monitor tab alive while conversations are processed."""
+    if target_id in _SHARED_MONITOR_TARGETS:
+        return True
+    return _browser_close_tab(target_id)
 
 
 def get_boss_operation_interval_multiplier(config: dict) -> float:
@@ -392,7 +401,7 @@ def _inspect_monitor_page(target_id: str, config: dict) -> None:
         _raise_monitor_risk(kind, config)
 
 
-def _open_monitor_tab(url: str, config: dict) -> str | None:
+def _open_monitor_tab(url: str, config: dict, *, background: bool = True) -> str | None:
     """Open one monitor page with an effective interval after every prior open attempt."""
     if stop_requested(config):
         return None
@@ -407,7 +416,7 @@ def _open_monitor_tab(url: str, config: dict) -> str | None:
             access_guard.reserve("monitor_page")
         except PlatformSafetyStop as exc:
             raise MonitorRiskDetected(exc.reason) from exc
-    target_id = new_tab(url, background=True)
+    target_id = new_tab(url, background=background)
     if throttle is not None and hasattr(throttle, "mark"):
         # Record attempts as well as successful opens so retries cannot become a burst.
         throttle.mark()
@@ -442,6 +451,7 @@ def close_monitor_chat_target(config: dict) -> None:
         return
     target_id = runtime_state.pop("chat_target_id", None)
     if target_id:
+        _SHARED_MONITOR_TARGETS.discard(str(target_id))
         close_tab(str(target_id))
 
 
@@ -449,6 +459,7 @@ def _discard_monitor_chat_target(config: dict, target_id: str) -> None:
     runtime_state = config.get("_monitor_runtime_state")
     if isinstance(runtime_state, dict) and runtime_state.get("chat_target_id") == target_id:
         runtime_state.pop("chat_target_id", None)
+    _SHARED_MONITOR_TARGETS.discard(str(target_id))
     close_tab(target_id)
 
 
@@ -955,13 +966,18 @@ def _open_conversation(job: dict, config: dict) -> str | None:
     return target_id
 
 
-def _open_conversation_from_chat_list(job: dict, config: dict) -> str | None:
+def _open_conversation_from_chat_list(
+    job: dict,
+    config: dict,
+    *,
+    background: bool = True,
+) -> str | None:
     """Open conversation from chat list. Matches by name+company, then company-only fallback."""
     if stop_requested(config):
         return None
     monitor_cfg = config.get("monitor", {})
     chat_url = monitor_cfg.get("chat_url", "https://www.zhipin.com/web/geek/chat")
-    target_id = _open_monitor_tab(chat_url, config)
+    target_id = _open_monitor_tab(chat_url, config, background=background)
     if not target_id:
         _record_page_failure_unless_stopped(config)
         return None
@@ -995,11 +1011,13 @@ def _open_conversation_from_chat_list(job: dict, config: dict) -> str | None:
             const name = (nameEl ? nameEl.textContent : '').trim();
             const comp = spans.length >= 2 ? spans[1].textContent.trim() : '';
 
-            const hrName = '{hr_name}';
-            const targetComp = '{company}';
+            const hrName = {json.dumps(hr_name, ensure_ascii=False)};
+            const targetComp = {json.dumps(company, ensure_ascii=False)};
+            const sameCompany = !!comp && !!targetComp
+                && (comp.includes(targetComp) || targetComp.includes(comp));
 
             // Exact match: HR name + company
-            if (hrName && name === hrName && (comp.includes(targetComp) || targetComp.includes(comp))) {{
+            if (hrName && name === hrName && (sameCompany || !targetComp)) {{
                 const fc = item.querySelector('.friend-content') || item;
                 const rect = fc.getBoundingClientRect();
                 const x = rect.x + rect.width / 2;
@@ -1015,7 +1033,7 @@ def _open_conversation_from_chat_list(job: dict, config: dict) -> str | None:
             }}
 
             // Company-only match (save first match as fallback)
-            if (!companyOnlyMatch && targetComp && (comp.includes(targetComp) || targetComp.includes(comp))) {{
+            if (!companyOnlyMatch && sameCompany) {{
                 companyOnlyMatch = item;
             }}
         }}
@@ -1240,6 +1258,12 @@ def _check_boss_replies(config: dict, tracked_jobs: list[dict] | None = None) ->
         _monitor_safety_guard(config).record_page_failure()
         return []
 
+    if config.get("_monitor_reuse_chat_tab"):
+        _SHARED_MONITOR_TARGETS.add(str(target_id))
+        for conversation in conversations:
+            if isinstance(conversation, dict):
+                conversation["_chat_target_id"] = str(target_id)
+
     _monitor_safety_guard(config).record_page_success()
 
     if not conversations:
@@ -1339,6 +1363,13 @@ def check_replies(config: dict) -> list[dict]:
             tracked.extend(get_jobs_by_status(db, status))
     finally:
         db.close()
+    requested_ids = {
+        str(job_id)
+        for job_id in config.get("_monitor_job_ids", [])
+        if str(job_id)
+    }
+    if requested_ids:
+        tracked = [job for job in tracked if str(job.get("id") or "") in requested_ids]
     boss_results = _check_boss_replies(config, tracked)
     return boss_results
 
@@ -1381,6 +1412,64 @@ def _match_conversation_to_job(conv: dict, jobs: list[dict]) -> dict | None:
     return None
 
 
+def _open_scanned_conversation(
+    job: dict,
+    config: dict,
+    conversation: dict | None,
+) -> str | None:
+    """Select a just-scanned row in the shared chat tab without opening another page."""
+    target_id = str((conversation or {}).get("_chat_target_id") or "")
+    if not target_id or target_id not in _SHARED_MONITOR_TARGETS or stop_requested(config):
+        return None
+    try:
+        page_info = get_page_info(target_id)
+    except Exception:
+        return None
+    if not page_info or "chat" not in str(page_info.get("url") or ""):
+        return None
+
+    raw_index = (conversation or {}).get("element_index", -1)
+    try:
+        element_index = int(raw_index)
+    except (TypeError, ValueError):
+        element_index = -1
+    expected_hr = str((conversation or {}).get("hr_name") or job.get("hr_name") or "").strip()
+    expected_company = str((conversation or {}).get("company") or job.get("company") or "").strip()
+    js_select = f"""
+    (() => {{
+        const rows = Array.from(document.querySelectorAll('li[role=listitem]'));
+        const expectedIndex = {element_index};
+        const expectedHr = {json.dumps(expected_hr, ensure_ascii=False)};
+        const expectedCompany = {json.dumps(expected_company, ensure_ascii=False)};
+        const identity = row => {{
+            if (!row) return false;
+            const name = (row.querySelector('.name-text')?.textContent || '').trim();
+            const spans = row.querySelector('.name-box')?.querySelectorAll('span') || [];
+            const company = spans.length >= 2 ? (spans[1].textContent || '').trim() : '';
+            return name === expectedHr && company === expectedCompany;
+        }};
+        let row = expectedIndex >= 0 ? rows[expectedIndex] : null;
+        if (!identity(row)) row = rows.find(identity) || null;
+        if (!row) return JSON.stringify({{success: false, error: 'conversation_not_found'}});
+        const target = row.querySelector('.friend-content') || row;
+        target.click();
+        return JSON.stringify({{success: true}});
+    }})()
+    """
+    result = evaluate(target_id, js_select)
+    try:
+        selected = json.loads(result) if isinstance(result, str) else result
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(selected, dict) or not selected.get("success"):
+        return None
+    try:
+        _inspect_monitor_page(target_id, config)
+    except MonitorRiskDetected:
+        raise
+    return target_id
+
+
 def _handle_conversation(job: dict, config: dict, conversation: dict | None = None) -> str:
     """Handle a single conversation that has an HR reply.
 
@@ -1392,8 +1481,11 @@ def _handle_conversation(job: dict, config: dict, conversation: dict | None = No
         return "stopped"
     console.print(f"\n  [bold]处理: {job['company']} - {job['title']}[/bold]")
 
-    # Open the conversation
-    target_id = _open_conversation(job, config)
+    # Prefer the already-open chat list row from this scan. Falling back keeps
+    # CLI/legacy callers working while Web monitoring avoids a duplicate page open.
+    target_id = _open_scanned_conversation(job, config, conversation)
+    if not target_id:
+        target_id = _open_conversation(job, config)
     if not target_id:
         if stop_requested(config):
             return "stopped"
@@ -1510,11 +1602,22 @@ def _handle_conversation(job: dict, config: dict, conversation: dict | None = No
         else:
             console.print("[yellow]    ! 定制简历生成失败，请手动处理[/yellow]")
 
-        # Auto-send portfolio link for normal text resume requests only.
-        # Card-triggered requests are recognition-only: generate and mark needs_resume.
+        # Auto-send a portfolio link only when automatic replies are explicitly
+        # enabled. Manual-confirmation mode must stay free of outbound messages.
+        # Card-triggered requests are always recognition-only.
+        portfolio_status = "未自动发送在线简历"
         if not resume_request_from_card:
             portfolio_url = config.get("profile", {}).get("portfolio_url", "")
-            if not _check_if_portfolio_sent(messages, portfolio_url):
+            auto_reply_enabled = config.get("monitor", {}).get(
+                "auto_reply_hr_questions",
+                False,
+            )
+            if _check_if_portfolio_sent(messages, portfolio_url):
+                portfolio_status = "在线简历此前已发送"
+                console.print("[dim]    在线简历链接已发过，跳过[/dim]")
+            elif not auto_reply_enabled:
+                console.print("[yellow]    自动回复已关闭，在线简历链接等待手动处理[/yellow]")
+            else:
                 if _wait_or_stop(config, 2):
                     close_tab(target_id)
                     return "stopped"
@@ -1523,11 +1626,11 @@ def _handle_conversation(job: dict, config: dict, conversation: dict | None = No
                     close_tab(target_id)
                     return "stopped"
                 if _send_message_in_chat(target_id, link_msg):
+                    portfolio_status = "在线简历已发送"
                     console.print("[green]    ✓ 在线简历链接已发送[/green]")
                 else:
+                    portfolio_status = "在线简历发送失败"
                     console.print("[yellow]    ! 在线简历链接发送失败[/yellow]")
-            else:
-                console.print("[dim]    在线简历链接已发过，跳过[/dim]")
 
         if not resume_path:
             if stop_requested(config):
@@ -1553,7 +1656,7 @@ def _handle_conversation(job: dict, config: dict, conversation: dict | None = No
         else:
             history_detail = _build_reply_detail(
                 messages,
-                f"在线简历已发送，定制PDF待手动发送: {resume_path}",
+                f"{portfolio_status}，定制PDF待手动发送: {resume_path}",
                 "needs_resume.v1",
             )
 
@@ -1977,13 +2080,13 @@ def monitor_and_send_resumes(config: dict) -> dict:
     throttle_config = config.get("throttle", {})
     stop_event = get_stop_event(config)
     if stop_event and stop_event.is_set():
-        return {"skipped": 0, "replied": 0, "needs_resume": 0, "rejected": 0, "failed": 0}
+        return {"skipped": 0, "pending": 0, "replied": 0, "needs_resume": 0, "rejected": 0, "failed": 0}
 
     # Time window check (09:00-16:00)
     window_checker = SendWindowChecker(throttle_config.get("send_windows", ["09:00-16:00"]))
     if not window_checker.is_active():
         console.print("[yellow]当前不在工作时间窗口内 (09:00-16:00)[/yellow]")
-        return {"skipped": 0, "replied": 0, "needs_resume": 0, "rejected": 0, "failed": 0}
+        return {"skipped": 0, "pending": 0, "replied": 0, "needs_resume": 0, "rejected": 0, "failed": 0}
 
     operation_multiplier = get_boss_operation_interval_multiplier(config)
     throttle = RequestThrottle(
@@ -1999,7 +2102,14 @@ def monitor_and_send_resumes(config: dict) -> dict:
         get_db,
     )
 
-    summary = {"skipped": 0, "replied": 0, "needs_resume": 0, "rejected": 0, "failed": 0}
+    summary = {
+        "skipped": 0,
+        "pending": 0,
+        "replied": 0,
+        "needs_resume": 0,
+        "rejected": 0,
+        "failed": 0,
+    }
 
     # Step 1: Check for HR replies — MUST run first
     console.print("\n[bold cyan]═══ 第一步：处理HR回复 ═══[/bold cyan]")
@@ -2046,6 +2156,8 @@ def monitor_and_send_resumes(config: dict) -> dict:
                 summary["replied"] += 1
             elif action == "needs_resume":
                 summary["needs_resume"] += 1
+            elif action == "reply_pending":
+                summary["pending"] += 1
             elif action == "rejected":
                 summary["rejected"] += 1
             else:
@@ -2053,6 +2165,8 @@ def monitor_and_send_resumes(config: dict) -> dict:
 
         console.print("\n[bold green]═══ 回复处理完成 ═══[/bold green]")
         console.print(f"  跳过(已手动回复): {summary['skipped']}")
+        if summary["pending"]:
+            console.print(f"  [bold yellow]待确认回复: {summary['pending']}[/bold yellow]")
         console.print(f"  自动回复: {summary['replied']}")
         if summary.get("needs_resume"):
             console.print(f"  [bold yellow]待手动发简历: {summary['needs_resume']}（定制简历已生成，请手动发送）[/bold yellow]")
@@ -2079,3 +2193,22 @@ def monitor_and_send_resumes(config: dict) -> dict:
         summary["follow_up"] = follow_up_count
 
     return summary
+
+
+def process_detected_reply(job_id: str, config: dict) -> dict:
+    """Process one detected BOSS reply without any automatic outbound action."""
+    safe_config = dict(config)
+    safe_config["monitor"] = {
+        **config.get("monitor", {}),
+        "auto_reply_hr_questions": False,
+        "max_conversations_per_cycle": 1,
+    }
+    safe_config["follow_up"] = {**config.get("follow_up", {}), "enabled": False}
+    safe_config["throttle"] = {**config.get("throttle", {}), "send_windows": []}
+    safe_config["_monitor_job_ids"] = [str(job_id)]
+    safe_config["_monitor_reuse_chat_tab"] = True
+    safe_config["_monitor_runtime_state"] = {}
+    try:
+        return monitor_and_send_resumes(safe_config)
+    finally:
+        close_monitor_chat_target(safe_config)

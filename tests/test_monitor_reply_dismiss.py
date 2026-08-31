@@ -26,6 +26,55 @@ def _job(job_id: str) -> dict:
 
 
 class MonitorReplyDismissTests(unittest.TestCase):
+    def test_shared_scan_target_is_reused_and_left_open_for_the_next_conversation(self):
+        from bosshunter.executor import monitor
+
+        messages = [
+            {"sender": "me", "text": "您好，我对岗位很感兴趣。"},
+            {"sender": "hr", "text": "方便介绍一下你的相关经验吗？"},
+        ]
+        conversation = {
+            "_chat_target_id": "chat-target",
+            "element_index": 0,
+            "hr_name": "HR",
+            "company": "Example",
+            "last_message": "方便介绍一下你的相关经验吗？",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data" / "bosshunter.db"
+            db = get_db(db_path)
+            try:
+                insert_job(db, _job("shared-target"))
+                update_job_status(db, "shared-target", "replied")
+            finally:
+                db.close()
+
+            def open_db():
+                return get_db(db_path)
+
+            monitor._SHARED_MONITOR_TARGETS.add("chat-target")
+            try:
+                with patch.object(monitor, "get_db", side_effect=open_db), \
+                     patch.object(monitor, "_open_scanned_conversation", return_value="chat-target") as reuse, \
+                     patch.object(monitor, "_open_conversation") as open_conversation, \
+                     patch.object(monitor, "_wait_or_stop", return_value=False), \
+                     patch.object(monitor, "evaluate", return_value=json.dumps(messages, ensure_ascii=False)), \
+                     patch.object(monitor, "_generate_auto_reply", return_value="本地生成的建议回复"), \
+                     patch.object(monitor, "_browser_close_tab") as browser_close:
+                    action = monitor._handle_conversation(
+                        _job("shared-target") | {"status": "replied"},
+                        {"monitor": {"auto_reply_hr_questions": False}},
+                        conversation,
+                    )
+            finally:
+                monitor._SHARED_MONITOR_TARGETS.discard("chat-target")
+
+        self.assertEqual(action, "reply_pending")
+        reuse.assert_called_once()
+        open_conversation.assert_not_called()
+        browser_close.assert_not_called()
+
     def test_manual_boss_reply_is_recorded_once_without_generating_or_sending(self):
         from bosshunter.executor import monitor
 
@@ -326,7 +375,7 @@ class MonitorReplyDismissTests(unittest.TestCase):
                  patch.object(monitor, "_open_conversation", return_value="target-1"), \
                  patch.object(monitor, "evaluate", return_value=json.dumps(messages, ensure_ascii=False)), \
                  patch.object(monitor, "close_tab"), \
-                 patch.object(monitor, "_send_message_in_chat", return_value=True), \
+                 patch.object(monitor, "_send_message_in_chat", return_value=True) as send_message, \
                  patch.object(monitor.time, "sleep"), \
                  patch(
                      "bosshunter.ai.resume.generate_tailored_resume",
@@ -346,12 +395,18 @@ class MonitorReplyDismissTests(unittest.TestCase):
                         ("job-short-resume-intent",),
                     ).fetchall()
                 ]
+                detail = verify_db.execute(
+                    "SELECT detail FROM history WHERE job_id = ? AND action = 'needs_resume'",
+                    ("job-short-resume-intent",),
+                ).fetchone()["detail"]
             finally:
                 verify_db.close()
 
         self.assertEqual(action, "needs_resume")
         self.assertEqual(history, ["needs_resume"])
         generate_resume.assert_called_once()
+        send_message.assert_not_called()
+        self.assertIn("未自动发送在线简历", json.loads(detail)["ai_reply"])
 
     def test_failed_tailored_resume_generation_does_not_mark_job_needs_resume(self):
         from bosshunter.executor import monitor

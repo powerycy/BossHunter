@@ -209,9 +209,7 @@ function safeExternalUrl(value: string | undefined, platform: string) {
 
 function monitorChatUrl(item: HistoryItem) {
   const platform = item.source_platform || 'boss'
-	if (platform === 'boss' && /^[A-Za-z0-9_-]+$/.test(item.job_id || '')) {
-		return `https://www.zhipin.com/web/geek/chat?jobId=${encodeURIComponent(item.job_id)}`
-	}
+	if (platform === 'boss') return ''
 	return safeExternalUrl(item.url, platform)
 }
 
@@ -1455,6 +1453,14 @@ function ExportMenu({
 
 type MonitorFilter = 'pending' | 'resume' | 'follow_up' | 'replied'
 const REPLY_RESOLUTION_ACTIONS = ['reply_dismissed', 'replied', 'auto_replied']
+const DETECTION_RESOLUTION_ACTIONS = [
+  ...REPLY_RESOLUTION_ACTIONS,
+  'reply_pending',
+  'needs_resume',
+  'resume_failed',
+  'resume_sent',
+  'rejected',
+]
 
 function uniqueLatestByJob(items: HistoryItem[]) {
   const seen = new Set<string>()
@@ -1488,7 +1494,24 @@ function isResumeFailureResolved(item: HistoryItem, history: HistoryItem[]) {
   )
 }
 
+function isDetectedReplyResolved(item: HistoryItem, history: HistoryItem[]) {
+  return history.some(candidate =>
+    candidate.id > item.id
+    && sameHistoryJob(item, candidate)
+    && DETECTION_RESOLUTION_ACTIONS.includes(candidate.action)
+  )
+}
+
+function isResumeRequestResolved(item: HistoryItem, history: HistoryItem[]) {
+  return history.some(candidate =>
+    candidate.id > item.id
+    && sameHistoryJob(item, candidate)
+    && candidate.action === 'resume_sent'
+  )
+}
+
 function isOutboundReplyRecord(item: HistoryItem) {
+  if (item.action === 'resume_sent') return true
   if (item.action === 'auto_replied') return true
   return item.action === 'replied' && parseHistoryDetail(item).schema.startsWith('replied.')
 }
@@ -1496,7 +1519,6 @@ function isOutboundReplyRecord(item: HistoryItem) {
 type MonitorConversationMessage = {
   sender: 'hr' | 'ai'
   text: string
-  time?: string
 }
 
 function monitorConversationMessages(item: HistoryItem, history: HistoryItem[]): MonitorConversationMessage[] {
@@ -1505,26 +1527,38 @@ function monitorConversationMessages(item: HistoryItem, history: HistoryItem[]):
     ? history.find(candidate => candidate.id === parsed.pendingHistoryId)
     : undefined
   const pendingParsed = pendingItem ? parseHistoryDetail(pendingItem) : null
-  const source = parsed.conversationTail.length ? parsed : (pendingParsed || parsed)
+  const resumeRequestItem = item.action === 'resume_sent'
+    ? history
+      .filter(candidate =>
+        candidate.id < item.id
+        && candidate.action === 'needs_resume'
+        && sameHistoryJob(item, candidate)
+      )
+      .sort((left, right) => right.id - left.id)[0]
+    : undefined
+  const resumeRequestParsed = resumeRequestItem ? parseHistoryDetail(resumeRequestItem) : null
+  const source = parsed.conversationTail.length
+    ? parsed
+    : (pendingParsed || resumeRequestParsed || parsed)
   const messages: MonitorConversationMessage[] = []
 
-  const append = (sender: 'hr' | 'ai', text: string, time?: string) => {
+  const append = (sender: 'hr' | 'ai', text: string) => {
     const normalizedText = text.trim()
     if (!normalizedText) return
     const previous = messages[messages.length - 1]
     if (previous?.sender === sender && previous.text === normalizedText) return
-    messages.push({ sender, text: normalizedText, time })
+    messages.push({ sender, text: normalizedText })
   }
 
   source.conversationTail.forEach(message => {
-    if (message.sender === 'hr') append('hr', message.text, message.time)
-    if (message.sender === 'me') append('ai', message.text, message.time)
+    if (message.sender === 'hr') append('hr', message.text)
+    if (message.sender === 'me') append('ai', message.text)
   })
 
   const hrQuestion = parsed.hrQuestion || source.hrQuestion
   if (!messages.some(message => message.sender === 'hr')) append('hr', hrQuestion)
-  if (isOutboundReplyRecord(item) && !parsed.schema.startsWith('replied.external.')) {
-    append('ai', parsed.aiReply, item.created_at)
+  if (item.action !== 'resume_sent' && isOutboundReplyRecord(item) && !parsed.schema.startsWith('replied.external.')) {
+    append('ai', parsed.aiReply)
   }
 
   return messages
@@ -1544,15 +1578,21 @@ function MonitorExecutionView({
   const pendingReplies = uniqueLatestByJob(history.filter(item =>
     item.action === 'reply_pending' && !isReplyPendingResolved(item, history)
   ))
+  const detectedReplies = uniqueLatestByJob(history.filter(item =>
+    item.action === 'hr_reply_detected' && !isDetectedReplyResolved(item, history)
+  ))
   const resumeFailures = uniqueLatestByJob(history.filter(item =>
     item.action === 'resume_failed' && !isResumeFailureResolved(item, history)
   ))
   const pendingItems = uniqueLatestByJob(
-    [...pendingReplies, ...resumeFailures].sort((left, right) => right.id - left.id)
+    [...detectedReplies, ...pendingReplies, ...resumeFailures].sort((left, right) => right.id - left.id)
   )
-  const resumeRequests = uniqueLatestByJob(history.filter(item =>
-    item.action === 'needs_resume' || item.action === 'resume_sent' || item.action === 'resume_failed'
-  ))
+  const pendingResumeRequests = history.filter(item =>
+    item.action === 'needs_resume' && !isResumeRequestResolved(item, history)
+  )
+  const resumeRequests = uniqueLatestByJob(
+    [...pendingResumeRequests, ...resumeFailures].sort((left, right) => right.id - left.id)
+  )
   const followUpRecords = uniqueLatestByJob(history.filter(item => item.action === 'follow_up_sent'))
   const repliedRecords = history.filter(isOutboundReplyRecord)
   const [activeMonitorFilter, setActiveMonitorFilter] = useState<MonitorFilter>('pending')
@@ -1568,6 +1608,8 @@ function MonitorExecutionView({
     : visibleHistory.slice(0, 8)
   const [replyDrafts, setReplyDrafts] = useState<Record<number, string>>({})
   const [notice, setNotice] = useState('')
+  const [openingChatId, setOpeningChatId] = useState<number | null>(null)
+  const [preparingReplyId, setPreparingReplyId] = useState<number | null>(null)
 
   const draftFor = (item: HistoryItem) => {
     const parsed = parseHistoryDetail(item)
@@ -1604,6 +1646,41 @@ function MonitorExecutionView({
       setNotice('已放弃这条待回复建议。')
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '放弃失败')
+    }
+  }
+
+  const openMonitorConversation = async (item: HistoryItem) => {
+    const platform = item.source_platform || 'boss'
+    if (platform !== 'boss') {
+      const targetUrl = monitorChatUrl(item)
+      if (targetUrl) window.open(targetUrl, '_blank', 'noopener,noreferrer')
+      return
+    }
+    setOpeningChatId(item.id)
+    try {
+      const res = await fetch(`/api/history/${item.id}/open-chat`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '聊天定位失败')
+      setNotice('已在 BOSS 中定位到对应聊天对话。')
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '聊天定位失败')
+    } finally {
+      setOpeningChatId(null)
+    }
+  }
+
+  const prepareDetectedReply = async (item: HistoryItem) => {
+    setPreparingReplyId(item.id)
+    try {
+      const res = await fetch(`/api/history/${item.id}/prepare-reply`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '对话读取失败')
+      await refresh()
+      setNotice(data.already_processed ? '这条消息已经处理。' : '完整对话已读取，请检查生成的处理结果。')
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '对话读取失败')
+    } finally {
+      setPreparingReplyId(null)
     }
   }
 
@@ -1650,15 +1727,20 @@ function MonitorExecutionView({
         {displayedHistory.map((item, index) => {
           const canReply = item.action === 'reply_pending'
           const isFollowUp = item.action === 'follow_up_sent'
+          const isDetectedReply = item.action === 'hr_reply_detected'
           const isResumeFailure = item.action === 'resume_failed'
-          const isResumeRequest = item.action === 'needs_resume' || item.action === 'resume_sent' || isResumeFailure
+          const isResumeRequest = item.action === 'needs_resume' || isResumeFailure
           const isReplied = isOutboundReplyRecord(item)
           const parsed = parseHistoryDetail(item)
-          const hasGeneratedReply = Boolean(parsed.aiReply)
+          const hasGeneratedReply = !isDetectedReply && Boolean(parsed.aiReply)
+          const detectedReplyPreview = isDetectedReply ? item.detail.replace(/^HR回复:\s*/, '') : ''
           const conversationMessages = monitorConversationMessages(item, history)
           const showReplyContent = canReply || Boolean(parsed.hrQuestion) || hasGeneratedReply || isResumeRequest || isReplied || conversationMessages.length > 0
           const systemFailureReason = parsed.systemReason || (isResumeFailure ? '未获得更具体的错误信息，请查看运行日志。' : '')
           const targetUrl = monitorChatUrl(item)
+          const openingChat = openingChatId === item.id
+          const preparingReply = preparingReplyId === item.id
+          const canOpenChat = (item.source_platform || 'boss') === 'boss' ? Boolean(item.id) : Boolean(targetUrl)
           return (
             <div key={item.id || `${item.created_at}-${index}`} className="grid gap-3 rounded-2xl border border-card-border bg-[#FFFCFA] p-4 lg:grid-cols-[130px_1fr_160px]">
               <div className="text-xs text-muted">
@@ -1667,7 +1749,9 @@ function MonitorExecutionView({
               </div>
               <div>
                 <div className="font-black">{item.company || '岗位'}｜{item.title || '监测记录'}</div>
-                {showReplyContent ? (
+                {isDetectedReply ? (
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">{detectedReplyPreview}</p>
+                ) : showReplyContent ? (
                   <div className="mt-3 space-y-3">
                     {isFollowUp && (
                       <div>
@@ -1707,6 +1791,7 @@ function MonitorExecutionView({
                       <div>
                         <div className="mb-1 text-xs font-black text-primary">AI 建议回复（尚未回答）</div>
                         <textarea
+                          id={`reply-draft-${item.id}`}
                           value={draftFor(item)}
                           onChange={event => setReplyDrafts(prev => ({ ...prev, [item.id]: event.target.value }))}
                           className="min-h-[92px] w-full rounded-2xl border border-card-border bg-white p-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
@@ -1717,12 +1802,14 @@ function MonitorExecutionView({
                 ) : (
                   <p className="mt-2 text-sm leading-6 text-muted">{item.detail || getActionLabel(item.action)}</p>
                 )}
-                {canReply ? (
+                {isDetectedReply ? (
+                  <p className="mt-2 text-xs text-primary">已检测到 HR 新消息，等待继续读取完整对话并生成处理结果。</p>
+                ) : canReply ? (
                   <p className="mt-2 text-xs text-primary">AI 建议：需要人工确认后再回复。</p>
                 ) : item.action === 'needs_resume' ? (
                   <p className="mt-2 text-xs text-primary">简历请求：监测发现 HR 要简历，已生成定制简历，等待手动发送。</p>
                 ) : item.action === 'resume_sent' ? (
-                  <p className="mt-2 text-xs text-primary">简历生成：定制简历已生成，并已标记发送。</p>
+                  <p className="mt-2 text-xs text-primary">已回复：定制简历已发送，本轮聊天记录保留在上方。</p>
                 ) : isResumeFailure ? (
                   <p className="mt-2 text-xs text-danger">待处理：定制简历生成失败，尚无可下载文件，请手动处理或稍后重试生成。</p>
                 ) : isReplied ? (
@@ -1733,14 +1820,24 @@ function MonitorExecutionView({
                 <Button
                   variant="secondary"
                   size="sm"
-                  disabled={!targetUrl}
-                  onClick={() => window.open(targetUrl, '_blank', 'noopener,noreferrer')}
+                  disabled={!canOpenChat || openingChat}
+                  onClick={() => void openMonitorConversation(item)}
                 >
-                  <ExternalLink className="mr-2 h-4 w-4" />{monitorLinkLabel(item)}
+                  <ExternalLink className="mr-2 h-4 w-4" />{openingChat ? '定位中…' : monitorLinkLabel(item)}
                 </Button>
-                <Button size="sm" disabled={!canReply} onClick={() => sendManualReply(item)}><MessageCircle className="mr-2 h-4 w-4" />确认回复</Button>
-                <Button variant="secondary" size="sm" disabled={!canReply} onClick={() => setReplyDrafts(prev => ({ ...prev, [item.id]: draftFor(item) }))}>编辑回复</Button>
-                <Button variant="secondary" size="sm" disabled={!canReply} onClick={() => dismissPendingReply(item)}>放弃</Button>
+                {isDetectedReply ? (
+                  <Button size="sm" disabled={preparingReply} onClick={() => void prepareDetectedReply(item)}>
+                    {preparingReply ? '读取中…' : '读取并生成建议'}
+                  </Button>
+                ) : canReply ? (
+                  <>
+                    <Button size="sm" onClick={() => sendManualReply(item)}><MessageCircle className="mr-2 h-4 w-4" />确认回复</Button>
+                    <Button variant="secondary" size="sm" onClick={() => document.getElementById(`reply-draft-${item.id}`)?.focus()}>编辑回复</Button>
+                    <Button variant="secondary" size="sm" onClick={() => dismissPendingReply(item)}>放弃</Button>
+                  </>
+                ) : (
+                  <div className="px-2 py-1 text-center text-xs text-muted">本轮已处理，无需再次确认</div>
+                )}
               </div>
             </div>
           )
