@@ -8,9 +8,7 @@ Serves:
 import json
 import math
 import mimetypes
-import os
 import random
-import tempfile
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -25,7 +23,7 @@ from bottle import Bottle, request, response, static_file, abort
 from bosshunter import __version__
 from bosshunter.ai.credentials import get_ai_api_key
 from bosshunter.cities import CityRefreshError, get_city_map, load_city_snapshot, refresh_city_cache
-from bosshunter.config import AI_SERVICE_PRESETS, load_config, remove_retired_collection_settings
+from bosshunter.config import AI_SERVICE_PRESETS, load_config, remove_retired_collection_settings, save_config
 from bosshunter.db import (
 	JobDeletionConflictError,
 	JobManualSentConflictError,
@@ -196,30 +194,8 @@ def _config_download_payload(config: dict) -> str:
 
 
 def _write_config(config: dict) -> None:
-	"""Atomically replace config.yaml so an interrupted write cannot corrupt it."""
-	CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-	temporary_path = None
-	try:
-		with tempfile.NamedTemporaryFile(
-			"w",
-			encoding="utf-8",
-			dir=CONFIG_PATH.parent,
-			prefix=f".{CONFIG_PATH.name}.",
-			suffix=".tmp",
-			delete=False,
-		) as temporary:
-			temporary_path = Path(temporary.name)
-			yaml.dump(config, temporary, allow_unicode=True, default_flow_style=False, sort_keys=False)
-			temporary.flush()
-			os.fsync(temporary.fileno())
-		os.replace(temporary_path, CONFIG_PATH)
-		temporary_path = None
-	finally:
-		if temporary_path is not None:
-			try:
-				temporary_path.unlink()
-			except FileNotFoundError:
-				pass
+	"""Persist public settings separately from local AI credentials."""
+	save_config(config, CONFIG_PATH)
 
 
 def _sanitize_config_for_write(data):

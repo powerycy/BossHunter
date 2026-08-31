@@ -1,5 +1,7 @@
 """Configuration loader for BossHunter."""
 
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +61,8 @@ AI_SERVICE_PRESETS: dict[str, dict[str, str]] = {
         "key_env": "OPENAI_API_KEY",
     },
 }
+
+AI_CREDENTIAL_FIELDS = ("api_key", "auth_token")
 
 
 DEFAULTS: dict[str, Any] = {
@@ -193,19 +197,126 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+def credentials_path_for(config_path: Path | None = None) -> Path:
+    """Return the local credentials file paired with a config file."""
+    config_path = Path(config_path or "config.yaml")
+    stem = config_path.stem.lstrip(".") or "config"
+    return config_path.with_name(f".{stem}.credentials.yaml")
+
+
 def load_config(config_path: Path | None = None) -> dict[str, Any]:
-    """Load configuration from YAML file, falling back to defaults."""
+    """Load public settings plus local credentials, falling back to defaults."""
     cfg = _deep_copy_dict(DEFAULTS)
-    if config_path is None:
-        config_path = Path("config.yaml")
-    if config_path.exists():
-        with open(config_path, encoding="utf-8") as f:
-            user_cfg = yaml.safe_load(f) or {}
-        if isinstance(user_cfg, dict):
-            _deep_merge(cfg, user_cfg)
+    config_path = Path(config_path or "config.yaml")
+
+    # Load the private file first so a not-yet-migrated config.yaml remains the
+    # source of truth until startup moves its legacy credential fields.
+    credentials = _load_yaml_mapping(credentials_path_for(config_path))
+    if credentials:
+        _deep_merge(cfg, credentials)
+
+    user_cfg = _load_yaml_mapping(config_path)
+    if user_cfg:
+        _deep_merge(cfg, user_cfg)
     _normalize_config_sections(cfg)
     _validate_ai_provider(cfg)
     return cfg
+
+
+def save_config(config: dict[str, Any], config_path: Path | None = None) -> None:
+    """Persist settings without writing AI credentials to config.yaml."""
+    config_path = Path(config_path or "config.yaml")
+    public_config = _deep_copy_dict(config)
+    ai_cfg = public_config.get("ai")
+    credentials: dict[str, Any] = {}
+    if isinstance(ai_cfg, dict):
+        for field in AI_CREDENTIAL_FIELDS:
+            value = ai_cfg.pop(field, None)
+            if value is not None and str(value).strip():
+                credentials[field] = value
+
+    private_path = credentials_path_for(config_path)
+    if credentials:
+        _write_yaml_atomic(private_path, {"ai": credentials})
+
+    _write_yaml_atomic(config_path, public_config)
+
+    if not credentials:
+        try:
+            private_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def migrate_legacy_credentials(config_path: Path | None = None) -> bool:
+    """Move credentials out of an existing config.yaml on the next startup."""
+    config_path = Path(config_path or "config.yaml")
+    public_config = _load_yaml_mapping(config_path)
+    ai_cfg = public_config.get("ai")
+    if not isinstance(ai_cfg, dict):
+        return False
+
+    legacy_values = {field: ai_cfg.pop(field) for field in AI_CREDENTIAL_FIELDS if field in ai_cfg}
+    if not legacy_values:
+        return False
+
+    private_path = credentials_path_for(config_path)
+    private_config = _load_yaml_mapping(private_path)
+    private_ai = private_config.setdefault("ai", {})
+    if not isinstance(private_ai, dict):
+        private_ai = {}
+        private_config["ai"] = private_ai
+    for field, value in legacy_values.items():
+        if value is not None and str(value).strip():
+            private_ai[field] = value
+        else:
+            private_ai.pop(field, None)
+
+    if private_ai:
+        _write_yaml_atomic(private_path, private_config)
+    _write_yaml_atomic(config_path, public_config)
+    if not private_ai:
+        try:
+            private_path.unlink()
+        except FileNotFoundError:
+            pass
+    return True
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    with open(path, encoding="utf-8") as f:
+        content = yaml.safe_load(f) or {}
+    return content if isinstance(content, dict) else {}
+
+
+def _write_yaml_atomic(path: Path, data: dict[str, Any]) -> None:
+    """Atomically write a local YAML file with owner-only permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            yaml.safe_dump(data, temporary, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _normalize_config_sections(config: dict[str, Any]) -> dict[str, Any]:
