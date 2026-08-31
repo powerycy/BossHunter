@@ -2116,6 +2116,54 @@ class WebApiRouteTests(unittest.TestCase):
             },
         )
 
+    def test_web_api_history_includes_last_week_replies_outside_recent_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                for job_id in ("recent-reply", "expired-reply", "recent-noise"):
+                    insert_job(db, _job(job_id))
+                add_history(
+                    db,
+                    "recent-reply",
+                    "auto_replied",
+                    json.dumps({"schema": "auto_replied.v1", "ai_reply": "近一周回复"}),
+                )
+                add_history(
+                    db,
+                    "expired-reply",
+                    "replied",
+                    json.dumps({"schema": "replied.external.v1", "manual_reply": "过期回复"}),
+                )
+                db.execute(
+                    "UPDATE history SET created_at = datetime('now', '-8 days') WHERE job_id = ?",
+                    ("expired-reply",),
+                )
+                db.commit()
+                add_history(db, "recent-noise", "sent", "最近普通记录")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/history?limit=1&include_monitor_conversations=1"
+            )
+            full_status, _, full_body = self._request(
+                "/api/history?limit=50&include_monitor_conversations=1"
+            )
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertTrue(full_status.startswith("200"), full_body)
+        expected = {
+            ("recent-noise", "sent"),
+            ("recent-reply", "auto_replied"),
+        }
+        for payload in (body, full_body):
+            self.assertEqual(
+                {(item["job_id"], item["action"]) for item in json.loads(payload)},
+                expected,
+            )
+
     def test_web_api_history_exposes_structured_failure_reason_and_resolution_state(self):
         # Arrange
         with tempfile.TemporaryDirectory() as tmp:

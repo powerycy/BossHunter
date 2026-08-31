@@ -611,6 +611,7 @@ class DashboardPageTests(unittest.TestCase):
 
     def test_monitor_replied_tab_keeps_each_outbound_round(self):
         self.assertIn("const repliedRecords = history.filter(isOutboundReplyRecord)", self.source)
+        self.assertIn("暂无近 7 天已回复对话。", self.source)
         self.assertIn("parseHistoryDetail(item).schema.startsWith('replied.')", self.source)
         self.assertIn("item.action === 'auto_replied'", self.source)
 

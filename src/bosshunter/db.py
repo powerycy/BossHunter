@@ -905,6 +905,23 @@ def get_recent_history(conn: sqlite3.Connection, limit: int = 10) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def get_recent_monitor_replies(conn: sqlite3.Connection) -> list[dict]:
+    """Get all reply rounds still inside the monitor retention window."""
+    rows = conn.execute(
+        """
+        SELECT h.id, h.job_id, h.action, h.detail, h.created_at, j.company, j.title,
+               j.resume_path, j.url, j.source_platform, 0 AS resolved
+        FROM history h
+        JOIN jobs j ON h.job_id = j.id
+        WHERE h.action IN ('replied', 'auto_replied')
+          AND h.created_at >= datetime('now', '-7 days')
+          AND j.deleted_at IS NULL
+        ORDER BY h.created_at DESC, h.id DESC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_unresolved_reply_pending(conn: sqlite3.Connection) -> list[dict]:
     """Get each job's latest reply suggestion when no later decision resolved it."""
     rows = conn.execute("""

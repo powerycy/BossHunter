@@ -26,6 +26,78 @@ def _job(job_id: str) -> dict:
 
 
 class MonitorReplyDismissTests(unittest.TestCase):
+    def test_manual_boss_reply_is_recorded_once_without_generating_or_sending(self):
+        from bosshunter.executor import monitor
+
+        messages = [
+            {"sender": "me", "text": "您好，我对岗位很感兴趣。"},
+            {"sender": "hr", "text": "方便介绍一下你的相关经验吗？"},
+            {"sender": "unknown", "text": "可以，我做过两个相关项目。"},
+        ]
+        conversation = {
+            "last_direction": "me",
+            "is_our_message": True,
+            "last_message": "可以，我做过两个相关项目。",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data" / "bosshunter.db"
+            db = get_db(db_path)
+            try:
+                insert_job(db, _job("manual-reply"))
+                update_job_status(db, "manual-reply", "sent")
+            finally:
+                db.close()
+
+            def open_db():
+                return get_db(db_path)
+
+            with patch.object(monitor, "get_db", side_effect=open_db), \
+                 patch.object(monitor, "_open_conversation", return_value="target-1"), \
+                 patch.object(monitor, "_wait_or_stop", return_value=False), \
+                 patch.object(monitor, "evaluate", return_value=json.dumps(messages, ensure_ascii=False)), \
+                 patch.object(monitor, "close_tab"), \
+                 patch.object(monitor, "_generate_auto_reply") as generate_reply, \
+                 patch.object(monitor, "_send_message_in_chat") as send_message:
+                first_action = monitor._handle_conversation(
+                    _job("manual-reply") | {"status": "sent"},
+                    {"monitor": {}},
+                    conversation,
+                )
+                second_action = monitor._handle_conversation(
+                    _job("manual-reply") | {"status": "replied"},
+                    {"monitor": {}},
+                    conversation,
+                )
+
+            verify_db = get_db(db_path)
+            try:
+                row = verify_db.execute(
+                    "SELECT status FROM jobs WHERE id = ?",
+                    ("manual-reply",),
+                ).fetchone()
+                replies = verify_db.execute(
+                    "SELECT detail FROM history WHERE job_id = ? AND action = 'replied' ORDER BY id",
+                    ("manual-reply",),
+                ).fetchall()
+            finally:
+                verify_db.close()
+
+        self.assertEqual(first_action, "recorded_user_reply")
+        self.assertEqual(second_action, "skipped_user_replied")
+        self.assertEqual(row["status"], "replied")
+        self.assertEqual(len(replies), 1)
+        payload = json.loads(replies[0]["detail"])
+        self.assertEqual(payload["schema"], "replied.external.v1")
+        self.assertEqual(payload["hr_question"], "方便介绍一下你的相关经验吗？")
+        self.assertEqual(payload["manual_reply"], "可以，我做过两个相关项目。")
+        self.assertEqual(
+            [item["sender"] for item in payload["conversation_tail"]],
+            ["me", "hr", "me"],
+        )
+        generate_reply.assert_not_called()
+        send_message.assert_not_called()
+
     def test_dismissed_pending_reply_is_not_recreated_by_monitor(self):
         from bosshunter.executor import monitor
 

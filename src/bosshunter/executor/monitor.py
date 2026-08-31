@@ -629,6 +629,28 @@ def _reconcile_conversation_messages(messages: list[dict], job: dict) -> list[di
     return reconciled
 
 
+def _reconcile_outbound_chat_preview(
+    messages: list[dict],
+    conversation: dict | None,
+) -> list[dict]:
+    """Use a proven outgoing chat-list preview to identify the matching full bubble."""
+    if not (
+        (conversation or {}).get("last_direction") == "me"
+        or (conversation or {}).get("is_our_message")
+    ):
+        return messages
+    preview = _normalized_message_text(str((conversation or {}).get("last_message") or ""))
+    for message in reversed(messages):
+        full_text = _normalized_message_text(str(message.get("text") or ""))
+        if preview and (
+            full_text == preview
+            or (len(preview) >= 12 and full_text.startswith(preview))
+        ):
+            message["sender"] = "me"
+            break
+    return messages
+
+
 def _truncate_text(text: str, limit: int) -> str:
     """Limit text length for history payloads."""
     text = text or ""
@@ -661,6 +683,47 @@ def _build_reply_detail(
             for msg in messages[-6:]
         ],
     }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _build_external_reply_detail(
+    messages: list[dict],
+    conversation: dict | None = None,
+) -> str | None:
+    """Capture one HR-to-user reply round that was sent directly in BOSS."""
+    last_participant = next(
+        (message for message in reversed(messages) if message.get("sender") in {"me", "hr"}),
+        None,
+    )
+    if not last_participant or last_participant.get("sender") != "me":
+        return None
+    last_hr_index = next(
+        (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("sender") == "hr"),
+        -1,
+    )
+    if last_hr_index < 0:
+        return None
+    outbound_messages = [
+        message for message in messages[last_hr_index + 1:]
+        if message.get("sender") == "me"
+    ]
+    if not outbound_messages:
+        return None
+    manual_reply = "\n".join(str(message.get("text") or "") for message in outbound_messages[-3:]).strip()
+    payload = json.loads(_build_reply_detail(
+        messages[:last_hr_index + 1],
+        "",
+        "replied.external.v1",
+        conversation,
+    ))
+    payload.update({
+        "manual_reply": _truncate_text(manual_reply, 1000),
+        "last_outbound_message": _truncate_text(str(outbound_messages[-1].get("text") or ""), 500),
+        "conversation_tail": [
+            {"sender": str(message.get("sender", "")), "text": _truncate_text(str(message.get("text", "")), 500)}
+            for message in messages[-6:]
+        ],
+    })
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -737,9 +800,11 @@ def _check_if_i_already_replied(messages: list[dict]) -> bool:
 
     Returns True if the last message in conversation is from 'me'.
     """
-    if not messages:
-        return False
-    return messages[-1]["sender"] == "me"
+    last_participant = next(
+        (message for message in reversed(messages) if message.get("sender") in {"me", "hr"}),
+        None,
+    )
+    return bool(last_participant and last_participant.get("sender") == "me")
 
 
 def _check_if_portfolio_sent(messages: list[dict], portfolio_url: str = "") -> bool:
@@ -1194,11 +1259,36 @@ def _check_boss_replies(config: dict, tracked_jobs: list[dict] | None = None) ->
     for conv in conversations:
         if stop_requested(config):
             break
-        if not conv.get("has_reply"):
-            continue
-
         matched_job = _match_conversation_to_job(conv, all_tracked_jobs)
         if matched_job:
+            is_outbound = (
+                conv.get("last_direction") == "me"
+                or bool(conv.get("is_our_message"))
+            )
+            if is_outbound:
+                if _matches_own_greeting(
+                    str(conv.get("last_message") or ""),
+                    str(matched_job.get("greeting") or ""),
+                ):
+                    continue
+                if str(matched_job.get("status") or "") == "sent" and not db.execute(
+                    "SELECT 1 FROM history WHERE job_id = ? AND action = 'hr_reply_detected' LIMIT 1",
+                    (matched_job["id"],),
+                ).fetchone():
+                    continue
+                if _has_recorded_outbound_reply(db, matched_job["id"], conv):
+                    continue
+                results.append({"job": matched_job, "conversation": conv})
+                console.print(
+                    f"[green]  ✓ {matched_job['company']} - {matched_job['title']} 有待同步的已发送回复[/green]"
+                )
+                if len(results) >= max_conversations:
+                    console.print(f"[dim]本轮已达到对话处理上限 {max_conversations}[/dim]")
+                    break
+                continue
+
+            if not conv.get("has_reply"):
+                continue
             pending = _get_unresolved_pending_reply(db, matched_job["id"])
             if pending and _pending_matches_chat_list(_row_text(pending, "detail"), conv):
                 console.print(
@@ -1294,7 +1384,7 @@ def _match_conversation_to_job(conv: dict, jobs: list[dict]) -> dict | None:
 def _handle_conversation(job: dict, config: dict, conversation: dict | None = None) -> str:
     """Handle a single conversation that has an HR reply.
 
-    Returns action taken: 'stopped', 'skipped_user_replied',
+    Returns action taken: 'stopped', 'recorded_user_reply', 'skipped_user_replied',
     'skipped_existing_resume', 'rejected', 'needs_resume', 'auto_replied',
     or 'failed'.
     """
@@ -1335,6 +1425,7 @@ def _handle_conversation(job: dict, config: dict, conversation: dict | None = No
         close_tab(target_id)
         return "failed"
     messages = _reconcile_conversation_messages(messages, job)
+    messages = _reconcile_outbound_chat_preview(messages, conversation)
 
     if not isinstance(messages, list):
         close_tab(target_id)
@@ -1345,9 +1436,13 @@ def _handle_conversation(job: dict, config: dict, conversation: dict | None = No
 
     # Check if I already replied after the last HR message
     if _check_if_i_already_replied(messages):
-        console.print("[dim]    我已回复，跳过本轮[/dim]")
+        recorded = _record_external_user_reply(job, messages, conversation)
+        console.print(
+            "[green]    ✓ 已同步 BOSS 中手动发送的回复[/green]"
+            if recorded else "[dim]    我已回复，且本轮无需重复同步[/dim]"
+        )
         close_tab(target_id)
-        return "skipped_user_replied"
+        return "recorded_user_reply" if recorded else "skipped_user_replied"
 
     db = get_db()
     existing_pending_reply = _has_existing_pending_reply(db, job["id"], messages)
@@ -1582,6 +1677,68 @@ def _get_latest_handled_reply(db, job_id: str):
         """,
         (job_id,),
     ).fetchone()
+
+
+def _outbound_reply_matches_chat_list(detail: str, conversation: dict) -> bool:
+    """Match a recorded outbound message to BOSS's possibly truncated preview."""
+    payload = _parse_reply_detail(detail)
+    value = (
+        payload.get("last_outbound_message")
+        or payload.get("manual_reply")
+        or payload.get("ai_reply")
+    )
+    expected = _normalized_message_text(value if isinstance(value, str) else "")
+    current = _normalized_message_text(str(conversation.get("last_message") or ""))
+    return bool(current and expected) and (
+        current == expected
+        or (len(current) >= 12 and expected.startswith(current))
+    )
+
+
+def _has_recorded_outbound_reply(db, job_id: str, conversation: dict) -> bool:
+    rows = db.execute(
+        """
+        SELECT detail FROM history
+        WHERE job_id = ? AND action IN ('replied', 'auto_replied')
+        ORDER BY id DESC LIMIT 20
+        """,
+        (job_id,),
+    ).fetchall()
+    return any(_outbound_reply_matches_chat_list(_row_text(row, "detail"), conversation) for row in rows)
+
+
+def _record_external_user_reply(
+    job: dict,
+    messages: list[dict],
+    conversation: dict | None = None,
+) -> bool:
+    """Persist a BOSS-side manual reply once without generating or sending text."""
+    detail = _build_external_reply_detail(messages, conversation)
+    if not detail:
+        return False
+    payload = _parse_reply_detail(detail)
+    db = get_db()
+    try:
+        rows = db.execute(
+            """
+            SELECT detail FROM history
+            WHERE job_id = ? AND action IN ('replied', 'auto_replied')
+            ORDER BY id DESC LIMIT 20
+            """,
+            (job["id"],),
+        ).fetchall()
+        if any(
+            _reply_fingerprint_from_detail(_row_text(row, "detail")) == payload["reply_fingerprint"]
+            and _parse_reply_detail(_row_text(row, "detail")).get("manual_reply") == payload["manual_reply"]
+            for row in rows
+        ):
+            return False
+        if str(job.get("status") or "") == "sent":
+            update_job_status(db, job["id"], "replied")
+        add_history(db, job["id"], "replied", detail)
+        return True
+    finally:
+        db.close()
 
 
 def _has_handled_reply_for_messages(db, job_id: str, messages: list[dict]) -> bool:
@@ -1877,6 +2034,7 @@ def monitor_and_send_resumes(config: dict) -> dict:
             if action == "stopped":
                 break
             if action in (
+                "recorded_user_reply",
                 "skipped_user_replied",
                 "skipped_existing_resume",
                 "skipped_existing_pending",

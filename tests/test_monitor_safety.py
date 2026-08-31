@@ -344,6 +344,48 @@ class MonitorIdempotencyAndLimitTests(unittest.TestCase):
         self.assertEqual([item["job"]["id"] for item in results], ["two"])
         self.assertEqual(detected_actions, ["hr_reply_detected"])
 
+    def test_chat_list_includes_unrecorded_outbound_reply_but_skips_plain_sent_job(self):
+        from bosshunter.executor import monitor
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data" / "bosshunter.db"
+            db = get_db(db_path)
+            try:
+                insert_job(db, _job("greeting"))
+                insert_job(db, _job("manual"))
+                update_job_status(db, "greeting", "sent")
+                update_job_status(db, "manual", "replied")
+            finally:
+                db.close()
+
+            conversations = [
+                {
+                    "hr_name": f"HR-{job_id}",
+                    "company": f"公司-{job_id}",
+                    "last_message": message,
+                    "last_direction": "me",
+                    "is_our_message": True,
+                    "has_reply": False,
+                }
+                for job_id, message in (
+                    ("greeting", "您好，我对岗位很感兴趣。"),
+                    ("manual", "可以，我补充一下相关经历。"),
+                )
+            ]
+
+            def open_db():
+                return get_db(db_path)
+
+            with patch.object(monitor, "get_db", side_effect=open_db), \
+                 patch.object(monitor, "_open_monitor_tab", return_value="chat-target"), \
+                 patch.object(monitor, "_wait_or_stop", return_value=False), \
+                 patch.object(monitor, "_wait_for_page_or_stop", return_value=True), \
+                 patch.object(monitor, "evaluate", return_value=json.dumps(conversations)), \
+                 patch.object(monitor, "close_tab"):
+                results = monitor.check_replies({"monitor": {"max_conversations_per_cycle": 5}})
+
+        self.assertEqual([item["job"]["id"] for item in results], ["manual"])
+
 
 class MonitorRiskTests(unittest.TestCase):
     def test_captcha_stops_cycle_and_records_only_safe_risk_detail(self):

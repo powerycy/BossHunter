@@ -1523,7 +1523,9 @@ function monitorConversationMessages(item: HistoryItem, history: HistoryItem[]):
 
   const hrQuestion = parsed.hrQuestion || source.hrQuestion
   if (!messages.some(message => message.sender === 'hr')) append('hr', hrQuestion)
-  if (isOutboundReplyRecord(item)) append('ai', parsed.aiReply, item.created_at)
+  if (isOutboundReplyRecord(item) && !parsed.schema.startsWith('replied.external.')) {
+    append('ai', parsed.aiReply, item.created_at)
+  }
 
   return messages
 }
@@ -1743,7 +1745,11 @@ function MonitorExecutionView({
             </div>
           )
         })}
-        {!visibleHistory.length && <div className="rounded-2xl border border-dashed border-card-border bg-[#FFFCFA] p-5 text-sm text-muted">暂无待处理 HR 问题。</div>}
+        {!visibleHistory.length && (
+          <div className="rounded-2xl border border-dashed border-card-border bg-[#FFFCFA] p-5 text-sm text-muted">
+            {activeMonitorFilter === 'replied' ? '暂无近 7 天已回复对话。' : '暂无待处理 HR 问题。'}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -40,6 +40,7 @@ from bosshunter.db import (
 	get_jobs_ready_to_send,
 	get_jobs_with_send_errors,
 	get_recent_history,
+	get_recent_monitor_replies,
 	get_unresolved_reply_pending,
 	get_unresolved_resume_failures,
 	get_stats,
@@ -1073,17 +1074,30 @@ def api_top_companies():
 def api_history():
 	limit = int(request.params.get("limit", 15))
 	include_unresolved = request.params.get("include_unresolved", "").lower() in ("1", "true", "yes")
+	include_monitor_conversations = request.params.get("include_monitor_conversations", "").lower() in ("1", "true", "yes")
 	db = _get_web_db()
 	try:
 		data = get_recent_history(db, limit)
-		if include_unresolved:
+		if include_unresolved or include_monitor_conversations:
+			monitor_replies = get_recent_monitor_replies(db) if include_monitor_conversations else []
+			if include_monitor_conversations:
+				retained_reply_ids = {item["id"] for item in monitor_replies}
+				data = [
+					item for item in data
+					if item["action"] not in ("replied", "auto_replied") or item["id"] in retained_reply_ids
+				]
 			seen_ids = {item["id"] for item in data}
-			for unresolved_items in (
-				get_unresolved_reply_pending(db),
-				get_unresolved_resume_failures(db),
-			):
-				data.extend(item for item in unresolved_items if item["id"] not in seen_ids)
-				seen_ids.update(item["id"] for item in unresolved_items)
+			extra_groups = []
+			if include_unresolved:
+				extra_groups.extend((
+					get_unresolved_reply_pending(db),
+					get_unresolved_resume_failures(db),
+				))
+			if include_monitor_conversations:
+				extra_groups.append(monitor_replies)
+			for extra_items in extra_groups:
+				data.extend(item for item in extra_items if item["id"] not in seen_ids)
+				seen_ids.update(item["id"] for item in extra_items)
 			data.sort(
 				key=lambda item: (str(item.get("created_at") or ""), int(item.get("id") or 0)),
 				reverse=True,
