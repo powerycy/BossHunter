@@ -392,3 +392,55 @@ class LiepinCollectorTests(TestCase):
 
         self.assertEqual(result.status, "completed")
         self.assertEqual(len(collected), 0)
+
+    def test_list_script_detects_login_wall(self):
+        self.assertIn("login_required", JS_EXTRACT_LIST)
+        self.assertIn("wow.liepin.com", JS_EXTRACT_LIST)
+        self.assertIn("请先登录", JS_EXTRACT_LIST)
+
+    def test_login_required_on_search_page_returns_clear_error(self):
+        browser = LiepinBrowser(
+            new_tab=lambda url, **_kwargs: url,
+            close_tab=lambda _target: True,
+            evaluate=lambda _target, _script: json.dumps({"status": "login_required", "jobs": []}),
+            scroll=lambda *_args, **_kwargs: True,
+            wait_for_load=lambda *_args, **_kwargs: True,
+        )
+        hooks = CollectorHooks(
+            stop_event=None,
+            on_list_candidate=lambda _candidate: True,
+            on_candidate=lambda _candidate: True,
+            on_parse_failed=lambda _reason: None,
+            on_event=lambda **_kwargs: None,
+        )
+        result = LiepinCollector(browser=browser).collect(
+            PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+            hooks,
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason_code, "login_required")
+        self.assertIn("登录", result.message)
+
+    def test_verification_message_guides_manual_retry(self):
+        browser = LiepinBrowser(
+            new_tab=lambda url, **_kwargs: url,
+            close_tab=lambda _target: True,
+            evaluate=lambda _target, _script: json.dumps({"status": "blocked", "jobs": []}),
+            scroll=lambda *_args, **_kwargs: True,
+            wait_for_load=lambda *_args, **_kwargs: True,
+        )
+        hooks = CollectorHooks(
+            stop_event=None,
+            on_list_candidate=lambda _candidate: True,
+            on_candidate=lambda _candidate: True,
+            on_parse_failed=lambda _reason: None,
+            on_event=lambda **_kwargs: None,
+        )
+        result = LiepinCollector(browser=browser).collect(
+            PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+            hooks,
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason_code, "rate_limit")
+        self.assertIn("验证码", result.message)
+        self.assertIn("手动", result.message)

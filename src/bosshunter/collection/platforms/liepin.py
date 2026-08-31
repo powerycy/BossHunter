@@ -92,6 +92,14 @@ JS_EXTRACT_LIST = r"""
     if (/滑动验证|安全验证|访问过于频繁|请完成安全验证|人机验证|网络异常/.test(pageText)) {
         return JSON.stringify({status: 'blocked', jobs: []});
     }
+    // Login wall detection: Liepin may redirect to wow.liepin.com or show a
+    // login prompt on the search page when the session is not established.
+    if (location.hostname.indexOf('wow.liepin.com') >= 0) {
+        return JSON.stringify({status: 'login_required', jobs: []});
+    }
+    if (/请先登录|登录后查看|请登录|立即登录|登录猎聘/.test(pageText) && !/退出登录/.test(pageText)) {
+        return JSON.stringify({status: 'login_required', jobs: []});
+    }
     var anchors = Array.prototype.slice.call(document.querySelectorAll('a[data-nick="job-detail-job-info"]'));
     if (!anchors.length) {
         return JSON.stringify({status: /没有找到|暂无满足|未找到/.test(text) ? 'empty' : 'waiting', jobs: []});
@@ -280,7 +288,9 @@ class LiepinCollector:
                             if attempt + 1 < RENDER_POLL_ATTEMPTS and self._wait(hooks, RENDER_POLL_INTERVAL_SECONDS):
                                 return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                         if status == "blocked":
-                            return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "猎聘出现验证或限流信号，已停止整个平台任务")
+                            return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "猎聘出现验证码或限流信号，已停止整个平台任务。请稍后在浏览器中手动完成验证后重试。")
+                        if status == "login_required":
+                            return PlatformCollectionResult(self.platform, "blocked", "login_required", "猎聘需要登录，请先在浏览器中登录猎聘（www.liepin.com）后重试采集。")
                         if status in {"empty", "waiting"}:
                             return PlatformCollectionResult(self.platform, "completed", "search_exhausted", "猎聘已无更多结果")
                         if status != "ready" or not isinstance(payload.get("jobs"), list):
@@ -319,7 +329,7 @@ class LiepinCollector:
                             finally:
                                 self.browser.close_tab(detail_target)
                             if detail_status == "blocked":
-                                return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "猎聘详情页出现验证或限流，已停止整个平台任务")
+                                return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "猎聘详情页出现验证码或限流，已停止整个平台任务。请稍后在浏览器中手动完成验证后重试。")
                             if detail_status == "offline":
                                 hooks.on_parse_failed("猎聘岗位已下线")
                                 continue
