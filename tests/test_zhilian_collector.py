@@ -26,10 +26,19 @@ class ZhilianFixtureTests(TestCase):
     def test_city_snapshot_is_local_and_not_shared_with_boss_codes(self):
         snapshot = load_zhilian_city_snapshot()
         self.assertEqual(snapshot["schema"], "bosshunter.zhilian_cities.v1")
-        self.assertEqual(snapshot["source"], "bundled_public_reference_snapshot")
-        self.assertGreaterEqual(len(snapshot["cities"]), 10)
+        self.assertEqual(snapshot["source"], "zhaopin_official_api_snapshot")
+        self.assertGreaterEqual(len(snapshot["cities"]), 200)
         self.assertEqual(get_zhilian_city_code("北京"), "530")
         self.assertEqual(get_zhilian_city_code("北京市"), "530")
+        self.assertEqual(get_zhilian_city_code("上海"), "538")
+        self.assertEqual(get_zhilian_city_code("广州"), "763")
+        self.assertEqual(get_zhilian_city_code("深圳"), "765")
+        self.assertEqual(get_zhilian_city_code("杭州"), "653")
+        self.assertEqual(get_zhilian_city_code("成都"), "801")
+        self.assertEqual(get_zhilian_city_code("武汉"), "736")
+        self.assertEqual(get_zhilian_city_code("长沙"), "749")
+        self.assertEqual(get_zhilian_city_code("合肥"), "664")
+        self.assertEqual(get_zhilian_city_code("乌鲁木齐"), "890")
         self.assertIsNone(get_zhilian_city_code("不存在的城市"))
 
     def test_list_and_detail_fixture_are_platform_specific_and_convertible(self):
