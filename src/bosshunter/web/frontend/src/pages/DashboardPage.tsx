@@ -54,7 +54,8 @@ function currentTaskStage(task: WorkbenchTask) {
     if (log.includes('招呼语进度')) return log
     if (log.includes('招呼语发送结果')) return log
     if (log.includes('发送招呼语')) return '发送招呼语'
-    if (log.includes('生成招呼语')) return '生成招呼语'
+    if (log.includes('招呼语生成结果')) return log
+    if (log.includes('生成招呼语')) return log
     if (log.includes('本轮监测完成')) return log
     const stage = TASK_STAGE_LABELS.find(label => log.includes(label))
     if (stage) return stage
@@ -187,6 +188,7 @@ const taskMetricItems = [
   { key: 'greet_generated', label: '新生成' },
   { key: 'greet_preserved', label: '保留现有' },
   { key: 'greet_failed', label: '生成失败' },
+  { key: 'greet_paused', label: '提前暂停' },
 ]
 
 const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'stopped']
@@ -753,9 +755,25 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 <div className="text-sm font-black">任务运行状态</div>
                 <p className="mt-1 text-xs leading-5 text-muted">如果点击后浏览器没有反应，请先打开 BOSS 直聘并确认已登录；常见失败原因是 BOSS 未登录或 Chrome 调试连接不可用。</p>
               </div>
+            <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-[#FFF0E5] px-3 py-1 text-xs font-black text-primary">
                 {visibleTask.label}
               </span>
+              {activeTask && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={activeTask.status !== 'running'}
+                  onClick={() => {
+                    if (!window.confirm(`是否停止当前${activeTask.label}任务？已入库数据会保留。`)) return
+                    setNotice(`正在停止${activeTask.label}...`)
+                    void stopTask(activeTask.id).then(() => setNotice(`${activeTask.label}已请求停止。`))
+                  }}
+                >
+                  {activeTask.status === 'stopping' ? '正在停止...' : '停止任务'}
+                </Button>
+              )}
+            </div>
             </div>
             <div className={`mt-3 rounded-2xl border px-4 py-3 ${taskStatusClass(visibleTask.status)}`}>
               <div className="text-xs font-black text-primary">{taskStatusTitle(visibleTask.status)}</div>

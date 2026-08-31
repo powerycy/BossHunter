@@ -1834,6 +1834,95 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertIsNone(row["greeting"])
         self.assertEqual(row["status"], "ready")
 
+    def test_greet_task_marks_zero_output_pause_as_failed(self):
+        # 审计回归：服务级 AI 故障且零产出时，任务不得伪装成 completed。
+        def paused_generate(config, job_ids=None):
+            config["_workbench_greeting_report"] = {
+                "requested_count": 1,
+                "generated_count": 0,
+                "skipped_existing": 0,
+                "failed_count": 0,
+                "conflict_ids": [],
+                "pause_reason": "AI 账户额度不足 (quota, status=402)",
+            }
+            return 0
+
+        runner = WorkbenchTaskRunner({"greet": server._execute_greet})
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("greet-quota-paused"))
+                update_job_status(db, "greet-quota-paused", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch("bosshunter.ai.greeter.generate_greetings", side_effect=paused_generate), \
+                 patch.object(server, "load_config", return_value={}), \
+                 patch.object(server, "task_runner", runner):
+                status, _, body = self._request(
+                    "/api/workbench/greetings",
+                    method="POST",
+                    json_body={"job_ids": ["greet-quota-paused"]},
+                )
+            runner.wait(timeout=2)
+            result = runner.status()["last_task"]
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), payload)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("已安全暂停", result["error"])
+        self.assertIn("额度不足", result["error"])
+        self.assertEqual(result["metrics"]["greet_paused"], 1)
+        self.assertEqual(result["metrics"]["greet_generated"], 0)
+        self.assertTrue(any("AI 服务异常，任务提前结束" in message for message in result["logs"]))
+
+    def test_greet_task_partial_pause_completes_with_annotation(self):
+        # 部分成功的服务级故障保留 completed，但必须显式标注提前结束。
+        def partial_paused_generate(config, job_ids=None):
+            config["_workbench_greeting_report"] = {
+                "requested_count": 2,
+                "generated_count": 1,
+                "skipped_existing": 0,
+                "failed_count": 0,
+                "conflict_ids": [],
+                "pause_reason": "API 请求被限流 (rate_limit)",
+            }
+            return 1
+
+        runner = WorkbenchTaskRunner({"greet": server._execute_greet})
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                for job_id in ("greet-done", "greet-remaining"):
+                    insert_job(db, _job(job_id))
+                    update_job_status(db, job_id, "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch("bosshunter.ai.greeter.generate_greetings", side_effect=partial_paused_generate), \
+                 patch.object(server, "load_config", return_value={}), \
+                 patch.object(server, "task_runner", runner):
+                status, _, body = self._request(
+                    "/api/workbench/greetings",
+                    method="POST",
+                    json_body={"job_ids": ["greet-done", "greet-remaining"]},
+                )
+            runner.wait(timeout=2)
+            result = runner.status()["last_task"]
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), payload)
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["metrics"]["greet_generated"], 1)
+        self.assertEqual(result["metrics"]["greet_paused"], 1)
+        self.assertTrue(any("本轮提前结束" in message for message in result["logs"]))
+        self.assertTrue(any("rate_limit" in message for message in result["logs"]))
+
     def test_web_api_greeting_generation_reports_conflict_ids_on_cas_failure(self):
         def fake_generate(config, job_ids=None):
             config["_workbench_greeting_report"] = {

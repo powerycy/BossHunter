@@ -874,12 +874,14 @@ def _execute_greet(task: WorkbenchTask, config: dict) -> None:
 	conflict_ids = [str(job_id) for job_id in report.get("conflict_ids", [])]
 	preserved_count = int(report.get("skipped_existing", 0) or 0)
 	failed_count = int(report.get("failed_count", 0) or 0)
+	pause_reason = str(report.get("pause_reason") or "")
 	task.metrics.update({
 		"greet_requested": len(selected_job_ids),
 		"greet_generated": int(generated_count),
 		"greet_preserved": preserved_count,
 		"greet_failed": failed_count,
 		"greet_conflicts": len(conflict_ids),
+		"greet_paused": 1 if pause_reason else 0,
 	})
 	if conflict_ids:
 		task.progress["conflict_ids"] = conflict_ids
@@ -892,6 +894,17 @@ def _execute_greet(task: WorkbenchTask, config: dict) -> None:
 			conflicts=f"，状态冲突 {len(conflict_ids)}（岗位状态已变更，招呼语未保存）" if conflict_ids else "",
 		),
 	)
+	if pause_reason:
+		if generated_count or preserved_count:
+			# 部分成功：保留 completed 语义，但显式标注提前结束原因与可续跑事实。
+			_log(
+				task,
+				f"AI 服务异常，本轮提前结束：{pause_reason}；已生成内容已保存，剩余岗位下次运行会继续处理。",
+			)
+		else:
+			# 零产出：服务级故障不得伪装成"任务完成"。
+			_log(task, f"AI 服务异常，任务提前结束：{pause_reason}")
+			raise RuntimeError(f"招呼语生成已安全暂停：{pause_reason}")
 
 
 task_runner._executors.update({

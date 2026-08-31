@@ -807,4 +807,7 @@ def generate_greetings(config: dict, job_ids: list[str] | None = None) -> int:
         "generated_count": count,
         "failed_count": failed,
     })
+    if pause_reason:
+        # 服务级故障（鉴权/额度/限流等）必须显性上报，供后台任务据此区分 completed/failed。
+        config["_workbench_greeting_report"]["pause_reason"] = pause_reason
     return count

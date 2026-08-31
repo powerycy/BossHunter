@@ -1010,6 +1010,34 @@ class GreeterTokenResilienceTests(unittest.TestCase):
         self.assertEqual([entry["action"] for entry in history], ["greeting_failed"])
         self.assertTrue(any("未提供的网址" in message for message in logs))
 
+    def test_service_level_ai_error_records_pause_reason_in_report(self):
+        # PR #90 审计回归：服务级 AI 故障（鉴权/额度/限流）必须写入报告的 pause_reason，
+        # 供后台任务区分 completed/failed，而不是伪装成"完成，产出 0"。
+        from bosshunter.ai.credentials import AIRequestError
+
+        db = MagicMock()
+        jobs = [_job("quota-paused")]
+        config = {"ai": {"greeting_max_attempts": 1, "greeting_max_iterations": 0}}
+
+        with (
+            patch("bosshunter.ai.greeter.get_db", return_value=db),
+            patch("bosshunter.ai.greeter.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.greeter._get_resume_summary", return_value="真实简历摘要，不含网址"),
+            patch(
+                "bosshunter.ai.greeter._call_claude",
+                side_effect=AIRequestError("quota", "AI 账户额度不足", status_code=402),
+            ),
+            patch("bosshunter.ai.greeter.save_generated_greeting", return_value=True) as update_greeting,
+            patch("bosshunter.ai.greeter.add_history"),
+        ):
+            count = greeter.generate_greetings(config)
+
+        pause_reason = config["_workbench_greeting_report"].get("pause_reason", "")
+        self.assertEqual(count, 0)
+        self.assertIn("额度不足", pause_reason)
+        self.assertIn("quota", pause_reason)
+        update_greeting.assert_not_called()
+
     def test_greeting_json_wrapper_is_normalized(self):
         response = '```json\n{"greeting":"您好，我的产品经验与岗位需求比较匹配。"}\n```'
 
