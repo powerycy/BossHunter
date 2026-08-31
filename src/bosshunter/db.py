@@ -351,7 +351,7 @@ def mark_external_jobs_sent(conn: sqlite3.Connection, job_ids: Any, *, confirmed
         for row in pending_rows:
             job_id = str(row["id"])
             platform = str(row.get("source_platform") or "")
-            detail = f"用户在{platform_labels[platform]}完成投递后手动标记"
+            detail = f"用户在{platform_labels.get(platform, platform)}完成投递后手动标记"
             conn.execute(
                 "UPDATE jobs SET status = 'sent', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
                 (job_id,),
