@@ -27,6 +27,8 @@ from bosshunter.ai.credentials import get_ai_api_key
 from bosshunter.cities import CityRefreshError, get_city_map, load_city_snapshot, refresh_city_cache
 from bosshunter.config import AI_SERVICE_PRESETS, load_config, remove_retired_collection_settings
 from bosshunter.db import (
+	GREETING_ALLOWED_STATUSES,
+	REJECT_ALLOWED_STATUSES,
 	JobDeletionConflictError,
 	JobManualSentConflictError,
 	add_history,
@@ -47,9 +49,10 @@ from bosshunter.db import (
 	mark_external_jobs_sent,
 	permanent_delete_jobs,
 	query_jobs,
+	reject_jobs,
 	restore_jobs,
 	soft_delete_jobs,
-	update_job_greeting,
+	edit_job_greeting,
 	update_job_status,
 )
 from bosshunter.collection.capabilities import platform_supports
@@ -1588,23 +1591,33 @@ def api_workbench_reject():
 		db = _get_web_db()
 		try:
 			placeholders = ",".join("?" for _ in job_ids)
-			active_ids = {
-				str(row["id"])
-				for row in db.execute(
-					f"SELECT id FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
-					job_ids,
-				).fetchall()
-			}
-			invalid_ids = [job_id for job_id in job_ids if job_id not in active_ids]
+			rows = db.execute(
+				f"SELECT id, status FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
+				job_ids,
+			).fetchall()
+			expected_statuses = {str(row["id"]): str(row["status"] or "") for row in rows}
+			invalid_ids = [
+				job_id
+				for job_id in job_ids
+				if expected_statuses.get(job_id) not in REJECT_ALLOWED_STATUSES
+			]
 			if invalid_ids:
-				return _json_response({"error": "所选岗位不存在或已进入回收站", "invalid_ids": invalid_ids}, 409)
-			for job_id in job_ids:
-				update_job_status(db, job_id, "rejected")
-				add_history(db, job_id, "rejected", "Web Dashboard 放弃投递")
+				return _json_response({
+					"error": "所选岗位状态不允许放弃",
+					"code": "reject_status_blocked",
+					"invalid_ids": invalid_ids,
+				}, 409)
+			result = reject_jobs(db, job_ids, expected_statuses=expected_statuses)
+			if result["invalid_ids"]:
+				return _json_response({
+					"error": "岗位状态已变化，放弃操作未执行",
+					"code": "reject_status_blocked",
+					"invalid_ids": result["invalid_ids"],
+				}, 409)
 		finally:
 			db.close()
 
-		return _json_response({"success": True, "count": len(job_ids)})
+		return _json_response({"success": True, "count": result["affected_count"]})
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
 
@@ -1623,23 +1636,42 @@ def api_workbench_generate_greetings():
 		db = _get_web_db()
 		try:
 			placeholders = ",".join("?" for _ in job_ids)
-			active_ids = {
-				str(row["id"])
-				for row in db.execute(
-					f"SELECT id FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
-					job_ids,
-				).fetchall()
-			}
+			rows = db.execute(
+				f"SELECT id, status FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
+				job_ids,
+			).fetchall()
 		finally:
 			db.close()
-		invalid_ids = [job_id for job_id in job_ids if job_id not in active_ids]
+		by_id = {str(row["id"]): str(row["status"] or "") for row in rows}
+		invalid_ids = [
+			job_id
+			for job_id in job_ids
+			if by_id.get(job_id) not in GREETING_ALLOWED_STATUSES
+		]
 		if invalid_ids:
-			return _json_response({"error": "所选岗位不存在或已进入回收站", "invalid_ids": invalid_ids}, 409)
+			return _json_response({
+				"error": "所选岗位状态不允许生成招呼语",
+				"code": "greeting_status_blocked",
+				"invalid_ids": invalid_ids,
+			}, 409)
 
 		config = load_config(CONFIG_PATH)
 		config["_workbench_job_ids"] = job_ids
+		config["_workbench_regenerate"] = body.get("regenerate") is True
 		generated_count = generate_greetings(config, job_ids=job_ids)
-		return _json_response({"success": True, "generated_count": generated_count})
+		report = config.get("_workbench_greeting_report", {})
+		conflict_ids = report.get("conflict_ids", [])
+		if conflict_ids and not generated_count:
+			return _json_response({
+				"error": "所选岗位状态已变更，招呼语未保存",
+				"code": "greeting_status_blocked",
+				"invalid_ids": conflict_ids,
+			}, 409)
+		return _json_response({
+			"success": True,
+			"generated_count": generated_count,
+			**({"conflict_ids": conflict_ids} if conflict_ids else {}),
+		})
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
 
@@ -1652,16 +1684,27 @@ def api_job_update_greeting(job_id):
 		greeting = str(body.get("greeting") or "").strip()
 		if not greeting:
 			return _json_response({"error": "招呼语不能为空"}, 400)
+		if len(greeting) > 300:
+			return _json_response({"error": "招呼语不能超过300字"}, 400)
 
 		db = _get_web_db()
 		try:
 			row = db.execute(
-				"SELECT id FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+				"SELECT id, status FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
 			).fetchone()
 			if not row:
 				return _json_response({"error": "岗位不存在或已进入回收站"}, 404)
-			update_job_greeting(db, job_id, greeting)
-			add_history(db, job_id, "greeting_edited", "Web Dashboard 编辑招呼语")
+			status = str(row["status"] or "")
+			if status not in GREETING_ALLOWED_STATUSES:
+				return _json_response({
+					"error": "当前岗位状态不能修改招呼语",
+					"code": "greeting_status_blocked",
+				}, 409)
+			if not edit_job_greeting(db, job_id, greeting, expected_status=status):
+				return _json_response({
+					"error": "岗位状态已变化，招呼语未保存",
+					"code": "greeting_status_blocked",
+				}, 409)
 		finally:
 			db.close()
 		return _json_response({"success": True, "greeting": greeting})

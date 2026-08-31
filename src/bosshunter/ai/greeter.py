@@ -11,7 +11,14 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from bosshunter.ai.credentials import AIRequestError, call_anthropic_text
 from bosshunter.cancellation import OperationCancelled, run_cancellable
 from bosshunter.collection.text import clean_job_description
-from bosshunter.db import add_history, get_db, get_jobs_by_status, update_job_greeting, update_job_status
+from bosshunter.db import (
+    GREETING_ALLOWED_STATUSES,
+    add_history,
+    get_db,
+    get_jobs_by_status,
+    mark_existing_greeting_ready,
+    save_generated_greeting,
+)
 
 console = Console()
 
@@ -582,24 +589,50 @@ def generate_greetings(config: dict, job_ids: list[str] | None = None) -> int:
     _workbench_job_ids = {str(job_id) for job_id in config.get("_workbench_job_ids", [])}
     if _workbench_job_ids:
         jobs = [job for job in jobs if str(job["id"]) in _workbench_job_ids]
+    allowed_jobs = [
+        job
+        for job in jobs
+        if str(job.get("status") or "approved") in GREETING_ALLOWED_STATUSES
+    ]
+    conflict_ids = [
+        str(job["id"])
+        for job in jobs
+        if str(job.get("status") or "approved") not in GREETING_ALLOWED_STATUSES
+    ]
+    jobs = allowed_jobs
 
     requested_count = len(jobs)
-    existing_jobs = [job for job in jobs if str(job.get("greeting") or "").strip()]
-    jobs = [job for job in jobs if not str(job.get("greeting") or "").strip()]
+    force_regenerate = bool(config.get("_workbench_regenerate"))
+    existing_jobs = (
+        []
+        if force_regenerate
+        else [job for job in jobs if str(job.get("greeting") or "").strip()]
+    )
+    if not force_regenerate:
+        jobs = [job for job in jobs if not str(job.get("greeting") or "").strip()]
     config["_workbench_greeting_report"] = {
         "requested_count": requested_count,
         "generated_count": 0,
         "skipped_existing": len(existing_jobs),
         "failed_count": 0,
+        "conflict_ids": conflict_ids,
     }
+    preserved_existing = 0
     for job in existing_jobs:
         # Keep manually edited text intact while making the job eligible for delivery.
-        update_job_status(db, job["id"], "ready")
-    if existing_jobs:
-        _notify(config, f"已保留 {len(existing_jobs)} 个岗位现有的招呼语，不会用 AI 覆盖。")
+        # The expected text makes a concurrent manual edit win over this stale snapshot.
+        if mark_existing_greeting_ready(
+            db,
+            job["id"],
+            expected_greeting=str(job.get("greeting") or ""),
+        ):
+            preserved_existing += 1
+    config["_workbench_greeting_report"]["skipped_existing"] = preserved_existing
+    if preserved_existing:
+        _notify(config, f"已保留 {preserved_existing} 个岗位现有的招呼语，不会用 AI 覆盖。")
 
     if not jobs:
-        if not existing_jobs:
+        if not preserved_existing:
             console.print("[yellow]没有已确认的岗位可生成招呼语。请先运行 `bosshunter confirm`，或使用 `bosshunter run` 执行完整流程。[/yellow]")
         db.close()
         return 0
@@ -725,8 +758,19 @@ def generate_greetings(config: dict, job_ids: list[str] | None = None) -> int:
                     break
                 continue
 
-            update_job_greeting(db, job["id"], best_greeting)
-            update_job_status(db, job["id"], "ready")
+            save_kwargs = (
+                {"expected_greeting": str(job.get("greeting") or "")}
+                if force_regenerate
+                else {}
+            )
+            if not save_generated_greeting(db, job["id"], best_greeting, **save_kwargs):
+                config["_workbench_greeting_report"].setdefault("conflict_ids", []).append(str(job["id"]))
+                _notify(
+                    config,
+                    f"{job['company']}｜{job['title']} 的岗位状态已变更，招呼语未保存。",
+                )
+                progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
+                continue
             opening = _opening_signature(best_greeting)
             if opening:
                 recent_openings.append(opening)

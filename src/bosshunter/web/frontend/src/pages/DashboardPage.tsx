@@ -551,7 +551,9 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           ? `已为 ${count} 个岗位生成招呼语。`
           : data.generated_count
             ? `已生成 ${data.generated_count}/${count} 条招呼语，其余岗位可稍后重试。`
-            : '未生成招呼语，请检查 AI 配置后重试。'
+            : data.conflict_ids
+              ? `${count} 个岗位状态已变更，招呼语未保存，请刷新后重试。`
+              : '未生成招呼语，请检查 AI 配置后重试。'
       )
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '生成招呼语失败')
@@ -1078,7 +1080,7 @@ function JobDetailModal({ job, onClose, onChanged }: { job: Job; onClose: () => 
       const res = await fetch('/api/workbench/greetings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_ids: [job.id] }),
+        body: JSON.stringify({ job_ids: [job.id], regenerate: true }),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
