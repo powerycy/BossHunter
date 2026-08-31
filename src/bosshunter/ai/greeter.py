@@ -404,6 +404,7 @@ def _platform_label(job: dict) -> str:
         "boss": "BOSS直聘",
         "zhilian": "智联招聘",
         "51job": "前程无忧",
+        "liepin": "猎聘",
     }.get(str(job.get("source_platform") or "boss"), "招聘平台")
 
 

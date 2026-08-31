@@ -135,6 +135,30 @@ def test_export_supports_51job_source_filter_and_label(tmp_path):
 	assert "020000" in text
 
 
+def test_export_supports_liepin_source_filter_and_label(tmp_path):
+	db = get_db(tmp_path / "liepin-export.db")
+	try:
+		job = _job("liepin:bj-1", city="北京")
+		job.update({
+			"source_platform": "liepin",
+			"source_job_id": "bj-1",
+			"source_city_code": "010",
+		})
+		insert_job(db, job)
+		content, _, _ = export_jobs(
+			db,
+			format="csv",
+			scope="filtered",
+			filters={"source_platform": "liepin"},
+		)
+	finally:
+		db.close()
+
+	text = content.decode("utf-8-sig")
+	assert "猎聘" in text
+	assert "010" in text
+
+
 def test_selected_export_rejects_missing_ids(tmp_path):
 	db = get_db(tmp_path / "missing.db")
 	try:

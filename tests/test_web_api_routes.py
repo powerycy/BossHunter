@@ -980,6 +980,23 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(row["status"], "sent")
         self.assertEqual([item["action"] for item in history], ["manual_sent"])
 
+    def test_web_api_cities_returns_bundled_liepin_snapshot(self):
+        status, _, body = self._request("/api/cities?platform=liepin")
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), body)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], len(payload["cities"]))
+        self.assertIn({"name": "北京", "code": "010"}, payload["cities"])
+
+    def test_web_api_city_refresh_rejects_liepin_bundled_catalog(self):
+        status, _, body = self._request("/api/cities/refresh?platform=liepin", method="POST")
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("409"), body)
+        self.assertFalse(payload["ok"])
+        self.assertIn("猎聘", payload["error"])
+
     def test_web_api_deliver_rejects_already_sent_jobs(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)

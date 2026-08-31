@@ -71,6 +71,16 @@ platforms:
       city_codes: {"上海": "020000"}
       max_pages: 1
       sort: default
+  liepin:
+    enabled: false
+    # 猎聘目前只开放采集/评分/招呼语生成，真实发送和监听仍锁定。
+    search:
+      keywords: []
+      cities: []
+      # 只需填写城市名称；BossHunter 会从内置猎聘目录自动匹配城市编码。
+      city_codes: {}
+      max_pages: 1
+      sort: default
 
 scoring:
   threshold: 70

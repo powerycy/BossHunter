@@ -100,7 +100,7 @@ def _filtered_rows(conn: sqlite3.Connection, filters: dict[str, Any] | None = No
 		params.append(status)
 	source_platform = str(filters.get("source_platform") or "").strip()
 	if source_platform:
-		if source_platform not in {"boss", "zhilian", "51job"}:
+		if source_platform not in {"boss", "zhilian", "51job", "liepin"}:
 			raise ValueError("source_platform 参数无效")
 		conditions.append("COALESCE(source_platform, 'boss') = ?")
 		params.append(source_platform)
@@ -220,7 +220,7 @@ def _greeting_failure_reason(job: dict[str, Any]) -> str:
 
 def _row_values(job: dict[str, Any]) -> list[Any]:
 	platform = str(job.get("source_platform") or "boss").strip() or "boss"
-	platform_labels = {"boss": "BOSS 直聘", "zhilian": "智联招聘", "51job": "前程无忧"}
+	platform_labels = {"boss": "BOSS 直聘", "zhilian": "智联招聘", "51job": "前程无忧", "liepin": "猎聘"}
 	city_code = str(job.get("source_city_code") or "").strip()
 	if not city_code and platform == "boss":
 		city_code = str(job.get("city_code") or "").strip() or (get_city_code(str(job.get("city") or "")) or "")

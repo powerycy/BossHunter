@@ -24,7 +24,7 @@ interface JobsTableProps {
 
 function safeJobUrl(job: Job): string | null {
   const platform = job.source_platform || 'boss'
-  if (platform !== 'boss' && platform !== 'zhilian' && platform !== '51job') return null
+  if (platform !== 'boss' && platform !== 'zhilian' && platform !== '51job' && platform !== 'liepin') return null
   try {
     const parsed = platform === 'boss'
       ? new URL(job.url || '', 'https://www.zhipin.com')
@@ -34,7 +34,9 @@ function safeJobUrl(job: Job): string | null {
       ? 'zhipin.com'
       : platform === 'zhilian'
         ? 'zhaopin.com'
-        : '51job.com'
+        : platform === '51job'
+          ? '51job.com'
+          : 'liepin.com'
     if (parsed.hostname !== rootDomain && !parsed.hostname.endsWith(`.${rootDomain}`)) return null
     return parsed.toString()
   } catch {
@@ -138,7 +140,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
             <tbody>
               {jobs.map(job => {
                 const isExpanded = expanded === job.id
-                const isExternalPlatform = job.source_platform === 'zhilian' || job.source_platform === '51job'
+                const isExternalPlatform = job.source_platform === 'zhilian' || job.source_platform === '51job' || job.source_platform === 'liepin'
                 const jobUrl = safeJobUrl(job)
                 const alreadySent = ['sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent'].includes(job.status)
                 return (
@@ -160,7 +162,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                         <div className="flex items-center gap-2">
                           <span className="max-w-[160px] truncate font-black text-foreground">{job.company}</span>
                           <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${job.source_platform === 'boss' || !job.source_platform ? 'bg-[#FFF0E5] text-primary' : 'bg-blue-50 text-blue-700'}`}>
-                            {job.source_platform === 'zhilian' ? '智联' : job.source_platform === '51job' ? '51job' : 'BOSS'}
+                            {job.source_platform === 'zhilian' ? '智联' : job.source_platform === '51job' ? '51job' : job.source_platform === 'liepin' ? '猎聘' : 'BOSS'}
                           </span>
                           {job.company_size && (
                             <span className="rounded-full bg-[#FFFCFA] px-2 py-0.5 text-[10px] font-bold text-muted">{job.company_size}</span>
