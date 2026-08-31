@@ -28,6 +28,7 @@ import json
 import random
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -44,44 +45,22 @@ PAGE_DELAY_MAX_SECONDS = 35.0
 RENDER_POLL_INTERVAL_SECONDS = 0.75
 RENDER_POLL_ATTEMPTS = 10
 
-# Liepin uses 3-digit city codes passed via the ``dqs`` parameter. Only codes
-# verified live are bundled; unknown cities are rejected instead of guessing.
-CITY_SNAPSHOT = (
-    {"name": "北京", "code": "010"},
-    {"name": "上海", "code": "020"},
-    {"name": "广州", "code": "050"},
-    {"name": "深圳", "code": "060"},
-    {"name": "杭州", "code": "070"},
-    {"name": "成都", "code": "080"},
-    {"name": "南京", "code": "090"},
-    {"name": "苏州", "code": "100"},
-    {"name": "武汉", "code": "110"},
-    {"name": "天津", "code": "130"},
-    {"name": "西安", "code": "270"},
-    {"name": "重庆", "code": "040"},
-    {"name": "长沙", "code": "190"},
-    {"name": "郑州", "code": "170"},
-    {"name": "青岛", "code": "200"},
-    {"name": "厦门", "code": "230"},
-    {"name": "合肥", "code": "250"},
-    {"name": "大连", "code": "210"},
-)
+CITY_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "liepin_cities.json"
 
 
 def load_liepin_city_snapshot() -> dict[str, Any]:
-    return {
-        "schema": "bosshunter.liepin_cities.v1",
-        "source": "verified_snapshot",
-        "note": "当前内置已核验的猎聘 3 位城市编码（dqs 参数）；其他城市需核验后再加入。",
-        "cities": [dict(item) for item in CITY_SNAPSHOT],
-    }
+    payload = json.loads(CITY_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    if payload.get("schema") != "bosshunter.liepin_cities.v1":
+        raise ValueError("liepin 城市快照 schema 无效")
+    return payload
 
 
 def get_liepin_city_code(city: str) -> str | None:
     normalized = str(city or "").strip().removesuffix("市")
-    for item in CITY_SNAPSHOT:
-        if item["name"].removesuffix("市") == normalized:
-            return item["code"]
+    snapshot = load_liepin_city_snapshot()
+    for item in snapshot.get("cities", []):
+        if str(item.get("name", "")).removesuffix("市") == normalized:
+            return str(item["code"])
     return None
 
 

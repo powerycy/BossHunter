@@ -27,7 +27,10 @@ class LiepinCollectorTests(TestCase):
     def test_city_and_option_defaults_are_fail_closed(self):
         self.assertEqual(get_liepin_city_code("北京市"), "010")
         self.assertEqual(get_liepin_city_code("上海市"), "020")
-        self.assertEqual(get_liepin_city_code("广州市"), "050")
+        self.assertEqual(get_liepin_city_code("广州市"), "050020")
+        self.assertEqual(get_liepin_city_code("深圳市"), "050090")
+        self.assertEqual(get_liepin_city_code("杭州市"), "070020")
+        self.assertEqual(get_liepin_city_code("长沙市"), "180020")
         self.assertIsNone(get_liepin_city_code("未知城市"))
         options = normalize_collection_options({}, {
             "platform_order": ["liepin"],
