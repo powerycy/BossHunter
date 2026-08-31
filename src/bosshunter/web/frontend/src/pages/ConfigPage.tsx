@@ -9,6 +9,7 @@ import { CityMultiSelect, type CityOption } from '@/components/config/CityMultiS
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Save, RotateCcw, Upload, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { PLATFORM_LABELS, PLATFORM_SHORT_LABELS } from '@/lib/platforms'
 
 const AI_SERVICES = {
   anthropic: {
@@ -404,7 +405,7 @@ export default function ConfigPage() {
             </p>
             {(['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).map(platform => {
               const search = platformSearch(platform)
-              const label = platform === 'boss' ? 'BOSS 直聘' : platform === 'zhilian' ? '智联招聘' : platform === '51job' ? '前程无忧' : '猎聘'
+              const label = PLATFORM_LABELS[platform]
               const platformCityOptions = platform === 'zhilian' ? zhilianCityOptions : platform === 'liepin' ? liepinCityOptions : job51CityOptions
               const enabled = config.platforms?.[platform]?.enabled ?? platform === 'boss'
               const cities = Array.isArray(search.cities) && search.cities.length
@@ -436,7 +437,7 @@ export default function ConfigPage() {
                       /> : <>
                         <Input list={`config-${platform}-city-options`} value={cityInput} onChange={event => updatePlatformCities(platform, event.target.value.split(/[,，]/).map(value => value.trim()).filter(Boolean))} placeholder={platform === '51job' ? '如：上海' : '如：深圳'} />
                         <datalist id={`config-${platform}-city-options`}>{platformCityOptions.map(city => <option key={city.code} value={city.name} />)}</datalist>
-                        <p className="mt-1 text-xs text-muted">{platform === 'zhilian' ? '智联' : platform === '51job' ? '51job' : '猎聘'}只使用已验证的城市编码；当前内置 {platformCityOptions.length} 个城市。</p>
+                        <p className="mt-1 text-xs text-muted">{PLATFORM_SHORT_LABELS[platform]}只使用已验证的城市编码；当前内置 {platformCityOptions.length} 个城市。</p>
                         {!!cities.length && <div className="mt-2 flex flex-wrap gap-1">{cities.map((city: string) => {
                           const matched = platformCityOptions.find(option => option.name.replace(/市$/, '') === city.replace(/市$/, ''))
                           return <span key={city} className={`rounded-full px-2 py-1 text-xs ${matched ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{city} · {matched ? '已自动识别' : '暂未收录'}</span>

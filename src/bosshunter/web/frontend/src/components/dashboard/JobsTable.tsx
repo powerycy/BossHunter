@@ -3,6 +3,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Trash2 } from 'lucide-react'
 import { getStatusLabel } from '@/lib/status'
+import { PLATFORM_SHORT_LABELS } from '@/lib/platforms'
 import type { Job } from '@/hooks/useDashboard'
 import type { JobSortKey, JobSortOrder } from '@/hooks/useJobSearch'
 
@@ -162,7 +163,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                         <div className="flex items-center gap-2">
                           <span className="max-w-[160px] truncate font-black text-foreground">{job.company}</span>
                           <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${job.source_platform === 'boss' || !job.source_platform ? 'bg-[#FFF0E5] text-primary' : 'bg-blue-50 text-blue-700'}`}>
-                            {job.source_platform === 'zhilian' ? '智联' : job.source_platform === '51job' ? '51job' : job.source_platform === 'liepin' ? '猎聘' : 'BOSS'}
+                            {PLATFORM_SHORT_LABELS[job.source_platform || 'boss'] || 'BOSS'}
                           </span>
                           {job.company_size && (
                             <span className="rounded-full bg-[#FFFCFA] px-2 py-0.5 text-[10px] font-bold text-muted">{job.company_size}</span>

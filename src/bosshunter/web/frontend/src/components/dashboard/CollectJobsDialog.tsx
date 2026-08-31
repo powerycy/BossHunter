@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import type { WorkbenchTask } from '@/hooks/useDashboard'
+import { PLATFORM_LABELS, PLATFORM_SHORT_LABELS } from '@/lib/platforms'
 
 type PlatformId = 'boss' | 'zhilian' | '51job' | 'liepin'
 
@@ -200,8 +201,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
       const keywords = splitValues(draft.keywords)
       const cities = splitValues(draft.cities)
       if (!keywords.length || !cities.length) {
-        const label = platform === 'boss' ? 'BOSS 直聘' : platform === 'zhilian' ? '智联招聘' : platform === '51job' ? '前程无忧' : '猎聘'
-        setError(`${label} 需要至少一个关键词和城市。`)
+        setError(`${PLATFORM_LABELS[platform]} 需要至少一个关键词和城市。`)
         return
       }
       const configuredCodes = parseCityCodes(draft.cityCodes)
@@ -211,7 +211,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
         : configuredCodes
       if (platform !== 'boss' && cities.some(city => !cityCodes[city])) {
         const missing = cities.filter(city => !cityCodes[city]).join('、')
-        setError(`${platform === 'zhilian' ? '智联' : platform === '51job' ? '51job' : '猎聘'} 内置城市目录暂未收录：${missing}。请选择已验证城市。`)
+        setError(`${PLATFORM_SHORT_LABELS[platform]} 内置城市目录暂未收录：${missing}。请选择已验证城市。`)
         return
       }
       platforms[platform] = {
@@ -243,7 +243,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               {Object.entries(activeTask.progress.platforms).map(([platform, state]) => (
                 <div key={platform} className="rounded-xl border border-card-border bg-white p-3 text-sm">
-                  <div className="flex items-center justify-between font-black"><span>{platform === 'boss' ? 'BOSS 直聘' : platform === 'zhilian' ? '智联招聘' : platform === '51job' ? '前程无忧' : '猎聘'}</span><span>新增 {state.new}</span></div>
+                  <div className="flex items-center justify-between font-black"><span>{PLATFORM_LABELS[platform] || platform}</span><span>新增 {state.new}</span></div>
                   <div className="mt-1 text-xs text-muted">{state.status} · {state.city || '等待'} · {state.keyword || ''} · 第 {state.page || 0}/{state.max_pages || 0} 页</div>
                   <div className="mt-1 text-xs text-muted">扫描 {state.seen || 0} · 重复 {state.duplicate || 0} · 过滤 {state.filtered || 0} · 解析失败 {state.parse_failed || 0} · 保存失败 {state.save_failed || 0}</div>
                   {state.message && <div className="mt-1 text-xs text-primary">{state.message}</div>}
@@ -256,7 +256,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
           {(['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).map(platform => {
             const draft = drafts[platform]
-            const label = platform === 'boss' ? 'BOSS 直聘' : platform === 'zhilian' ? '智联招聘' : platform === '51job' ? '前程无忧' : '猎聘'
+            const label = PLATFORM_LABELS[platform]
             const platformCities = platform === 'zhilian' ? zhilianCities : platform === '51job' ? job51Cities : liepinCities
             return (
               <section key={platform} className={`rounded-2xl border p-4 ${draft.enabled ? 'border-primary/30 bg-[#FFFCFA]' : 'border-card-border bg-white opacity-70'}`}>
@@ -271,7 +271,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
                     <datalist id={`${platform}-city-options`}>{platformCities.map(city => <option key={city.code} value={city.name} />)}</datalist>
                     <div className="rounded-xl border border-card-border bg-white px-3 py-2 text-xs text-muted">
                       <div className="font-bold text-foreground">平台城市编码</div>
-                      <p className="mt-1">系统只使用已验证的{platform === 'zhilian' ? '智联' : platform === '51job' ? '51job' : '猎聘'}城市编码，不会猜测。</p>
+                      <p className="mt-1">系统只使用已验证的{PLATFORM_SHORT_LABELS[platform]}城市编码，不会猜测。</p>
                       {!!splitValues(draft.cities).length && <div className="mt-2 flex flex-wrap gap-1">
                         {splitValues(draft.cities).map(city => <span key={city} className={`rounded-full px-2 py-1 ${findPlatformCity(city, platformCities) ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
                           {city} · {findPlatformCity(city, platformCities) ? '已自动识别' : '暂未收录'}
@@ -291,7 +291,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
         </div>
 
         <div className="mt-4 rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
-          <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black">执行顺序</div><p className="mt-1 text-xs text-muted">平台串行采集；智联、前程无忧和猎聘暂不执行发送或监听。</p></div><div className="flex gap-2">{enabledOrder.map((platform, index) => <div key={platform} className="flex items-center gap-1 rounded-full bg-white px-3 py-1 text-xs font-black text-primary"><span>{index + 1}. {platform === 'boss' ? 'BOSS' : platform === 'zhilian' ? '智联' : platform === '51job' ? '51job' : '猎聘'}</span><button type="button" onClick={() => move(platform, -1)} disabled={index === 0} aria-label="上移"><ArrowUp className="h-3 w-3" /></button><button type="button" onClick={() => move(platform, 1)} disabled={index === enabledOrder.length - 1} aria-label="下移"><ArrowDown className="h-3 w-3" /></button></div>)}</div></div>
+          <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black">执行顺序</div><p className="mt-1 text-xs text-muted">平台串行采集；智联、前程无忧和猎聘暂不执行发送或监听。</p></div><div className="flex gap-2">{enabledOrder.map((platform, index) => <div key={platform} className="flex items-center gap-1 rounded-full bg-white px-3 py-1 text-xs font-black text-primary"><span>{index + 1}. {PLATFORM_SHORT_LABELS[platform]}</span><button type="button" onClick={() => move(platform, -1)} disabled={index === 0} aria-label="上移"><ArrowUp className="h-3 w-3" /></button><button type="button" onClick={() => move(platform, 1)} disabled={index === enabledOrder.length - 1} aria-label="下移"><ArrowDown className="h-3 w-3" /></button></div>)}</div></div>
         </div>
 
         <label className="mt-4 flex items-center justify-between rounded-2xl border border-card-border bg-white p-4"><div><div className="text-sm font-black">{mode === 'full' ? '全流程自动评分' : '采集后自动评分'}</div><p className="mt-1 text-xs leading-5 text-muted">{mode === 'full' ? '全流程必须先评分；评分后进入人工确认，再按平台适配器执行招呼和监测。' : '默认关闭；开启后只评分本轮新增岗位，评分结束即停止，不发送消息、不投递、不监测。'}</p></div><Switch checked={mode === 'full' || autoScore} onChange={mode === 'full' ? () => undefined : setAutoScore} disabled={mode === 'full'} /></label>
