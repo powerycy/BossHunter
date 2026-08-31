@@ -12,6 +12,7 @@ import json
 import random
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -27,29 +28,32 @@ PAGE_DELAY_MIN_SECONDS = 30.0
 PAGE_DELAY_MAX_SECONDS = 45.0
 RENDER_POLL_INTERVAL_SECONDS = 0.75
 RENDER_POLL_ATTEMPTS = 10
-
-# Only codes verified by the contributed implementation are bundled. Unknown
-# cities are rejected instead of guessing or reusing another platform's code.
-CITY_SNAPSHOT = (
-    {"name": "北京", "code": "010000"},
-    {"name": "上海", "code": "020000"},
-)
+CITY_SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "data" / "51job_cities.json"
 
 
 def load_51job_city_snapshot() -> dict[str, Any]:
+    try:
+        payload = json.loads(CITY_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        payload = {}
+    cities = payload.get("cities") if isinstance(payload, dict) and isinstance(payload.get("cities"), list) else []
     return {
         "schema": "bosshunter.51job_cities.v1",
-        "source": "verified_snapshot",
-        "note": "当前内置已核验的北京、上海城市编码；其他城市需核验后再加入。",
-        "cities": [dict(item) for item in CITY_SNAPSHOT],
+        "source": str(payload.get("source") or "verified_snapshot") if isinstance(payload, dict) else "verified_snapshot",
+        "note": payload.get("note", "51job 城市编码由城市频道页 areaCode 字段核验") if isinstance(payload, dict) else "51job 城市编码需核验",
+        "cities": cities,
     }
 
 
 def get_51job_city_code(city: str) -> str | None:
     normalized = str(city or "").strip().removesuffix("市")
-    for item in CITY_SNAPSHOT:
-        if item["name"].removesuffix("市") == normalized:
-            return item["code"]
+    if not normalized:
+        return None
+    for item in load_51job_city_snapshot()["cities"]:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("name", "")).removesuffix("市") == normalized and str(item.get("code") or "").strip():
+            return str(item["code"]).strip()
     return None
 
 

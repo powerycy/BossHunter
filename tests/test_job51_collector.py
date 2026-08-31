@@ -21,7 +21,8 @@ class Job51CollectorTests(TestCase):
     def test_city_and_option_defaults_are_fail_closed(self):
         self.assertEqual(get_51job_city_code("北京市"), "010000")
         self.assertEqual(get_51job_city_code("上海市"), "020000")
-        self.assertIsNone(get_51job_city_code("广州"))
+        self.assertEqual(get_51job_city_code("广州"), "030200")
+        self.assertIsNone(get_51job_city_code("不存在的城市"))
         options = normalize_collection_options({}, {
             "platform_order": ["51job"],
             "platforms": {"51job": {"keywords": ["AI 产品"], "cities": ["上海"]}},
