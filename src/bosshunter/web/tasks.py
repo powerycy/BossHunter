@@ -16,6 +16,7 @@ MODE_LABELS = {
     "collect": "单独采集",
     "score": "单独 AI 评分",
     "rescore": "重新评分",
+    "greet": "生成招呼语",
     "monitor": "单独监测",
     "deliver": "确认投递",
 }

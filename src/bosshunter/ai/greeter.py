@@ -670,6 +670,15 @@ def generate_greetings(config: dict, job_ids: list[str] | None = None) -> int:
     pause_reason = ""
     stop_event = config.get("_workbench_stop_event")
     cancelled = False
+    workbench_log = config.get("_workbench_log")
+
+    def _report_job_progress(current_job: dict, current_index: int) -> None:
+        # Background-task progress only: the CLI already renders a progress bar,
+        # so per-job lines are surfaced solely through the workbench log channel.
+        if callable(workbench_log):
+            workbench_log(
+                f"生成招呼语 ({current_index}/{len(jobs)})：{current_job['company']}｜{current_job['title']}"
+            )
 
     with Progress(
         SpinnerColumn(),
@@ -753,6 +762,7 @@ def generate_greetings(config: dict, job_ids: list[str] | None = None) -> int:
                 if not pause_reason and not (stop_event is not None and stop_event.is_set()):
                     add_history(db, job["id"], "greeting_failed", "AI 未返回完整招呼语，岗位保留为待生成")
                     _notify(config, f"已跳过 {job['company']}｜{job['title']}：AI 未返回完整招呼语，岗位保留为待生成。")
+                _report_job_progress(job, index)
                 progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
                 if pause_reason:
                     break
@@ -769,12 +779,14 @@ def generate_greetings(config: dict, job_ids: list[str] | None = None) -> int:
                     config,
                     f"{job['company']}｜{job['title']} 的岗位状态已变更，招呼语未保存。",
                 )
+                _report_job_progress(job, index)
                 progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
                 continue
             opening = _opening_signature(best_greeting)
             if opening:
                 recent_openings.append(opening)
             count += 1
+            _report_job_progress(job, index)
             progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
 
             if pause_after_current:

@@ -960,6 +960,56 @@ class GreeterTokenResilienceTests(unittest.TestCase):
         self.assertEqual(count, 0)
         update_greeting.assert_not_called()
 
+    def test_invented_url_never_enters_ready_state_end_to_end(self):
+        # PR #90 审查要求：端到端覆盖"未知网址不能进入待发送状态"。
+        # 使用真实 SQLite（而非 MagicMock）验证编造网址的生成结果不会落库。
+        from bosshunter.db import get_db as open_db
+        from bosshunter.db import insert_job, update_job_status
+
+        logs: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data" / "bosshunter.db"
+            db = open_db(db_path)
+            try:
+                insert_job(db, _job("invented-e2e"))
+                update_job_status(db, "invented-e2e", "ready")
+            finally:
+                db.close()
+
+            with (
+                patch("bosshunter.ai.greeter.get_db", side_effect=lambda: open_db(db_path)),
+                patch("bosshunter.ai.greeter._get_resume_summary", return_value="这份简历摘要不含任何网址"),
+                patch(
+                    "bosshunter.ai.greeter._call_claude",
+                    return_value="项目介绍：https://invented.example/project",
+                ),
+            ):
+                count = greeter.generate_greetings(
+                    {
+                        "ai": {"greeting_max_attempts": 1, "greeting_max_iterations": 0},
+                        "_workbench_log": logs.append,
+                    },
+                    job_ids=["invented-e2e"],
+                )
+
+            verify_db = open_db(db_path)
+            try:
+                row = verify_db.execute(
+                    "SELECT greeting, status FROM jobs WHERE id = 'invented-e2e'"
+                ).fetchone()
+                history = verify_db.execute(
+                    "SELECT action FROM history WHERE job_id = 'invented-e2e'"
+                ).fetchall()
+            finally:
+                verify_db.close()
+
+        self.assertEqual(count, 0)
+        # 招呼语为空 + 状态未推进：该岗位不会进入"待发送招呼语"队列。
+        self.assertFalse(str(row["greeting"] or "").strip())
+        self.assertEqual(row["status"], "ready")
+        self.assertEqual([entry["action"] for entry in history], ["greeting_failed"])
+        self.assertTrue(any("未提供的网址" in message for message in logs))
+
     def test_greeting_json_wrapper_is_normalized(self):
         response = '```json\n{"greeting":"您好，我的产品经验与岗位需求比较匹配。"}\n```'
 

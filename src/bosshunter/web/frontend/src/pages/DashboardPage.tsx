@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useDashboard, type CollectionProgress, type HistoryItem, type Job, type WorkbenchTask } from '@/hooks/useDashboard'
 import { useJobSearch, type JobSortKey, type JobSortOrder } from '@/hooks/useJobSearch'
 import { Button } from '@/components/ui/button'
@@ -184,7 +184,28 @@ const taskMetricItems = [
   { key: 'send_success', label: '发送成功' },
   { key: 'send_deferred', label: '待下次发送' },
   { key: 'send_remaining_quota', label: '今日剩余额度' },
+  { key: 'greet_generated', label: '新生成' },
+  { key: 'greet_preserved', label: '保留现有' },
+  { key: 'greet_failed', label: '生成失败' },
 ]
+
+const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'stopped']
+
+async function waitForGreetTask(taskId: string, timeoutMs = 300000): Promise<WorkbenchTask | null> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const res = await fetch('/api/workbench')
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}) as { task?: WorkbenchTask | null; last_task?: WorkbenchTask | null })
+      const task = data.task?.id === taskId
+        ? data.task
+        : data.last_task?.id === taskId ? data.last_task : null
+      if (task && TERMINAL_TASK_STATUSES.includes(task.status)) return task
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000))
+  }
+  return null
+}
 
 function jobSubtitle(job: Job) {
   return [job.score ? `匹配 ${job.score}` : '', job.salary, job.hr_active || '活跃度未知', getStatusLabel(job.status)].filter(Boolean).join(' · ')
@@ -347,6 +368,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const [collectDialogOpen, setCollectDialogOpen] = useState(false)
   const [collectDialogMode, setCollectDialogMode] = useState<'collect' | 'full'>('collect')
   const [generatingGreetings, setGeneratingGreetings] = useState(false)
+  const startedGreetTaskIdRef = useRef<string | null>(null)
 
   const todayJobs = useMemo(
     () => workbench.pending_confirmation.filter(job => !confirmedDeliveryIds.has(job.id)),
@@ -381,6 +403,27 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const activeTask = workbench.task
   const visibleTask = activeTask || workbench.last_task
   const visibleTaskError = visibleTask?.error ? taskErrorFeedback(visibleTask.error) : null
+  const greetTaskRunning = activeTask != null && activeTask.mode === 'greet'
+    && (activeTask.status === 'running' || activeTask.status === 'stopping')
+
+  useEffect(() => {
+    const startedId = startedGreetTaskIdRef.current
+    if (!startedId) return
+    const greetTask = activeTask?.id === startedId
+      ? activeTask
+      : workbench.last_task?.id === startedId ? workbench.last_task : null
+    if (!greetTask || !TERMINAL_TASK_STATUSES.includes(greetTask.status)) return
+    startedGreetTaskIdRef.current = null
+    if (greetTask.status === 'completed') {
+      const metrics = greetTask.metrics ?? {}
+      const conflictCount = greetTask.progress?.conflict_ids?.length ?? 0
+      setNotice(
+        `招呼语生成完成：新生成 ${metrics.greet_generated ?? 0}，保留现有 ${metrics.greet_preserved ?? 0}，失败 ${metrics.greet_failed ?? 0}`
+        + (conflictCount ? `；${conflictCount} 个岗位状态已变更未保存` : '')
+      )
+    }
+    void refresh()
+  }, [activeTask, workbench.last_task, refresh])
   const pendingReplies = history.filter(item => item.action === 'reply_pending')
 
   const toggleJob = (id: string) => {
@@ -532,7 +575,6 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
 
   const generateGreetings = async (ids: string[]) => {
     if (!ids.length) return
-    const count = ids.length
     setGeneratingGreetings(true)
     try {
       const res = await fetch('/api/workbench/greetings', {
@@ -540,21 +582,13 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ job_ids: ids }),
       })
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
         throw new Error(data.error || '生成招呼语失败')
       }
-      const data = await res.json().catch(() => ({}))
+      startedGreetTaskIdRef.current = data.task?.id ?? null
       await refresh()
-      setNotice(
-        data.generated_count === count
-          ? `已为 ${count} 个岗位生成招呼语。`
-          : data.generated_count
-            ? `已生成 ${data.generated_count}/${count} 条招呼语，其余岗位可稍后重试。`
-            : data.conflict_ids
-              ? `${count} 个岗位状态已变更，招呼语未保存，请刷新后重试。`
-              : '未生成招呼语，请检查 AI 配置后重试。'
-      )
+      setNotice(`已开始为 ${ids.length} 个岗位生成招呼语，可在任务面板查看进度并随时停止。`)
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '生成招呼语失败')
     } finally {
@@ -943,8 +977,8 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           <div className="flex gap-2">
             <Button variant="secondary" size="sm" onClick={() => setSelected(filteredTodayJobs.map(job => job.id))}>全选</Button>
             <Button variant="secondary" size="sm" onClick={() => setSelected([])}>清空</Button>
-            <Button variant="secondary" size="sm" disabled={generatingGreetings} onClick={() => generateGreetings(actionableSelected)}>
-              {generatingGreetings ? '生成中...' : `生成打招呼用语 ${actionableSelected.length} 个`}
+            <Button variant="secondary" size="sm" disabled={generatingGreetings || greetTaskRunning} onClick={() => generateGreetings(actionableSelected)}>
+              {generatingGreetings || greetTaskRunning ? '生成中...' : `生成打招呼用语 ${actionableSelected.length} 个`}
             </Button>
             <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(actionableSelected)}>放弃已选 {actionableSelected.length} 个</Button>
             <Button size="sm" onClick={() => confirmDeliver(actionableSelected)}>一键投递已选 {actionableSelected.length} 个</Button>
@@ -1082,9 +1116,33 @@ function JobDetailModal({ job, onClose, onChanged }: { job: Job; onClose: () => 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ job_ids: [job.id], regenerate: true }),
       })
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
         throw new Error(data.error || '重新生成失败')
+      }
+      const taskId = data.task?.id
+      const finished = taskId ? await waitForGreetTask(taskId) : null
+      if (!finished) {
+        const detailRes = await fetch(`/api/jobs/${job.id}`)
+        if (detailRes.ok) {
+          const detail = await detailRes.json()
+          setGreeting(detail.greeting || '')
+        }
+        onChanged?.()
+        setNotice('生成时间较长，任务仍在后台运行，稍后刷新查看结果。')
+        return
+      }
+      if (finished.status === 'stopped') {
+        throw new Error('重新生成已停止，岗位保留原有招呼语')
+      }
+      if (finished.status === 'failed') {
+        throw new Error(finished.error ? `重新生成失败：${finished.error}` : '重新生成失败')
+      }
+      if ((finished.progress?.conflict_ids ?? []).includes(job.id)) {
+        throw new Error('岗位状态已变更，招呼语未保存，请刷新后重试')
+      }
+      if (!finished.metrics?.greet_generated) {
+        throw new Error('AI 未返回完整招呼语，岗位保留为待生成，可稍后重试')
       }
       const detailRes = await fetch(`/api/jobs/${job.id}`)
       if (detailRes.ok) {

@@ -861,11 +861,45 @@ def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
 		raise RuntimeError(f"发送已安全暂停：检测到{reason_labels[stop_reason]}")
 
 
+def _execute_greet(task: WorkbenchTask, config: dict) -> None:
+	from bosshunter.ai.greeter import generate_greetings
+
+	config = dict(config)
+	config["_workbench_stop_event"] = task.stop_requested
+	config["_workbench_log"] = lambda message: _log(task, message)
+	selected_job_ids = [str(job_id) for job_id in config.get("_workbench_job_ids", []) if str(job_id)]
+	_log(task, f"开始为 {len(selected_job_ids)} 个岗位生成招呼语")
+	generated_count = generate_greetings(config, job_ids=selected_job_ids)
+	report = config.get("_workbench_greeting_report", {})
+	conflict_ids = [str(job_id) for job_id in report.get("conflict_ids", [])]
+	preserved_count = int(report.get("skipped_existing", 0) or 0)
+	failed_count = int(report.get("failed_count", 0) or 0)
+	task.metrics.update({
+		"greet_requested": len(selected_job_ids),
+		"greet_generated": int(generated_count),
+		"greet_preserved": preserved_count,
+		"greet_failed": failed_count,
+		"greet_conflicts": len(conflict_ids),
+	})
+	if conflict_ids:
+		task.progress["conflict_ids"] = conflict_ids
+	_log(
+		task,
+		"招呼语生成结果：新生成 {generated}，保留现有 {preserved}，失败 {failed}{conflicts}".format(
+			generated=int(generated_count),
+			preserved=preserved_count,
+			failed=failed_count,
+			conflicts=f"，状态冲突 {len(conflict_ids)}（岗位状态已变更，招呼语未保存）" if conflict_ids else "",
+		),
+	)
+
+
 task_runner._executors.update({
 	"full": _execute_full,
 	"collect": _execute_collect,
 	"rescore": _execute_rescore,
 	"score": _execute_score,
+	"greet": _execute_greet,
 	"monitor": _execute_monitor,
 	"deliver": _execute_deliver,
 })
@@ -1624,9 +1658,7 @@ def api_workbench_reject():
 
 @app.route("/api/workbench/greetings", method="POST")
 def api_workbench_generate_greetings():
-	"""Generate greetings for selected jobs without sending them."""
-	from bosshunter.ai.greeter import generate_greetings
-
+	"""Start a background task that generates greetings for selected jobs without sending them."""
 	try:
 		body = request.json or {}
 		job_ids = [str(job_id) for job_id in body.get("job_ids", []) if str(job_id)]
@@ -1655,23 +1687,14 @@ def api_workbench_generate_greetings():
 				"invalid_ids": invalid_ids,
 			}, 409)
 
-		config = load_config(CONFIG_PATH)
-		config["_workbench_job_ids"] = job_ids
-		config["_workbench_regenerate"] = body.get("regenerate") is True
-		generated_count = generate_greetings(config, job_ids=job_ids)
-		report = config.get("_workbench_greeting_report", {})
-		conflict_ids = report.get("conflict_ids", [])
-		if conflict_ids and not generated_count:
-			return _json_response({
-				"error": "所选岗位状态已变更，招呼语未保存",
-				"code": "greeting_status_blocked",
-				"invalid_ids": conflict_ids,
-			}, 409)
-		return _json_response({
-			"success": True,
-			"generated_count": generated_count,
-			**({"conflict_ids": conflict_ids} if conflict_ids else {}),
-		})
+		with job_mutation_lock:
+			task = task_runner.start("greet", _task_config({
+				"_workbench_job_ids": job_ids,
+				"_workbench_regenerate": body.get("regenerate") is True,
+			}))
+		return _json_response({"success": True, "task": task})
+	except TaskAlreadyRunningError as e:
+		return _json_response({"error": str(e)}, 409)
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
 
