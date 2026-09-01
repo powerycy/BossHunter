@@ -280,7 +280,7 @@ class MonitorReplyDismissTests(unittest.TestCase):
     def test_short_positive_hr_replies_are_treated_as_resume_intent(self):
         from bosshunter.executor import monitor
 
-        for reply in ("好", "好的！", "可以。"):
+        for reply in ("好", "好的！", "可以。", "你好啊，可以聊一聊~"):
             with self.subTest(reply=reply):
                 messages = [
                     {"sender": "me", "text": "如果合适，我可以补充发送简历。"},
@@ -349,12 +349,12 @@ class MonitorReplyDismissTests(unittest.TestCase):
         self.assertIn("新岗位速递", monitor.JS_EXTRACT_CHAT_LIST)
         self.assertIn("我是你的求职助手", monitor.JS_EXTRACT_CHAT_LIST)
 
-    def test_short_positive_hr_reply_generates_tailored_resume(self):
+    def test_boss_chat_invitation_generates_tailored_resume(self):
         from bosshunter.executor import monitor
 
         messages = [
             {"sender": "me", "text": "如果合适，我可以补充发送简历。"},
-            {"sender": "hr", "text": "可以"},
+            {"sender": "hr", "text": "你好啊，可以聊一聊~"},
         ]
 
         with tempfile.TemporaryDirectory() as tmp:
