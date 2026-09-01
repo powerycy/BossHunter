@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from threading import Event
 from unittest import TestCase
+from unittest.mock import patch
 
 from bosshunter.collection.base import CollectionBlockedError, CollectionError, CollectorHooks
 from bosshunter.collection.models import PlatformCollectionRequest
@@ -23,6 +24,18 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class ZhilianFixtureTests(TestCase):
+    def setUp(self):
+        self._patches = [
+            patch("bosshunter.collection.platforms.zhilian.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.zhilian.should_take_day_off", return_value=False),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+
     def test_city_snapshot_is_local_and_not_shared_with_boss_codes(self):
         snapshot = load_zhilian_city_snapshot()
         self.assertEqual(snapshot["schema"], "bosshunter.zhilian_cities.v1")
@@ -374,3 +387,67 @@ class ZhilianFixtureTests(TestCase):
 
         self.assertEqual(detail["status"], "ready")
         self.assertEqual(waits, [0.8])
+
+
+class ZhilianEnhancedTests(TestCase):
+    """智联采集器增强：时间窗口 / 过滤链 / config 集成。"""
+
+    def _hooks(self):
+        return CollectorHooks(
+            stop_event=None,
+            on_list_candidate=lambda _c: True,
+            on_candidate=lambda _c: True,
+            on_parse_failed=lambda _r: None,
+            on_event=lambda **_: None,
+        )
+
+    def test_outside_send_window_skips_collection(self):
+        collector = ZhilianCollector()
+        with patch("bosshunter.collection.platforms.zhilian.SendWindowChecker.is_active", return_value=False):
+            result = collector.collect(
+                PlatformCollectionRequest("zhilian", ["AI"], ["北京"], {"北京": "530"}, max_pages=1),
+                self._hooks(),
+            )
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.reason_code, "outside_window")
+
+    def test_day_off_skips_collection(self):
+        collector = ZhilianCollector()
+        with (
+            patch("bosshunter.collection.platforms.zhilian.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.zhilian.should_take_day_off", return_value=True),
+        ):
+            result = collector.collect(
+                PlatformCollectionRequest("zhilian", ["AI"], ["北京"], {"北京": "530"}, max_pages=1),
+                self._hooks(),
+            )
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.reason_code, "day_off")
+
+    def test_deal_breaker_filter(self):
+        from bosshunter.collection.models import JobCandidate
+        collector = ZhilianCollector(config={"profile": {"deal_breakers": ["外包"]}})
+        c = JobCandidate(platform="zhilian", source_job_id="1", title="外包AI",
+                         company="公司", city="北京", city_code="530")
+        self.assertFalse(collector._passes_filters(c))
+
+    def test_blocked_company_filter(self):
+        from bosshunter.collection.models import JobCandidate
+        collector = ZhilianCollector(config={"profile": {"blocked_companies": ["黑名单"]}})
+        c = JobCandidate(platform="zhilian", source_job_id="1", title="AI工程师",
+                         company="黑名单", city="北京", city_code="530")
+        self.assertFalse(collector._passes_filters(c))
+
+    def test_internship_filter(self):
+        from bosshunter.collection.models import JobCandidate
+        collector = ZhilianCollector(config={"profile": {"allow_internship": False}})
+        c = JobCandidate(platform="zhilian", source_job_id="1", title="AI实习",
+                         company="公司", city="北京", city_code="530")
+        self.assertFalse(collector._passes_filters(c))
+
+    def test_no_filter_passes(self):
+        from bosshunter.collection.models import JobCandidate
+        collector = ZhilianCollector()
+        c = JobCandidate(platform="zhilian", source_job_id="1", title="AI工程师",
+                         company="公司", city="北京", city_code="530")
+        self.assertTrue(collector._passes_filters(c))
