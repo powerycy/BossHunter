@@ -1490,7 +1490,7 @@ function isResumeFailureResolved(item: HistoryItem, history: HistoryItem[]) {
   return Boolean(item.resolved || item.resume_path) || history.some(candidate =>
     candidate.id > item.id
     && sameHistoryJob(item, candidate)
-    && (candidate.action === 'needs_resume' || candidate.action === 'resume_sent')
+    && (candidate.action === 'needs_resume' || candidate.action === 'resume_sent' || candidate.action === 'resume_failed_dismissed')
   )
 }
 
@@ -1684,6 +1684,36 @@ function MonitorExecutionView({
     }
   }
 
+  const retryResumeGeneration = async (item: HistoryItem) => {
+    if (!window.confirm('确定重新生成这份定制简历吗？需要 AI 接口和 Chrome 环境正常。')) return
+    try {
+      const res = await fetch(`/api/history/${item.id}/resume-retry`, { method: 'POST' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || '重试生成失败')
+      }
+      await refresh()
+      setNotice('定制简历已重新生成，请到工作台HR 要简历区域下载发送。')
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '重试生成失败')
+    }
+  }
+
+  const dismissResumeFailure = async (item: HistoryItem) => {
+    if (!window.confirm('确定放弃这条简历生成失败记录吗？放弃后将不再出现在待处理中。')) return
+    try {
+      const res = await fetch(`/api/history/${item.id}/resume-dismiss`, { method: 'POST' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || '忽略失败')
+      }
+      await refresh()
+      setNotice('已放弃这条简历生成失败记录。')
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '忽略失败')
+    }
+  }
+
   return (
     <div className="rounded-3xl border border-card-border bg-white p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
@@ -1817,27 +1847,34 @@ function MonitorExecutionView({
                 ) : null}
               </div>
               <div className="grid gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={!canOpenChat || openingChat}
-                  onClick={() => void openMonitorConversation(item)}
-                >
-                  <ExternalLink className="mr-2 h-4 w-4" />{openingChat ? '定位中…' : monitorLinkLabel(item)}
-                </Button>
-                {isDetectedReply ? (
-                  <Button size="sm" disabled={preparingReply} onClick={() => void prepareDetectedReply(item)}>
-                    {preparingReply ? '读取中…' : '读取并生成建议'}
+                <div className="grid gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={!canOpenChat || openingChat}
+                    onClick={() => void openMonitorConversation(item)}
+                  >
+                    <ExternalLink className="mr-2 h-4 w-4" />{openingChat ? '定位中' : monitorLinkLabel(item)}
                   </Button>
-                ) : canReply ? (
-                  <>
-                    <Button size="sm" onClick={() => sendManualReply(item)}><MessageCircle className="mr-2 h-4 w-4" />确认回复</Button>
-                    <Button variant="secondary" size="sm" onClick={() => document.getElementById(`reply-draft-${item.id}`)?.focus()}>编辑回复</Button>
-                    <Button variant="secondary" size="sm" onClick={() => dismissPendingReply(item)}>放弃</Button>
-                  </>
-                ) : (
-                  <div className="px-2 py-1 text-center text-xs text-muted">本轮已处理，无需再次确认</div>
-                )}
+                  {isDetectedReply ? (
+                    <Button size="sm" disabled={preparingReply} onClick={() => void prepareDetectedReply(item)}>
+                      {preparingReply ? '读取中' : '读取并生成建议'}
+                    </Button>
+                  ) : canReply ? (
+                    <>
+                      <Button size="sm" onClick={() => sendManualReply(item)}><MessageCircle className="mr-2 h-4 w-4" />确认回复</Button>
+                      <Button variant="secondary" size="sm" onClick={() => document.getElementById(`reply-draft-${item.id}`)?.focus()}>编辑回复</Button>
+                      <Button variant="secondary" size="sm" onClick={() => dismissPendingReply(item)}>放弃</Button>
+                    </>
+                  ) : isResumeFailure ? (
+                    <>
+                      <Button size="sm" variant="secondary" onClick={() => retryResumeGeneration(item)}><RefreshCw className="mr-2 h-4 w-4" />重试生成</Button>
+                      <Button variant="secondary" size="sm" onClick={() => dismissResumeFailure(item)}><XCircle className="mr-2 h-4 w-4" />放弃</Button>
+                    </>
+                  ) : (
+                    <div className="px-2 py-1 text-center text-xs text-muted">本轮已处理，无需再次确认</div>
+                  )}
+                </div>
               </div>
             </div>
           )

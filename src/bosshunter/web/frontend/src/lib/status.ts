@@ -29,6 +29,7 @@ export const ACTION_LABELS: Record<string, string> = {
   reply_dismissed: '已放弃回复',
   auto_replied: '自动回复',
   resume_failed: '简历生成失败',
+  resume_failed_dismissed: '已放弃简历失败',
   resume_sent: '简历已发',
   needs_resume: '待手动发简历',
   follow_up_sent: '已跟进',

@@ -1851,6 +1851,77 @@ def _api_history_dismiss_locked(history_id):
 		db.close()
 
 
+@app.route("/api/history/<history_id>/resume-retry", method="POST")
+def api_history_resume_retry(history_id):
+	db = _get_web_db()
+	try:
+		row = db.execute(
+			"SELECT id, job_id, action, detail FROM history WHERE id = ?",
+			(history_id,),
+		).fetchone()
+		if not row:
+			return _json_response({"error": "简历失败记录不存在"}, 404)
+		if row["action"] != "resume_failed":
+			return _json_response({"error": "只能重试简历生成失败记录"}, 400)
+
+		job = db.execute(
+			"SELECT * FROM jobs WHERE id = ? AND deleted_at IS NULL",
+			(row["job_id"],),
+		).fetchone()
+		if not job:
+			return _json_response({"error": "对应岗位不存在或已删除"}, 404)
+
+		from bosshunter.ai.resume import generate_tailored_resume, get_last_resume_failure_reason
+
+		try:
+			resume_path = generate_tailored_resume(job["id"], _task_config())
+		except Exception as exc:
+			return _json_response({"error": f"重新生成失败：{exc}"}, 500)
+
+		if not resume_path:
+			reason = get_last_resume_failure_reason(job["id"]) or "定制简历生成失败，未获得更具体的错误信息"
+			return _json_response({"error": reason}, 400)
+
+		update_job_status(db, job["id"], "needs_resume")
+		history_detail = json.dumps({
+			"schema": "needs_resume.v1",
+			"message": f"Web Dashboard 重试生成定制简历成功，待手动发送: {resume_path}",
+			"resume_path": str(resume_path),
+		}, ensure_ascii=False)
+		add_history(db, job["id"], "needs_resume", history_detail)
+		return _json_response({"success": True, "resume_path": str(resume_path)})
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/history/<history_id>/resume-dismiss", method="POST")
+def api_history_resume_dismiss(history_id):
+	db = _get_web_db()
+	try:
+		row = db.execute(
+			"SELECT id, job_id, action, detail FROM history WHERE id = ?",
+			(history_id,),
+		).fetchone()
+		if not row:
+			return _json_response({"error": "简历失败记录不存在"}, 404)
+		if row["action"] != "resume_failed":
+			return _json_response({"error": "只能忽略简历生成失败记录"}, 400)
+
+		add_history(
+			db,
+			row["job_id"],
+			"resume_failed_dismissed",
+			json.dumps({"schema": "resume_failed_dismissed.v1", "message": "Web Dashboard 忽略简历生成失败记录"}, ensure_ascii=False),
+		)
+		return _json_response({"success": True})
+	except Exception as exc:
+		return _json_response({"error": str(exc)}, 500)
+	finally:
+		db.close()
+
+
 # ─── Config APIs ─────────────────────────────────────────
 
 @app.route("/api/config")
