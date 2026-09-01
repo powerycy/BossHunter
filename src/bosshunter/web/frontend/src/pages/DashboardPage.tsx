@@ -16,6 +16,7 @@ import {
   type JobFilters,
 } from '@/lib/jobFilters'
 import { getActionLabel, getStatusLabel } from '@/lib/status'
+import { describeGreetTaskOutcome, greetPauseReasonLabel } from '@/lib/greetTask'
 import { cn } from '@/lib/utils'
 import {
   AlertTriangle,
@@ -415,12 +416,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     if (!greetTask || !TERMINAL_TASK_STATUSES.includes(greetTask.status)) return
     startedGreetTaskIdRef.current = null
     if (greetTask.status === 'completed') {
-      const metrics = greetTask.metrics ?? {}
-      const conflictCount = greetTask.progress?.conflict_ids?.length ?? 0
-      setNotice(
-        `招呼语生成完成：新生成 ${metrics.greet_generated ?? 0}，保留现有 ${metrics.greet_preserved ?? 0}，失败 ${metrics.greet_failed ?? 0}`
-        + (conflictCount ? `；${conflictCount} 个岗位状态已变更未保存` : '')
-      )
+      setNotice(describeGreetTaskOutcome(greetTask))
     }
     void refresh()
   }, [activeTask, workbench.last_task, refresh])
@@ -765,7 +761,13 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                   onClick={() => {
                     if (!window.confirm(`是否停止当前${activeTask.label}任务？已入库数据会保留。`)) return
                     setNotice(`正在停止${activeTask.label}...`)
-                    void stopTask(activeTask.id).then(() => setNotice(`${activeTask.label}已请求停止。`))
+                    void stopTask(activeTask.id)
+                      .then(() => setNotice(`${activeTask.label}已请求停止。`))
+                      .catch(err => setNotice(
+                        err instanceof Error
+                          ? `${activeTask.label}停止失败：${err.message}`
+                          : `${activeTask.label}停止失败，请稍后重试。`
+                      ))
                   }}
                 >
                   {activeTask.status === 'stopping' ? '正在停止...' : '停止任务'}
@@ -790,6 +792,11 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                       <div className="mt-0.5 text-lg font-black text-foreground">{visibleTask.metrics?.[item.key] ?? 0}</div>
                     </div>
                   ))}
+                </div>
+              )}
+              {Boolean(visibleTask.metrics?.greet_paused) && (
+                <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold leading-5 text-amber-800">
+                  提前暂停原因：{greetPauseReasonLabel(visibleTask.metrics?.greet_pause_reason) || 'AI 服务异常'}。已生成内容已保存，剩余岗位下次运行会继续处理。
                 </div>
               )}
             </div>

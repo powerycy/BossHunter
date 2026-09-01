@@ -58,7 +58,7 @@ export interface WorkbenchTask {
   deadline_at?: string
   stop_reason?: string
   stop_requested: boolean
-  metrics?: Record<string, number>
+  metrics?: Record<string, number | string>
   progress?: CollectionProgress & { conflict_ids?: string[] }
 }
 

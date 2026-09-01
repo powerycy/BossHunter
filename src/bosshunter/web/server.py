@@ -852,14 +852,18 @@ def _execute_greet(task: WorkbenchTask, config: dict) -> None:
 	preserved_count = int(report.get("skipped_existing", 0) or 0)
 	failed_count = int(report.get("failed_count", 0) or 0)
 	pause_reason = str(report.get("pause_reason") or "")
-	task.metrics.update({
+	greet_metrics = {
 		"greet_requested": len(selected_job_ids),
 		"greet_generated": int(generated_count),
 		"greet_preserved": preserved_count,
 		"greet_failed": failed_count,
 		"greet_conflicts": len(conflict_ids),
 		"greet_paused": 1 if pause_reason else 0,
-	})
+	}
+	if pause_reason:
+		# 暂停原因（鉴权/额度/限流等类别 + 状态码）随指标透出，前端通知与任务面板据此展示具体原因。
+		greet_metrics["greet_pause_reason"] = pause_reason
+	task.metrics.update(greet_metrics)
 	if conflict_ids:
 		task.progress["conflict_ids"] = conflict_ids
 	_log(
