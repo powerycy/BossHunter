@@ -1876,6 +1876,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertIn("额度不足", result["error"])
         self.assertEqual(result["metrics"]["greet_paused"], 1)
         self.assertEqual(result["metrics"]["greet_generated"], 0)
+        self.assertEqual(result["metrics"]["greet_pause_reason"], "AI 账户额度不足 (quota, status=402)")
         self.assertTrue(any("AI 服务异常，任务提前结束" in message for message in result["logs"]))
 
     def test_greet_task_partial_pause_completes_with_annotation(self):
@@ -1920,6 +1921,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertIsNone(result["error"])
         self.assertEqual(result["metrics"]["greet_generated"], 1)
         self.assertEqual(result["metrics"]["greet_paused"], 1)
+        self.assertEqual(result["metrics"]["greet_pause_reason"], "API 请求被限流 (rate_limit)")
         self.assertTrue(any("本轮提前结束" in message for message in result["logs"]))
         self.assertTrue(any("rate_limit" in message for message in result["logs"]))
 
