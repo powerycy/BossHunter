@@ -1880,9 +1880,22 @@ def api_history_resume_retry(history_id):
 
 		if not resume_path:
 			reason = get_last_resume_failure_reason(job["id"]) or "定制简历生成失败，未获得更具体的错误信息"
+			add_history(
+				db,
+				job["id"],
+				"resume_failed",
+				json.dumps({
+					"schema": "resume_failed.v2",
+					"system_reason": reason,
+					"hr_question": "",
+					"conversation_tail": [],
+				}, ensure_ascii=False),
+			)
 			return _json_response({"error": reason}, 400)
 
-		update_job_status(db, job["id"], "needs_resume")
+		current_status = str(job["status"] or "").strip()
+		if current_status not in {"replied", "resume_sent", "needs_resume", "follow_up_sent"}:
+			update_job_status(db, job["id"], "needs_resume")
 		history_detail = json.dumps({
 			"schema": "needs_resume.v1",
 			"message": f"Web Dashboard 重试生成定制简历成功，待手动发送: {resume_path}",
