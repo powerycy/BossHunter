@@ -2308,6 +2308,12 @@ def error500(error):
 
 def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = True):
 	"""Start the web server."""
+	if not (FRONTEND_DIR / "index.html").is_file():
+		raise SystemExit(
+			"前端资源未构建：请在 src/bosshunter/web/frontend 下执行 "
+			"`npm ci && npm run build`（或安装官方发布的 wheel）后重试。"
+		)
+
 	if open_browser:
 		import webbrowser
 		import threading
