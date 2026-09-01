@@ -21,6 +21,21 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: src/bosshunter/web/frontend/package-lock.json
+
+      # The frontend dist/ is no longer tracked in VCS, so build it before
+      # installing the package (force-include in pyproject.toml requires it).
+      - name: Build frontend
+        working-directory: src/bosshunter/web/frontend
+        run: |
+          npm ci
+          npm run build
+
       - name: Install package
         run: pip install -e .
 
