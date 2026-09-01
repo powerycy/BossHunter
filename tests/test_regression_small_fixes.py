@@ -581,6 +581,8 @@ class DashboardPageTests(unittest.TestCase):
         self.assertNotIn("全流程卡在打招呼环节", self.source)
         self.assertIn("放弃已失效岗位", self.source)
         self.assertIn("放弃全部", self.source)
+        self.assertIn("sendReadyGreetings(workbench.send_errors.map(job => job.id))", self.source)
+        self.assertNotIn("confirmDeliver(workbench.send_errors.map(job => job.id))", self.source)
 
     def test_monitor_pending_replies_can_be_dismissed(self):
         # Arrange: DashboardPage source is loaded in setUp.
