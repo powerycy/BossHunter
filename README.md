@@ -133,33 +133,33 @@ bosshunter run
 
 | 排名 | 贡献者 | 贡献度 | 主要贡献方向 |
 |:---:|---|:---:|---|
-| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | **12%** | 岗位导出、城市目录、回收站、独立 AI 评分与多平台采集架构 |
-| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | **11.5%** | AI 兼容、评分恢复、错误传播、凭据优先级与 Windows 运行时兼容 |
-| 🥉 | [@GioiaZheng](https://github.com/GioiaZheng) | **10.5%** | API Key 安全、PDF 依赖降级与人工确认流程修复 |
-| 4 | [@atticus-zhou](https://github.com/atticus-zhou) | **8.5%** | AI 重试、浏览器交互、送达验证与防重复发送 |
-| 5 | [@haohao-fly](https://github.com/haohao-fly) | **7.5%** | 岗位筛选、评分重试、投递队列与任务保护 |
-| 6 | [@meixiaoxie](https://github.com/meixiaoxie) | **6.5%** | 配置安全、公司屏蔽、城市查询与 Windows 回归测试 |
-| 6 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | **6.5%** | 送达确认、消息方向识别与招呼语约束 |
-| 6 | [@hdfhssg](https://github.com/hdfhssg) | **6.5%** | 学历与招聘类型筛选、岗位池与投递队列 |
-| 9 | [@yuppiez99999](https://github.com/yuppiez99999) | **5%** | 平台安全回归、采集器测试、运行边界与猎聘适配验证 |
-| 10 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | **4.5%** | 招呼语发送队列进度、任务状态与生成网址安全校验 |
+| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | **11%** | 岗位导出、城市目录、回收站、独立 AI 评分与多平台采集架构 |
+| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | **10%** | AI 兼容、评分恢复、错误传播与凭据优先级 |
+| 🥉 | [@GioiaZheng](https://github.com/GioiaZheng) | **9.5%** | API Key 安全、PDF 依赖降级与人工确认流程修复 |
+| 4 | [@atticus-zhou](https://github.com/atticus-zhou) | **8%** | AI 重试、浏览器交互、送达验证与防重复发送 |
+| 5 | [@yuppiez99999](https://github.com/yuppiez99999) | **7.5%** | 平台采集回归、能力边界、注册模型与 51job API 安全复核 |
+| 6 | [@haohao-fly](https://github.com/haohao-fly) | **7%** | 岗位筛选、评分重试、投递队列与任务保护 |
+| 7 | [@meixiaoxie](https://github.com/meixiaoxie) | **6%** | 配置安全、公司屏蔽、城市查询与 Windows 回归测试 |
+| 7 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | **6%** | 送达确认、消息方向识别与招呼语约束 |
+| 7 | [@hdfhssg](https://github.com/hdfhssg) | **6%** | 学历与招聘类型筛选、岗位池与投递队列 |
+| 10 | [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | **5.5%** | 监测会话闭环、安全操作、本地凭据迁移与面板交互 |
 
 ## 🔥 近 30 天贡献榜 Top 10
 
-统计窗口：**2026-08-01 至 2026-08-30（Asia/Shanghai）**。采用与总榜相同的影响维度，只计算该窗口内被主线采纳的部分。
+统计窗口：**2026-08-03 至 2026-09-01（Asia/Shanghai）**。采用与总榜相同的影响维度，只计算该窗口内被主线采纳的部分。
 
 | 排名 | 贡献者 | 本期主要贡献 |
 |:---:|---|---|
 | 🥇 | [@zhenian-666](https://github.com/zhenian-666) | 可恢复岗位工具与智联统一采集架构 |
-| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | AI 评分、错误恢复、凭据解析与 Windows 运行时兼容 |
-| 🥉 | [@atticus-zhou](https://github.com/atticus-zhou) | AI 与招呼语可靠性、送达验证 |
-| 4 | [@haohao-fly](https://github.com/haohao-fly) | 岗位筛选、评分与投递队列 |
-| 5 | [@meixiaoxie](https://github.com/meixiaoxie) | 配置安全、公司屏蔽与城市查询 |
-| 5 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | 会话送达、消息方向与招呼语约束 |
-| 5 | [@hdfhssg](https://github.com/hdfhssg) | 学历、招聘类型与岗位池增强 |
-| 8 | [@yuppiez99999](https://github.com/yuppiez99999) | BOSS/51job/猎聘采集测试、运行边界与平台治理 |
-| 9 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | 招呼语队列体验与虚构网址防护 |
-| 10 | [@Nourishman](https://github.com/Nourishman) | PDF 简历与确认流程修复 |
+| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | 评分 JSON 兼容、错误传播、暂停恢复与凭据优先级 |
+| 🥉 | [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 监测会话闭环、安全操作、本地凭据迁移与面板交互 |
+| 4 | [@yuppiez99999](https://github.com/yuppiez99999) | 平台采集回归、能力边界、注册模型与 51job API 安全复核 |
+| 5 | [@yuj-029](https://github.com/yuj-029) | 51job API 只读采集、保守采样与断点续采核心 |
+| 6 | [@haohao-fly](https://github.com/haohao-fly) | 岗位筛选、评分与投递队列 |
+| 7 | [@meixiaoxie](https://github.com/meixiaoxie) | 配置安全、公司屏蔽与城市查询 |
+| 7 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | 会话送达、消息方向与招呼语约束 |
+| 7 | [@hdfhssg](https://github.com/hdfhssg) | 学历、招聘类型与岗位池增强 |
+| 10 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | 招呼语队列体验与虚构网址防护 |
 
 [查看完整榜单、证据链接、历月快照与计算口径](CONTRIBUTORS.md)
 
