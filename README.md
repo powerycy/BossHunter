@@ -163,6 +163,12 @@ bosshunter run
 
 [查看完整榜单、证据链接、历月快照与计算口径](CONTRIBUTORS.md)
 
+## 许可证
+
+本项目源码公开，采用 [PolyForm Noncommercial License 1.0.0](LICENSE)。许可证允许符合其定义的非商业用途，以及为这些用途修改和分发本软件；商业使用不在该许可证的授权范围内，需事先取得另行书面授权。
+
+因此，BossHunter 属于 **source-available（源码可用）的非商业许可软件**，不是 [OSI 定义下的开源软件](https://opensource.org/osd)。
+
 ## 参与项目
 
 欢迎 [Star](https://github.com/shengjidaguai-china/BossHunter/stargazers)、提交 [Issue](https://github.com/shengjidaguai-china/BossHunter/issues) 或 Pull Request。大改动建议先开 Issue 讨论。
