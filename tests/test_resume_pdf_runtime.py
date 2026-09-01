@@ -12,8 +12,9 @@ class ResumeArtifactTests(unittest.TestCase):
         self.assertIn("不输出任何前言、说明、备注、免责声明", RESUME_TAILOR_PROMPT)
         self.assertIn("不允许单独新增“岗位匹配亮点”", RESUME_TAILOR_PROMPT)
         self.assertIn("{resume_max_pages} 页以内", RESUME_TAILOR_PROMPT)
-        self.assertIn("只保留与目标岗位相关的内容", RESUME_TAILOR_PROMPT)
+        self.assertIn("不得为了控页删除母版中的项目或教育背景", RESUME_TAILOR_PROMPT)
         self.assertIn("项目经历必须按岗位相关度排序", RESUME_TAILOR_PROMPT)
+        self.assertIn("不得把团队成果改写为候选人的个人成果", RESUME_TAILOR_PROMPT)
         self.assertIn("尽可能覆盖岗位JD中的职责和要求", RESUME_TAILOR_PROMPT)
         self.assertIn("无法用候选人真实经历支撑的要求不要硬编", RESUME_TAILOR_PROMPT)
         self.assertIn("不要输出JD逐条对照", RESUME_TAILOR_PROMPT)
@@ -500,7 +501,7 @@ class ResumeArtifactTests(unittest.TestCase):
         retry_prompt = call_claude.call_args_list[1].args[0]
         self.assertIn("上一次生成结果质量检查未通过", retry_prompt)
         self.assertIn("简历内容过长", retry_prompt)
-        self.assertIn("必须压缩到", retry_prompt)
+        self.assertIn("作为优化目标；若与完整保留项目冲突，以保留项目为先", retry_prompt)
 
     @patch("bosshunter.ai.resume._render_pdf")
     @patch("bosshunter.ai.resume._call_claude")

@@ -1732,6 +1732,112 @@ def api_job_resume_download(job_id):
 		db.close()
 
 
+@app.route("/api/jobs/<job_id>/outreach-resume")
+def api_job_outreach_resume(job_id):
+	"""Return the editable source and review state without exposing local paths."""
+	db = _get_web_db()
+	try:
+		row = db.execute(
+			"SELECT * FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+		).fetchone()
+		if not row:
+			return _json_response({"error": "岗位不存在"}, 404)
+		job = dict(row)
+		markdown_text = ""
+		source_value = str(job.get("resume_source_path") or "")
+		if source_value:
+			source_path = Path(source_value)
+			if source_path.exists():
+				markdown_text = source_path.read_text(encoding="utf-8")
+		return _json_response({
+			"status": job.get("resume_review_status") or "missing",
+			"source": job.get("resume_generation_source"),
+			"failure_reason": job.get("resume_failure_reason"),
+			"reviewed_at": job.get("resume_reviewed_at"),
+			"markdown": markdown_text,
+			"image_url": f"/api/jobs/{job_id}/outreach-resume/image" if job.get("resume_image_path") else None,
+		})
+	finally:
+		db.close()
+
+
+@app.route("/api/jobs/<job_id>/outreach-resume", method="PUT")
+def api_job_outreach_resume_save(job_id):
+	body = request.json or {}
+	markdown_text = str(body.get("markdown") or "")
+	if len(markdown_text) > 30000:
+		return _json_response({"error": "图片简历内容过长"}, 400)
+	source = "codex" if body.get("source") == "codex" else "human_edit"
+	try:
+		from bosshunter.ai.resume import save_resume_draft
+
+		result = save_resume_draft(job_id, markdown_text, _task_config(), source=source)
+		db = _get_web_db()
+		try:
+			add_history(db, job_id, "outreach_resume_edited", f"已保存并重新渲染图片简历，来源：{source}")
+		finally:
+			db.close()
+		return _json_response({"success": True, "status": "needs_review", "resume_path": result.name})
+	except KeyError:
+		return _json_response({"error": "岗位不存在"}, 404)
+	except ValueError as exc:
+		return _json_response({"error": str(exc)}, 409)
+	except Exception as exc:
+		return _json_response({"error": f"保存图片简历失败：{exc}"}, 500)
+
+
+@app.route("/api/jobs/<job_id>/outreach-resume/review", method="POST")
+def api_job_outreach_resume_review(job_id):
+	body = request.json or {}
+	if body.get("confirmed") is not True:
+		return _json_response({"error": "确认图片简历需要 confirmed=true"}, 400)
+	db = _get_web_db()
+	try:
+		row = db.execute(
+			"SELECT resume_image_path FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+		).fetchone()
+		if not row:
+			return _json_response({"error": "岗位不存在"}, 404)
+		image_path = Path(str(row["resume_image_path"] or ""))
+		if not row["resume_image_path"] or not image_path.exists():
+			return _json_response({"error": "图片简历不存在，请先生成或保存草稿"}, 409)
+		db.execute(
+			"""
+			UPDATE jobs
+			SET resume_review_status = 'ready', resume_reviewed_at = CURRENT_TIMESTAMP,
+				resume_failure_reason = NULL, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ? AND deleted_at IS NULL
+			""",
+			(job_id,),
+		)
+		add_history(db, job_id, "outreach_resume_reviewed", "用户已确认图片简历的事实、隐私和版式")
+		return _json_response({"success": True, "status": "ready"})
+	finally:
+		db.close()
+
+
+@app.route("/api/jobs/<job_id>/outreach-resume/image")
+def api_job_outreach_resume_image(job_id):
+	db = _get_web_db()
+	try:
+		row = db.execute(
+			"SELECT resume_image_path FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+		).fetchone()
+		if not row or not row["resume_image_path"]:
+			return _json_response({"error": "图片简历不存在"}, 404)
+		image_path = Path(str(row["resume_image_path"]))
+		if not image_path.exists():
+			return _json_response({"error": "图片简历文件不存在"}, 404)
+		download = request.params.get("download", "").lower() in {"1", "true", "yes"}
+		return static_file(
+			image_path.name,
+			root=str(image_path.parent),
+			download=image_path.name if download else False,
+		)
+	finally:
+		db.close()
+
+
 @app.route("/api/history/<history_id>/reply", method="POST")
 def api_history_reply(history_id):
 	with job_mutation_lock:

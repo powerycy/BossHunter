@@ -2518,6 +2518,58 @@ class WebApiRouteTests(unittest.TestCase):
             self.assertEqual(task.error, ai_pause)
             self.assertTrue(task.stop_requested.is_set())
 
+    def test_outreach_resume_can_be_read_and_explicitly_reviewed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server.set_base_dir(root)
+            source_path = root / "data" / "resumes" / "job-review.md"
+            image_path = root / "data" / "resumes" / "job-review.png"
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_text("# 候选人\n\n## 教育经历\n本科\n", encoding="utf-8")
+            image_path.write_bytes(b"png")
+            db = get_db(root / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("job-review"))
+                db.execute(
+                    """
+                    UPDATE jobs
+                    SET resume_source_path = ?, resume_image_path = ?,
+                        resume_review_status = 'needs_review', resume_generation_source = 'deepseek'
+                    WHERE id = ?
+                    """,
+                    (str(source_path), str(image_path), "job-review"),
+                )
+                db.commit()
+            finally:
+                db.close()
+
+            status, _, body = self._request("/api/jobs/job-review/outreach-resume")
+            self.assertTrue(status.startswith("200"), body)
+            payload = json.loads(body)
+            self.assertEqual(payload["status"], "needs_review")
+            self.assertEqual(payload["source"], "deepseek")
+            self.assertIn("教育经历", payload["markdown"])
+            self.assertNotIn(str(source_path), body)
+
+            status, _, body = self._request(
+                "/api/jobs/job-review/outreach-resume/review",
+                method="POST",
+                json_body={"confirmed": True},
+            )
+            self.assertTrue(status.startswith("200"), body)
+            self.assertEqual(json.loads(body)["status"], "ready")
+
+            db = get_db(root / "data" / "bosshunter.db")
+            try:
+                row = db.execute(
+                    "SELECT resume_review_status, resume_reviewed_at FROM jobs WHERE id = ?",
+                    ("job-review",),
+                ).fetchone()
+            finally:
+                db.close()
+            self.assertEqual(row["resume_review_status"], "ready")
+            self.assertIsNotNone(row["resume_reviewed_at"])
+
 
 if __name__ == "__main__":
     unittest.main()
