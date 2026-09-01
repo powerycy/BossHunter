@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import time
 import unittest
@@ -537,6 +538,90 @@ class MonitorIdempotencyAndLimitTests(unittest.TestCase):
 
 
 class MonitorRiskTests(unittest.TestCase):
+    def _detect_risk_in_dom(self, *cases):
+        from bosshunter.executor import monitor
+
+        runner = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "bosshunter"
+            / "web"
+            / "frontend"
+            / "tests"
+            / "monitor_risk_dom_runner.mjs"
+        )
+        payload = [
+            {
+                **case,
+                "script": monitor.JS_DETECT_MONITOR_RISK,
+            }
+            for case in cases
+        ]
+        result = subprocess.run(
+            ["node", str(runner)],
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+        )
+        return json.loads(result.stdout)
+
+    def test_risk_detection_ignores_hidden_template_and_obscured_content(self):
+        results = self._detect_risk_in_dom(
+            {
+                "body": '<div style="display:none"><div class="captcha" data-top>请完成验证</div></div>',
+                "topSelector": "[data-top]",
+            },
+            {
+                "body": '<div style="visibility:hidden"><span data-top>操作过于频繁</span></div>',
+                "topSelector": "[data-top]",
+            },
+            {
+                "body": '<div style="opacity:0"><span data-top>访问被拒绝</span></div>',
+                "topSelector": "[data-top]",
+            },
+            {
+                "body": '<div class="captcha">请完成验证</div><div id="mask" data-top></div>',
+                "topSelector": "#mask",
+            },
+        )
+
+        self.assertEqual(results, [{"risk": None}] * 4)
+
+    def test_risk_detection_keeps_visible_and_url_title_safety_signals(self):
+        results = self._detect_risk_in_dom(
+            {
+                "body": '<div class="captcha" data-top>请完成验证</div>',
+            },
+            {
+                "body": '<p data-top>操作过于频繁，请稍后再试</p>',
+            },
+            {
+                "body": '<main data-top>403 Forbidden</main>',
+            },
+            {
+                "title": "访问被拒绝",
+                "body": '<main data-top>普通页面</main>',
+            },
+            {
+                "body": '<div style="display:none"><span data-top>请完成验证</span></div>',
+                "url": "https://www.zhipin.com/security-check",
+                "topSelector": "[data-top]",
+            },
+        )
+
+        self.assertEqual(
+            results,
+            [
+                {"risk": "captcha"},
+                {"risk": "rate_limit"},
+                {"risk": "blocked"},
+                {"risk": "blocked"},
+                {"risk": "captcha"},
+            ],
+        )
+
     def test_captcha_stops_cycle_and_records_only_safe_risk_detail(self):
         from bosshunter.executor import monitor
 

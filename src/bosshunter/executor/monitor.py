@@ -122,18 +122,26 @@ JS_EXTRACT_CHAT_LIST = r"""
 
 JS_DETECT_MONITOR_RISK = """
 (() => {
-    // Read only visible UI content. Hidden template nodes and mask placeholders
-    // often contain generic security wording and must not stop a real session.
+    // Read only actionable UI content. Hidden templates and elements covered by
+    // an unrelated mask must not stop a real session.
     const visible = (el) => {
         if (!el) return false;
-        const style = window.getComputedStyle(el);
-        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
+        for (let current = el; current && current !== document.documentElement; current = current.parentElement) {
+            const style = window.getComputedStyle(current);
+            if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
+        }
         const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return !!top && (top === el || el.contains(top));
     };
-    const visibleText = (el) => visible(el) ? (el.innerText || el.textContent || '').trim() : '';
+    const visibleText = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (node.parentElement && visible(node.parentElement)) visibleText.push(node.nodeValue || '');
+    }
+    const text = visibleText.join(' ');
     const visibleNodes = Array.from(document.querySelectorAll('body *')).filter(visible);
-    const text = visibleNodes.map(visibleText).filter(Boolean).join(' ');
     const title = document.title || '';
     const url = window.location.href || '';
     const hasCaptchaElement = visibleNodes.some((el) =>
@@ -146,9 +154,15 @@ JS_DETECT_MONITOR_RISK = """
     if (
         ['操作过于频繁', '访问过于频繁', '请求过于频繁', '操作频繁，请稍后再试'].some(value => text.includes(value))
     ) return JSON.stringify({risk: 'rate_limit'});
+    if (/(?:^|[\\/?#=_-])(?:403|forbidden|access-denied)(?:$|[\\/?#=&_-])/i.test(url)) {
+        return JSON.stringify({risk: 'blocked'});
+    }
+    if (/^(?:403(?:\\s+forbidden)?|forbidden|access denied|访问被拒绝|账号异常|账号受限)/i.test(title.trim())) {
+        return JSON.stringify({risk: 'blocked'});
+    }
     if (
         ['账号存在异常', '账号已被限制', '当前账号异常', '访问被拒绝', '账号或请求被拦截'].some(value => text.includes(value)) ||
-        ['账号异常', '访问受限'].some(value => title.includes(value))
+        /(?:^|\\s)403(?:\\s+forbidden)?(?=\\s|$)/i.test(text)
     ) return JSON.stringify({risk: 'blocked'});
     return JSON.stringify({risk: null});
 })()
