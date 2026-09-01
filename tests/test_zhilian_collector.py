@@ -114,6 +114,39 @@ class ZhilianFixtureTests(TestCase):
         self.assertEqual(detail["salary"], "8千-1万")
         self.assertEqual(detail["jd"], "负责招聘与员工关系管理。")
 
+    def test_detail_with_readable_jd_ignores_generic_login_cta(self):
+        detail = parse_zhilian_detail_html(
+            """
+            <header><button>立即登录</button><span>请登录后查看更多服务</span></header>
+            <div class="summary-planes__title">AI 产品经理</div>
+            <div class="company-info__name">示例科技</div>
+            <div class="address-info__content">北京市朝阳区</div>
+            <div class="describtion-card__detail-content">负责 AI 产品规划与用户研究。</div>
+            """,
+            source_job_id="zl-login-cta",
+            list_candidate={"city": "北京", "url": "/jobdetail/zl-login-cta.htm"},
+        )
+
+        self.assertIn("AI 产品规划", detail["jd"])
+
+    def test_detail_explicit_login_wall_still_blocks_even_with_stale_jd(self):
+        with self.assertRaises(CollectionBlockedError) as error:
+            parse_zhilian_detail_html(
+                """
+                <div class="login-dialog">登录失效，请先登录后继续</div>
+                <div class="describtion-card__detail-content">这是页面上残留的旧职位描述。</div>
+                """,
+                source_job_id="zl-expired",
+            )
+
+        self.assertEqual(error.exception.code, "login_required")
+
+    def test_live_detail_script_prefers_readable_jd_over_generic_login_cta(self):
+        status_line = next(line for line in JS_EXTRACT_DETAIL.splitlines() if "status:" in line)
+        self.assertLess(status_line.index("jdText ? 'ready'"), status_line.index("loginRequired ? 'login_required'"))
+        self.assertIn("loginDialog", JS_EXTRACT_DETAIL)
+        self.assertIn("loginPage", JS_EXTRACT_DETAIL)
+
     def test_source_job_id_ignores_detail_query_parameters(self):
         self.assertEqual(
             _source_job_id(
@@ -318,3 +351,26 @@ class ZhilianFixtureTests(TestCase):
         self.assertEqual(navigated, ["https://www.zhaopin.com/sou/jl530/"])
         self.assertEqual(collected[0].storage_id, "zhilian:CC123J40800000001")
         self.assertIn("用户增长", collected[0].jd)
+
+    def test_detail_reader_rechecks_a_transient_false_login_state(self):
+        responses = iter([
+            {"status": "login_required", "title": "AI 产品运营", "company": "示例科技", "jd": ""},
+            {
+                "status": "ready",
+                "title": "AI 产品运营",
+                "company": "示例科技",
+                "city": "北京",
+                "jd": "负责 AI 产品运营。",
+                "url": "https://www.zhaopin.com/jobdetail/zl-retry.htm",
+            },
+        ])
+        waits = []
+        browser = ZhilianBrowser(
+            evaluate=lambda _target, _script: json.dumps(next(responses)),
+        )
+        collector = ZhilianCollector(browser=browser, sleep=waits.append)
+
+        detail = collector._read_detail_with_retry("tab-current", "北京")
+
+        self.assertEqual(detail["status"], "ready")
+        self.assertEqual(waits, [0.8])

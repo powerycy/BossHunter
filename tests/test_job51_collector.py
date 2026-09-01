@@ -1,27 +1,214 @@
 import json
 from unittest import TestCase
+from unittest.mock import Mock, patch
 
-from bosshunter.collection.base import CollectorHooks
+from bosshunter.collection.base import CollectionBlockedError, CollectorHooks
 from bosshunter.collection.models import PlatformCollectionRequest
 from bosshunter.collection.orchestrator import normalize_collection_options
-from bosshunter.collection.platforms.job51 import JS_EXTRACT_DETAIL, JS_EXTRACT_LIST, Job51Browser, Job51Collector, get_51job_city_code
+from bosshunter.collection.platforms.job51 import (
+    API_PAGE_SIZE,
+    HARD_MAX_PAGES,
+    Job51Browser,
+    Job51Collector,
+    _analyze_api_response,
+    _reason_code_for,
+    get_51job_city_code,
+    load_51job_city_snapshot,
+)
 from bosshunter.collection.text import clean_job_description
 
 
-class Job51CollectorTests(TestCase):
-    def test_list_script_uses_each_card_real_detail_url_for_multiple_cities(self):
-        self.assertIn('a[href*="jobs.51job.com/"]', JS_EXTRACT_LIST)
-        self.assertIn("url: jobUrl", JS_EXTRACT_LIST)
-        self.assertNotIn("jobs.51job.com/shanghai/", JS_EXTRACT_LIST)
+def _ok_body(items: list, total: int | None = None) -> str:
+    """Build a valid 51job API response body."""
+    return json.dumps({
+        "status": "1",
+        "resultbody": {
+            "job": {
+                "items": items,
+                "totalCount": total if total is not None else len(items),
+            }
+        },
+    }, ensure_ascii=False)
 
-    def test_detail_script_targets_job_description_without_footer_noise(self):
-        self.assertIn(".bmsg.job_msg.inbox > div:first-child", JS_EXTRACT_DETAIL)
-        self.assertNotIn("body.slice(anchor)", JS_EXTRACT_DETAIL)
 
-    def test_city_and_option_defaults_are_fail_closed(self):
+class AnalyzeApiResponseTests(TestCase):
+    """L0-L3 风控分级 — PR #81 核心路径。"""
+
+    def test_l0_normal_response_with_items(self):
+        body = _ok_body([{"jobName": "Python"}], total=100)
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["level"], 0)
+        self.assertEqual(r["signal"], "ok")
+        self.assertEqual(len(r["jobs"]), 1)
+        self.assertEqual(r["total"], 100)
+
+    def test_l3_http_error(self):
+        r = _analyze_api_response(403, "text/html", "")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertEqual(r["signal"], "http_error")
+
+    def test_l3_non_json_with_captcha_hint(self):
+        r = _analyze_api_response(200, "text/html", "<html>请完成验证</html>")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertEqual(r["signal"], "non_json")
+        self.assertIn("验证", r["note"])
+
+    def test_l3_non_json_with_login_hint(self):
+        r = _analyze_api_response(200, "text/html", '<html>请登录</html>')
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertEqual(r["signal"], "non_json")
+        self.assertIn("登录", r["note"])
+
+    def test_l3_non_json_plain_html(self):
+        r = _analyze_api_response(200, "text/html", "<html>Not Found</html>")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertEqual(r["signal"], "non_json")
+
+    def test_l1_json_parse_error(self):
+        r = _analyze_api_response(200, "application/json", "{broken json")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 1)
+        self.assertEqual(r["signal"], "parse_error")
+
+    def test_l3_hard_risk_status_not_1_with_verify(self):
+        body = json.dumps({"status": "0", "message": "请完成滑块验证"}, ensure_ascii=False)
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertEqual(r["signal"], "hard_risk")
+
+    def test_l2_api_limited_status_not_1_without_hard_signals(self):
+        body = json.dumps({"status": "0", "message": "rate limited"}, ensure_ascii=False)
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 2)
+        self.assertEqual(r["signal"], "api_limited")
+
+    def test_l2_empty_items_with_total(self):
+        body = _ok_body([], total=50)
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 2)
+        self.assertEqual(r["signal"], "empty_items")
+        self.assertEqual(r["total"], 50)
+
+    def test_l0_empty_search_without_total(self):
+        r = _analyze_api_response(200, "application/json", _ok_body([], total=0))
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["signal"], "no_results")
+        self.assertEqual(r["jobs"], [])
+
+    def test_l0_total_defaults_to_items_count(self):
+        body = json.dumps({
+            "status": "1",
+            "resultbody": {"job": {"items": [{"jobName": "a"}, {"jobName": "b"}]}},
+        }, ensure_ascii=False)
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["total"], 2)
+
+    def test_reason_code_mapping(self):
+        parse_err = {"signal": "parse_error"}
+        self.assertEqual(_reason_code_for(parse_err), "selector_changed")
+        other = {"signal": "http_error"}
+        self.assertEqual(_reason_code_for(other), "rate_limit")
+
+
+class RealLastPageTests(TestCase):
+    """主动末页判定 — 终止条件。"""
+
+    def test_returns_fallback_when_total_zero(self):
+        analysis = {"total": 0}
+        self.assertEqual(Job51Collector._real_last_page(analysis, 50), 50)
+
+    def test_returns_fallback_when_total_missing(self):
+        analysis = {}
+        self.assertEqual(Job51Collector._real_last_page(analysis, 50), 50)
+
+    def test_calculates_exact_pages(self):
+        analysis = {"total": 600}
+        expected = (600 + API_PAGE_SIZE - 1) // API_PAGE_SIZE
+        self.assertEqual(Job51Collector._real_last_page(analysis, 50), expected)
+
+    def test_caps_at_fallback(self):
+        analysis = {"total": 2000}
+        raw_pages = (2000 + API_PAGE_SIZE - 1) // API_PAGE_SIZE
+        self.assertGreater(raw_pages, HARD_MAX_PAGES)
+        self.assertEqual(Job51Collector._real_last_page(analysis, HARD_MAX_PAGES), HARD_MAX_PAGES)
+
+    def test_minimum_one_page(self):
+        analysis = {"total": 1}
+        self.assertEqual(Job51Collector._real_last_page(analysis, 50), 1)
+
+    def test_partial_last_page_rounds_up(self):
+        analysis = {"total": 21}
+        self.assertEqual(Job51Collector._real_last_page(analysis, 50), 2)
+
+
+class PlanProbePagesTests(TestCase):
+    """采样策略 — 分布探针。"""
+
+    def test_empty_when_max_less_than_start(self):
+        self.assertEqual(Job51Collector._plan_probe_pages(5, 3), [])
+
+    def test_all_pages_when_range_le_two(self):
+        self.assertEqual(Job51Collector._plan_probe_pages(1, 1), [1])
+        self.assertEqual(Job51Collector._plan_probe_pages(1, 2), [1, 2])
+
+    def test_start_page_always_included(self):
+        pages = Job51Collector._plan_probe_pages(1, 20)
+        self.assertIn(1, pages)
+
+    def test_max_page_included(self):
+        pages = Job51Collector._plan_probe_pages(1, 20)
+        self.assertIn(20, pages)
+
+    def test_no_adjacent_pages_in_front_section(self):
+        for _ in range(20):
+            pages = sorted(Job51Collector._plan_probe_pages(1, 30))
+            front = [p for p in pages if p <= 10]
+            for i in range(len(front) - 1):
+                self.assertGreater(front[i + 1] - front[i], 1,
+                                   f"Adjacent front pages: {front}")
+
+    def test_all_pages_within_bounds(self):
+        for _ in range(20):
+            pages = Job51Collector._plan_probe_pages(3, 25)
+            for p in pages:
+                self.assertGreaterEqual(p, 3)
+                self.assertLessEqual(p, 25)
+
+    def test_front_dense_more_than_rear(self):
+        for _ in range(10):
+            pages = Job51Collector._plan_probe_pages(1, 40)
+            front_count = sum(1 for p in pages if p <= 10)
+            rear_count = sum(1 for p in pages if p > 10)
+            self.assertGreaterEqual(front_count, rear_count)
+
+    def test_no_duplicates(self):
+        pages = Job51Collector._plan_probe_pages(1, 30)
+        self.assertEqual(len(pages), len(set(pages)))
+
+
+class Job51CitySnapshotTests(TestCase):
+    """城市编码 fail-closed — 保持原有约束。"""
+
+    def test_city_snapshot_loads(self):
+        snap = load_51job_city_snapshot()
+        self.assertEqual(snap["schema"], "bosshunter.51job_cities.v1")
+        self.assertGreaterEqual(len(snap["cities"]), 2)
+
+    def test_fail_closed_for_unknown_city(self):
         self.assertEqual(get_51job_city_code("北京市"), "010000")
         self.assertEqual(get_51job_city_code("上海市"), "020000")
         self.assertIsNone(get_51job_city_code("广州"))
+
+    def test_option_defaults_are_fail_closed(self):
         options = normalize_collection_options({}, {
             "platform_order": ["51job"],
             "platforms": {"51job": {"keywords": ["AI 产品"], "cities": ["上海"]}},
@@ -29,267 +216,154 @@ class Job51CollectorTests(TestCase):
         search = options["platforms"]["51job"]
         self.assertEqual(search["city_codes"], {"上海": "020000"})
         self.assertEqual(search["max_pages"], 1)
-        self.assertNotIn("target_count", search)
 
-    def test_beijing_search_uses_verified_51job_area_code(self):
-        request = PlatformCollectionRequest(
-            "51job",
-            ["AI 产品"],
-            ["北京"],
-            {"北京": "010000"},
-            max_pages=1,
-        )
 
-        url = Job51Collector.build_search_url(request, "北京", "AI 产品")
-
-        self.assertIn("jobArea=010000", url)
-        self.assertIn("keyword=AI%20%E4%BA%A7%E5%93%81", url)
-
-    def test_collection_uses_platform_identity_and_rate_limit(self):
-        list_payload = json.dumps({"status": "ready", "jobs": [
-            {
-                "source_job_id": "job-1",
-                "title": "AI 产品经理",
-                "company": "示例公司",
-                "city": "上海",
-                "url": "https://jobs.51job.com/shanghai/job-1.html",
-            },
-            {
-                "source_job_id": "job-2",
-                "title": "AI 产品运营",
-                "company": "示例公司",
-                "city": "上海",
-                "url": "https://jobs.51job.com/shanghai/job-2.html",
-            },
-        ]}, ensure_ascii=False)
-        detail_payload = json.dumps({
-            "status": "ready",
-            "title": "AI 产品",
-            "company": "示例公司",
-            "city": "上海",
-            "jd": "[岗位kanzhun职责]负责需求分析，来自BOSS直聘要求会 SQL。",
-        }, ensure_ascii=False)
-        sleeps: list[float] = []
-
-        def evaluate(_target, script):
-            return list_payload if ".joblist-item" in script else detail_payload
-
-        sleeps = []
-        browser = Job51Browser(
-            new_tab=lambda url, **_kwargs: url,
-            close_tab=lambda _target: True,
-            evaluate=evaluate,
-            scroll=lambda *_args, **_kwargs: True,
-            wait_for_load=lambda *_args, **_kwargs: True,
-        )
-        collected = []
-        hooks = CollectorHooks(
-            stop_event=None,
-            on_list_candidate=lambda _candidate: True,
-            on_candidate=lambda candidate: collected.append(candidate) or len(collected) < 2,
-            on_parse_failed=lambda reason: self.fail(reason),
-            on_event=lambda **_kwargs: None,
-        )
-        result = Job51Collector(
-            browser=browser,
-            sleep=sleeps.append,
-            uniform=lambda _low, _high: 13.0,
-        ).collect(
-            PlatformCollectionRequest("51job", ["AI 产品"], ["上海"], {"上海": "020000"}, max_pages=1),
-            hooks,
-        )
-
-        self.assertEqual(result.reason_code, "callback_stopped")
-        self.assertEqual([candidate.storage_id for candidate in collected], ["51job:job-1", "51job:job-2"])
-        self.assertEqual(sleeps, [13.0])
-        self.assertEqual(clean_job_description(collected[0].jd), "负责需求分析，要求会 SQL。")
-
-    def test_verification_page_stops_platform(self):
-        browser = Job51Browser(
-            new_tab=lambda url, **_kwargs: url,
-            close_tab=lambda _target: True,
-            evaluate=lambda _target, _script: json.dumps({"status": "blocked", "jobs": []}),
-            scroll=lambda *_args, **_kwargs: True,
-            wait_for_load=lambda *_args, **_kwargs: True,
-        )
-        hooks = CollectorHooks(
+class CollectionFlowSafetyTests(TestCase):
+    def setUp(self):
+        self.hooks = CollectorHooks(
             stop_event=None,
             on_list_candidate=lambda _candidate: True,
             on_candidate=lambda _candidate: True,
             on_parse_failed=lambda _reason: None,
             on_event=lambda **_kwargs: None,
         )
-        result = Job51Collector(browser=browser).collect(
-            PlatformCollectionRequest("51job", ["AI"], ["上海"], {"上海": "020000"}, max_pages=1),
-            hooks,
-        )
-        self.assertEqual(result.status, "blocked")
-        self.assertEqual(result.reason_code, "rate_limit")
+        self.common_args = {
+            "city": "上海",
+            "area": "020000",
+            "kw": "AI",
+            "deal_breakers": [],
+            "jd_deal_breakers": [],
+            "blocked_companies": [],
+            "allow_internship": False,
+            "salary_min": 0.0,
+            "salary_max": 0.0,
+        }
 
-    def test_collection_waits_for_spa_list_render(self):
-        evaluations = 0
-        sleeps = []
-
-        def evaluate(_target, script):
-            nonlocal evaluations
-            if ".joblist-item" in script:
-                evaluations += 1
-                if evaluations < 3:
-                    return json.dumps({"status": "waiting", "jobs": []})
-                return json.dumps({"status": "ready", "jobs": [{
-                    "source_job_id": "job-spa",
-                    "title": "AI 运营",
-                    "company": "示例公司",
-                    "city": "上海",
-                    "url": "https://jobs.51job.com/shanghai/job-spa.html",
-                }]})
-            return json.dumps({
-                "status": "ready", "title": "AI 运营", "company": "示例公司",
-                "city": "上海", "jd": "负责 AI 产品运营与数据分析。",
-            })
-
-        browser = Job51Browser(
-            new_tab=lambda url, **_kwargs: url,
-            close_tab=lambda _target: True,
-            evaluate=evaluate,
-            scroll=lambda *_args, **_kwargs: True,
-            wait_for_load=lambda *_args, **_kwargs: True,
-        )
-        hooks = CollectorHooks(
-            stop_event=None,
-            on_list_candidate=lambda _candidate: True,
-            on_candidate=lambda _candidate: False,
-            on_parse_failed=lambda reason: self.fail(reason),
-            on_event=lambda **_kwargs: None,
+    def test_api_item_keeps_51job_platform_identity(self):
+        candidate = Job51Collector._item_to_candidate(
+            {
+                "jobId": "job-51",
+                "jobName": "AI 产品经理",
+                "jobDescribe": "负责 AI 产品规划",
+                "fullCompanyName": "示例公司",
+                "jobAreaString": "上海·浦东新区",
+                "jobHref": "https://jobs.51job.com/job-51.html",
+            },
+            "上海",
+            "020000",
+            "AI 产品",
         )
 
-        result = Job51Collector(browser=browser, sleep=sleeps.append).collect(
-            PlatformCollectionRequest("51job", ["AI运营"], ["上海"], {"上海": "020000"}, max_pages=1),
-            hooks,
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.platform, "51job")
+        self.assertEqual(candidate.storage_id, "51job:job-51")
+        self.assertEqual(candidate.city, "上海")
+
+    def test_probe_risk_signal_stops_without_marking_keyword_complete(self):
+        collector = Job51Collector(safety_conn=object())
+        limiter = Mock()
+        limiter.wait_before_request.return_value = True
+        blocked = {
+            "ok": False,
+            "level": 3,
+            "signal": "hard_risk",
+            "note": "请完成滑块验证",
+            "jobs": [],
+            "total": 0,
+        }
+
+        with (
+            patch("bosshunter.collection.platforms.job51.get_page_progress", return_value=0),
+            patch.object(Job51Collector, "_plan_probe_pages", return_value=[1]),
+            patch.object(collector, "_fetch_page", return_value=blocked),
+            patch("bosshunter.collection.platforms.job51.mark_combo_collected") as mark_complete,
+        ):
+            with self.assertRaises(CollectionBlockedError) as raised:
+                collector._collect_keyword(
+                    PlatformCollectionRequest("51job", ["AI"], ["上海"], {"上海": "020000"}, max_pages=1),
+                    self.hooks,
+                    "host-tab",
+                    limiter,
+                    max_pages=1,
+                    **self.common_args,
+                )
+
+        self.assertEqual(raised.exception.code, "rate_limit")
+        mark_complete.assert_not_called()
+
+    def test_hot_pages_are_checkpointed_in_ascending_order(self):
+        collector = Job51Collector(safety_conn=object())
+        limiter = Mock()
+        limiter.wait_before_request.return_value = True
+        jobs = [
+            {
+                "jobId": f"job-{index}",
+                "jobName": "AI 工程师",
+                "jobDescribe": "负责 AI 平台研发",
+                "fullCompanyName": "示例公司",
+            }
+            for index in range(API_PAGE_SIZE)
+        ]
+        analysis = {
+            "ok": True,
+            "level": 0,
+            "signal": "ok",
+            "note": "正常",
+            "jobs": jobs,
+            "total": API_PAGE_SIZE * 5,
+        }
+        fetched_pages = []
+        checkpoints = []
+
+        def fetch_page(_host, _keyword, _area, page):
+            fetched_pages.append(page)
+            return analysis
+
+        with (
+            patch("bosshunter.collection.platforms.job51.get_page_progress", return_value=0),
+            patch("bosshunter.collection.platforms.job51.upsert_page_progress",
+                  side_effect=lambda _conn, _source, _city, _keyword, page: checkpoints.append(page)),
+            patch("bosshunter.collection.platforms.job51.mark_combo_collected") as mark_complete,
+            patch("bosshunter.collection.platforms.job51.delete_page_progress"),
+            patch("bosshunter.collection.platforms.job51._wait_or_stop", return_value=False),
+            patch.object(Job51Collector, "_plan_probe_pages", return_value=[3]),
+            patch.object(collector, "_fetch_page", side_effect=fetch_page),
+            patch.object(collector, "_would_be_collected", return_value=True),
+        ):
+            collector._collect_keyword(
+                PlatformCollectionRequest("51job", ["AI"], ["上海"], {"上海": "020000"}, max_pages=5),
+                self.hooks,
+                "host-tab",
+                limiter,
+                max_pages=5,
+                **self.common_args,
+            )
+
+        self.assertEqual(fetched_pages, [3, 1, 2, 4, 5])
+        self.assertEqual(checkpoints, [1, 2, 3, 4, 5])
+        mark_complete.assert_called_once()
+
+    def test_collect_only_closes_temporary_host_tab(self):
+        request = PlatformCollectionRequest(
+            "51job", ["AI"], ["上海"], {"上海": "020000"}, max_pages=1,
         )
 
-        self.assertEqual(result.reason_code, "callback_stopped")
-        self.assertEqual(evaluations, 3)
-        self.assertEqual(sleeps, [0.75, 0.75])
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                close_tab = Mock(return_value=True)
+                collector = Job51Collector(browser=Job51Browser(close_tab=close_tab))
+                with (
+                    patch("bosshunter.collection.platforms.job51.SendWindowChecker.is_active", return_value=True),
+                    patch("bosshunter.collection.platforms.job51.should_take_day_off", return_value=False),
+                    patch.object(collector, "_ensure_host_tab", return_value=("host-tab", owned)),
+                    patch.object(collector, "_collect_keyword"),
+                ):
+                    result = collector.collect(request, self.hooks)
+
+                self.assertEqual(result.status, "completed")
+                self.assertEqual(close_tab.call_count, int(owned))
 
 
-    def test_multi_page_collection_clicks_next_and_applies_pacing(self):
-        # 覆盖 page>1 的翻页分支（此前无测试）：第一页采集后点击下一页，
-        # 第二页再次渲染出岗位；翻页安全间隔应被施加一次。
-        list_calls = {"n": 0}
-        next_clicks = []
-
-        def evaluate(target, script):
-            if ".joblist-item" in script:
-                list_calls["n"] += 1
-                if list_calls["n"] == 1:
-                    return json.dumps({"status": "ready", "jobs": [{
-                        "source_job_id": "job-p1",
-                        "title": "AI 算法工程师",
-                        "company": "示例公司",
-                        "city": "上海",
-                        "url": "https://jobs.51job.com/shanghai/job-p1.html",
-                    }]})
-                return json.dumps({"status": "ready", "jobs": [{
-                    "source_job_id": "job-p2",
-                    "title": "AI 数据工程师",
-                    "company": "示例公司",
-                    "city": "上海",
-                    "url": "https://jobs.51job.com/shanghai/job-p2.html",
-                }]})
-            if "btn-next" in script:
-                next_clicks.append(script)
-                return True  # 模拟存在下一页按钮
-            return json.dumps({
-                "status": "ready", "title": "AI 工程师", "company": "示例公司",
-                "city": "上海", "jd": "负责 AI 平台研发。",
-            })
-
-        sleeps = []
-        browser = Job51Browser(
-            new_tab=lambda url, **_kwargs: url,
-            close_tab=lambda _target: True,
-            evaluate=evaluate,
-            scroll=lambda *_args, **_kwargs: True,
-            wait_for_load=lambda *_args, **_kwargs: True,
-        )
-        collected = []
-        hooks = CollectorHooks(
-            stop_event=None,
-            on_list_candidate=lambda _candidate: True,
-            on_candidate=lambda candidate: collected.append(candidate) or True,
-            on_parse_failed=lambda _reason: None,
-            on_event=lambda **_kwargs: None,
-        )
-        result = Job51Collector(
-            browser=browser,
-            sleep=sleeps.append,
-            uniform=lambda _low, _high: 33.0,
-        ).collect(
-            PlatformCollectionRequest("51job", ["AI"], ["上海"], {"上海": "020000"}, max_pages=2),
-            hooks,
-        )
-
-        self.assertEqual(result.status, "completed")
-        self.assertEqual(result.reason_code, "search_exhausted")
-        self.assertEqual(
-            [c.storage_id for c in collected],
-            ["51job:job-p1", "51job:job-p2"],
-        )
-        # 第二页触发了一次 JS_CLICK_NEXT 调用
-        self.assertEqual(len(next_clicks), 1)
-        # 一次翻页间隔，另一次是第二个详情页之前的安全间隔。
-        self.assertEqual(sleeps, [33.0, 33.0])
-
-    def test_last_page_without_next_button_completes_gracefully(self):
-        # 翻到第二页时若已无下一页按钮（JS_CLICK_NEXT 返回 False），
-        # 应优雅结束而非报错。
-        list_calls = {"n": 0}
-
-        def evaluate(target, script):
-            if ".joblist-item" in script:
-                list_calls["n"] += 1
-                return json.dumps({"status": "ready", "jobs": [{
-                    "source_job_id": f"job-{list_calls['n']}",
-                    "title": "AI 工程师",
-                    "company": "示例公司",
-                    "city": "上海",
-                    "url": f"https://jobs.51job.com/shanghai/job-{list_calls['n']}.html",
-                }]})
-            if "btn-next" in script:
-                return False  # 最后一页，无下一页按钮
-            return json.dumps({
-                "status": "ready", "title": "AI 工程师", "company": "示例公司",
-                "city": "上海", "jd": "负责 AI 研发。",
-            })
-
-        browser = Job51Browser(
-            new_tab=lambda url, **_kwargs: url,
-            close_tab=lambda _target: True,
-            evaluate=evaluate,
-            scroll=lambda *_args, **_kwargs: True,
-            wait_for_load=lambda *_args, **_kwargs: True,
-        )
-        collected = []
-        hooks = CollectorHooks(
-            stop_event=None,
-            on_list_candidate=lambda _candidate: True,
-            on_candidate=lambda candidate: collected.append(candidate) or True,
-            on_parse_failed=lambda _reason: None,
-            on_event=lambda **_kwargs: None,
-        )
-        result = Job51Collector(
-            browser=browser,
-            sleep=lambda _s: None,
-            uniform=lambda _low, _high: 33.0,
-        ).collect(
-            PlatformCollectionRequest("51job", ["AI"], ["上海"], {"上海": "020000"}, max_pages=3),
-            hooks,
-        )
-
-        self.assertEqual(result.status, "completed")
-        self.assertEqual(result.reason_code, "search_exhausted")
-        self.assertEqual([c.storage_id for c in collected], ["51job:job-1"])
 class JobDescriptionCleanupTests(TestCase):
     def test_known_platform_source_noise_is_removed(self):
         dirty = "[岗位kanzhun职责]1.公司业务后台开发 来自BOSS直聘 2.掌握 SQL"

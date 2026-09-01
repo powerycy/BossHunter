@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "bosshunter"
 version = "2.3.2"
 description = "BOSS直聘智能求职Agent - 端到端自动化求职工具"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.0",
