@@ -224,7 +224,7 @@ JS_EXTRACT_DETAIL = """
 (() => {
   const pageText = (document.body ? document.body.innerText : '') + ' ' + document.title;
   const blockedMatch = pageText.match(/验证码|滑块|访问频繁|频率限制|账号异常|拒绝访问/);
-  const loginRequired = /请先登录|请登录|登录后(?:查看|继续|获取)|登录失效|登录查看更多|登录查看全部|立即登录/.test(pageText);
+  const loginTextPattern = /请先登录|请登录|登录后(?:查看|继续|获取)|登录失效|账号登录|扫码登录|登录查看更多|登录查看全部|立即登录/;
   const expectedCity = "__EXPECTED_CITY__";
   const first = (selectors) => selectors.map((s) => document.querySelector(s)).find(Boolean);
   const descriptionCard = Array.from(document.querySelectorAll('.job-detail-card')).find((card) =>
@@ -237,13 +237,24 @@ JS_EXTRACT_DETAIL = """
   const company = first(['.job-card--active .job-card__company-name', '.job-detail-summary__company-name', '.company-info__name', 'div.companyinfo__name', '.company-name', '.company']);
   const cityNode = first(['.job-detail-summary__tag', '.address-info__content', '.summary-planes__info', '.jobinfo__city', '.job-city', '.city']);
   const detailLink = first(['a.job-company-info__view-all', 'a[href*="/jobdetail/"]']);
+  const jdText = jd ? jd.textContent.trim() : '';
+  const loginPage = /(?:^|\\/)(?:passport|login)(?:\\/|$)/i.test(window.location.pathname);
+  const loginDialog = Array.from(document.querySelectorAll(
+    '[role="dialog"], .login-dialog, [class*="login-modal"], [class*="login-dialog"]'
+  )).some((node) => loginTextPattern.test(node.textContent || ''));
+  const loginRequired = loginPage || loginDialog || (
+    loginTextPattern.test(pageText) && !title && !company && !jdText
+  );
   const cityText = cityNode ? cityNode.textContent.trim() : '';
   const city = expectedCity && cityText.includes(expectedCity) ? expectedCity : cityText;
   return JSON.stringify({
-    status: blockedMatch ? 'blocked' : loginRequired ? 'login_required' : jd ? 'ready' : 'selector_changed',
+    // Normal logged-in pages can contain incidental login copy in headers,
+    // footers or ads. A readable JD always wins; otherwise require structural
+    // login evidence (login URL/dialog) or a page with no job identity at all.
+    status: blockedMatch ? 'blocked' : jdText ? 'ready' : loginRequired ? 'login_required' : 'selector_changed',
     title: title ? title.textContent.trim() : '', salary: salary ? salary.textContent.trim() : '',
     company: company ? company.textContent.trim() : '', city,
-    jd: jd ? jd.textContent.trim() : '', url: detailLink ? detailLink.href : window.location.href
+    jd: jdText, url: detailLink ? detailLink.href : window.location.href
   });
 })()
 """
@@ -463,15 +474,39 @@ def parse_zhilian_detail_html(
     source_job_id: str = "",
     list_candidate: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    blocked = _blocked_reason(html)
-    if blocked:
-        raise CollectionBlockedError(*blocked)
     root = _parse_tree(html)
     title_node = root.find_class(TITLE_CLASSES)
     company_node = root.find_class(COMPANY_CLASSES)
     salary_node = root.find_class(SALARY_CLASSES)
     city_node = _city_node(root, str((list_candidate or {}).get("city") or ""))
     jd_node = root.find_class(JD_CLASSES)
+    blocked = _blocked_reason(html)
+    if blocked:
+        login_dialog = next(
+            (
+                node for node in root.descendants()
+                if (
+                    node.attrs.get("role") == "dialog"
+                    or any(
+                        marker in node.attrs.get("class", "")
+                        for marker in ("login-dialog", "login-modal")
+                    )
+                )
+                and re.search(
+                    r"请(?:先)?登录|登录后(?:查看|继续|获取)|登录失效|账号登录|扫码登录|立即登录",
+                    node.text(),
+                )
+            ),
+            None,
+        )
+        readable_jd_without_login_wall = (
+            blocked[0] == "login_required"
+            and jd_node is not None
+            and bool(jd_node.text().strip())
+            and login_dialog is None
+        )
+        if not readable_jd_without_login_wall:
+            raise CollectionBlockedError(*blocked)
     candidate = list_candidate or {}
     result = {
         "source_job_id": source_job_id or candidate.get("source_job_id", ""),
@@ -604,6 +639,28 @@ class ZhilianCollector:
         if not any(key in payload for key in ("url", "input", "signature", "item_count")):
             return {}
         return payload
+
+    def _read_detail_with_retry(
+        self,
+        target_id: str,
+        city: str,
+        *,
+        attempts: int = 3,
+        retry_delay: float = 0.8,
+    ) -> dict[str, Any]:
+        """Read a SPA detail panel after allowing short render transitions."""
+        detail: dict[str, Any] = {}
+        for attempt in range(max(1, attempts)):
+            detail = self._parse_payload(
+                self.browser.evaluate(target_id, _build_detail_script(city))
+            )
+            if not detail:
+                raise CollectionError("parse_failed", "智联详情返回格式无效")
+            if detail.get("status") not in {"login_required", "selector_changed"}:
+                return detail
+            if attempt + 1 < attempts:
+                self.sleep(retry_delay)
+        return detail
 
     def _wait_for_search_results(
         self,
@@ -739,15 +796,12 @@ class ZhilianCollector:
                                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                                 else:
                                     self.sleep(1.5)
-                                raw_detail = self.browser.evaluate(target_id, _build_detail_script(city))
                                 try:
-                                    detail = json.loads(raw_detail) if isinstance(raw_detail, str) else raw_detail
-                                    if not isinstance(detail, dict):
-                                        raise CollectionError("parse_failed", "智联侧栏详情返回格式无效")
+                                    detail = self._read_detail_with_retry(target_id, city)
                                     if detail.get("status") == "blocked":
                                         return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "智联页面出现验证或限流，已停止整个采集队列")
                                     if detail.get("status") == "login_required":
-                                        return PlatformCollectionResult(self.platform, "blocked", "login_required", "智联页面要求重新登录，已停止整个采集队列")
+                                        return PlatformCollectionResult(self.platform, "blocked", "login_required", "智联页面要求重新登录，已停止智联当前任务；后续平台将继续")
                                     if detail.get("status") == "selector_changed":
                                         return PlatformCollectionResult(self.platform, "blocked", "selector_changed", "智联侧栏详情结构变化，已安全停止")
                                     base = self._candidate_from_list(detail, city, keyword)
@@ -794,17 +848,14 @@ class ZhilianCollector:
                             detail_requests += 1
                             try:
                                 self.browser.wait_for_load(detail_target, timeout=10)
-                                raw_detail = self.browser.evaluate(detail_target, _build_detail_script(city))
+                                detail = self._read_detail_with_retry(detail_target, city)
                             finally:
                                 self.browser.close_tab(detail_target)
                             try:
-                                detail = json.loads(raw_detail) if isinstance(raw_detail, str) else raw_detail
-                                if not isinstance(detail, dict):
-                                    raise CollectionError("parse_failed", "智联详情返回格式无效")
                                 if detail.get("status") == "blocked":
                                     return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "智联详情页出现验证或限流，已停止整个采集队列")
                                 if detail.get("status") == "login_required":
-                                    return PlatformCollectionResult(self.platform, "blocked", "login_required", "智联详情页要求重新登录，已停止整个采集队列")
+                                    return PlatformCollectionResult(self.platform, "blocked", "login_required", "智联详情页要求重新登录，已停止智联当前任务；后续平台将继续")
                                 if detail.get("status") == "selector_changed":
                                     return PlatformCollectionResult(self.platform, "blocked", "selector_changed", "智联详情页结构变化，已安全停止")
                                 if not detail.get("source_job_id"):

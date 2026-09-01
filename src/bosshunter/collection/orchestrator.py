@@ -386,12 +386,12 @@ class CollectionOrchestrator:
                 })
                 all_new_ids.extend(result.new_job_ids)
                 self._persist(states, all_new_ids, platform, stop_reason=result.reason_code, error=result.error)
-                # A verification, rate-limit, or unknown blocking page is an
-                # account-level signal. Stop the entire serial queue instead
-                # of immediately moving the same browser session to another
-                # recruitment platform.
+                # A login wall belongs to the current recruitment platform:
+                # keep its blocked result but let independent later platforms
+                # continue. Other unknown/risk blocks remain queue-wide until
+                # they have an equally explicit platform-local classification.
                 if (
-                    result.status == "blocked"
+                    (result.status == "blocked" and result.reason_code != "login_required")
                     or result.reason_code in {"user_stopped", "browser_disconnected"}
                     or (self.stop_event and self.stop_event.is_set())
                 ):

@@ -422,6 +422,14 @@ export default function ConfigPage() {
                     <div className="grid gap-3 md:grid-cols-2">
                       <Field label="最大页数">
                         <Input type="number" value={search.max_pages || (platform === 'boss' ? 3 : 1)} onChange={event => updatePlatformSearch(platform, 'max_pages', Number(event.target.value))} min={1} max={10} />
+                        {platform === 'boss' && bossTheoreticalPages > 0 && (
+                          <p className={`mt-1 rounded-lg px-3 py-2 text-xs ${bossTheoreticalExceedsLimit ? 'bg-amber-50 font-bold text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                            理论最多 {bossTheoreticalPages} 页（{bossEstimateKeywords.length} 个关键词 × {bossEstimateCities.length} 个城市 × {bossEstimateMaxPages} 页）。
+                            {bossTheoreticalExceedsLimit
+                              ? ` 已超过每日 ${bossDailySearchLimit} 页上限，到达上限后会提示并停止 BOSS 当前轮。`
+                              : ` 未超过每日 ${bossDailySearchLimit} 页上限。`}
+                          </p>
+                        )}
                       </Field>
                       <Field label="排序">
                         <Select value={search.sort || 'default'} onChange={event => updatePlatformSearch(platform, 'sort', event.target.value)}>
@@ -469,14 +477,6 @@ export default function ConfigPage() {
                         <p className="mt-1 text-xs text-muted">只接受数字编码；无效内容会被安全忽略。</p>
                       </Field>
                     </div>}
-                    {platform === 'boss' && bossTheoreticalPages > 0 && (
-                      <p className={`rounded-lg px-3 py-2 text-xs ${bossTheoreticalExceedsLimit ? 'bg-amber-50 font-bold text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                        理论最多 {bossTheoreticalPages} 页（{bossEstimateKeywords.length} 个关键词 × {bossEstimateCities.length} 个城市 × {bossEstimateMaxPages} 页）。
-                        {bossTheoreticalExceedsLimit
-                          ? ` 已超过每日 ${bossDailySearchLimit} 页上限，到达上限后会提示并停止 BOSS 当前轮。`
-                          : ` 未超过每日 ${bossDailySearchLimit} 页上限。`}
-                      </p>
-                    )}
                   </div>}
                 </div>
               )
