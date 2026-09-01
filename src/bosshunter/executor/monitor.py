@@ -509,7 +509,14 @@ def _looks_like_resume_request_card(text: str) -> bool:
 def _is_short_resume_acknowledgement(text: str) -> bool:
     """Treat standalone positive HR acknowledgements as resume intent."""
     normalized = "".join(str(text or "").split()).strip("，,。.!！?？~～…")
-    return normalized in {"好", "好的", "可以"}
+    return normalized in {
+        "好",
+        "好的",
+        "可以",
+        "你好啊，可以聊一聊",
+        "你好，可以聊一聊",
+        "您好，可以聊一聊",
+    }
 
 
 def _detect_resume_request(messages: list[dict]) -> bool:

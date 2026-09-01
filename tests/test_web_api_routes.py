@@ -999,7 +999,34 @@ class WebApiRouteTests(unittest.TestCase):
             )
 
         self.assertTrue(status.startswith("409"), body)
-        self.assertEqual(json.loads(body)["invalid_ids"], ["already-sent"])
+        payload = json.loads(body)
+        self.assertEqual(payload["error"], "所选岗位已经投递，不能重复发送")
+        self.assertEqual(payload["invalid_ids"], ["already-sent"])
+        self.assertEqual(payload["already_sent_ids"], ["already-sent"])
+        self.assertEqual(payload["not_ready_ids"], [])
+
+    def test_web_api_deliver_reports_pending_jobs_as_not_ready_instead_of_already_sent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("pending-without-history"))
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/workbench/deliver",
+                method="POST",
+                json_body={"job_ids": ["pending-without-history"]},
+            )
+
+        self.assertTrue(status.startswith("409"), body)
+        payload = json.loads(body)
+        self.assertEqual(payload["error"], "所选岗位尚未完成评分筛选或人工确认，暂不能投递")
+        self.assertEqual(payload["invalid_ids"], ["pending-without-history"])
+        self.assertEqual(payload["already_sent_ids"], [])
+        self.assertEqual(payload["not_ready_ids"], ["pending-without-history"])
 
     def test_web_api_direct_send_requires_a_retryable_greeting(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1019,7 +1046,10 @@ class WebApiRouteTests(unittest.TestCase):
             )
 
         self.assertTrue(status.startswith("409"), body)
-        self.assertEqual(json.loads(body)["invalid_ids"], ["error-without-greeting"])
+        payload = json.loads(body)
+        self.assertEqual(payload["error"], "所选岗位尚未生成招呼语，不能直接发送")
+        self.assertEqual(payload["invalid_ids"], ["error-without-greeting"])
+        self.assertEqual(payload["missing_greeting_ids"], ["error-without-greeting"])
 
     def test_web_api_deliver_queues_confirmation_before_full_task_event_exists(self):
         full_task = WorkbenchTask(id="full-before-event", mode="full", label="运行全流程")

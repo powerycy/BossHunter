@@ -1563,16 +1563,45 @@ def api_workbench_deliver():
 				"invalid_ids": unsupported,
 			}, 403)
 		allowed_statuses = {"ready", "approved", "error"} if direct_send else {"ready", "approved"}
-		invalid_status_ids = [
+		completed_statuses = {"sent", "replied", "resume_sent", "needs_resume", "follow_up_sent"}
+		already_sent_ids = {
+			str(row["id"])
+			for row in platform_rows
+			if str(row["status"] or "") in completed_statuses
+		}
+		missing_greeting_ids = {
+			str(row["id"])
+			for row in platform_rows
+			if direct_send
+			and str(row["status"] or "") in allowed_statuses
+			and not str(row["greeting"] or "").strip()
+		}
+		not_ready_ids = {
 			str(row["id"])
 			for row in platform_rows
 			if str(row["status"] or "") not in allowed_statuses
-			or (direct_send and not str(row["greeting"] or "").strip())
+			and str(row["status"] or "") not in completed_statuses
+		}
+		invalid_status_ids = [
+			job_id
+			for job_id in job_ids
+			if job_id in already_sent_ids or job_id in missing_greeting_ids or job_id in not_ready_ids
 		]
 		if invalid_status_ids:
+			if already_sent_ids and not missing_greeting_ids and not not_ready_ids:
+				error = "所选岗位已经投递，不能重复发送"
+			elif missing_greeting_ids and not already_sent_ids and not not_ready_ids:
+				error = "所选岗位尚未生成招呼语，不能直接发送"
+			elif not_ready_ids and not already_sent_ids and not missing_greeting_ids:
+				error = "所选岗位尚未完成评分筛选或人工确认，暂不能投递"
+			else:
+				error = "所选岗位包含尚未准备好、缺少招呼语或已经投递的岗位，暂不能投递"
 			return _json_response({
-				"error": "所选岗位状态不允许投递，不能重复发送已投递岗位",
+				"error": error,
 				"invalid_ids": invalid_status_ids,
+				"already_sent_ids": [job_id for job_id in job_ids if job_id in already_sent_ids],
+				"not_ready_ids": [job_id for job_id in job_ids if job_id in not_ready_ids],
+				"missing_greeting_ids": [job_id for job_id in job_ids if job_id in missing_greeting_ids],
 			}, 409)
 
 		status = task_runner.status()
