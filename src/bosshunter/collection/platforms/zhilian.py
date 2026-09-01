@@ -30,11 +30,14 @@ from bosshunter.browser import (
 )
 from bosshunter.collection.base import CollectionBlockedError, CollectionError, CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
+from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
+from bosshunter.throttle import SendWindowChecker, should_take_day_off
 
 
 SEARCH_URL = "https://www.zhaopin.com/sou/jl{city_code}/"
 DETAIL_BASE_URL = "https://www.zhaopin.com"
 CITY_SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "data" / "zhilian_cities.json"
+_INTERNSHIP_TITLE_TERMS = ("实习", "intern", "internship", "管培")
 LIST_ITEM_CLASSES = ("joblist-box__item", "joblist-item", "job-card")
 TITLE_CLASSES = ("summary-planes__title", "jobinfo__name", "job-name", "job-title")
 SALARY_CLASSES = ("summary-planes__salary", "jobinfo__salary", "job-salary", "salary")
@@ -72,6 +75,12 @@ def load_zhilian_city_snapshot() -> dict[str, Any]:
         "note": payload.get("note", "智联城市编码需要人工核验") if isinstance(payload, dict) else "智联城市编码需要人工核验",
         "cities": cities,
     }
+
+
+def _is_internship(title: str) -> bool:
+    """判断岗位是否为实习/管培（只查标题）。"""
+    t = (title or "").lower()
+    return any(s in t for s in _INTERNSHIP_TITLE_TERMS)
 
 
 def _city_name_variants(city: str) -> set[str]:
@@ -552,11 +561,15 @@ class ZhilianCollector:
     def __init__(
         self,
         *,
+        config: dict[str, Any] | None = None,
+        safety_conn: Any | None = None,
         browser: ZhilianBrowser | None = None,
         sleep: Callable[[float], None] = time.sleep,
         delay_range: tuple[float, float] = (DETAIL_DELAY_MIN_SECONDS, DETAIL_DELAY_MAX_SECONDS),
         uniform: Callable[[float, float], float] = random.SystemRandom().uniform,
     ):
+        self.config = config or {}
+        self.safety_conn = safety_conn
         self.sleep = sleep
         self.delay_range = delay_range
         self.uniform = uniform
@@ -569,6 +582,20 @@ class ZhilianCollector:
                 press_key_action=browser_press_key,
                 navigate_action=browser_navigate,
             )
+
+    def _passes_filters(self, candidate: JobCandidate) -> bool:
+        """collector 增值过滤：deal_breakers / blocked_company / 实习。"""
+        profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
+        if matching_deal_breaker(candidate.title, profile.get("deal_breakers") or []):
+            return False
+        if matching_blocked_company(candidate.company, profile.get("blocked_companies") or []):
+            return False
+        if matching_deal_breaker(candidate.jd, profile.get("jd_deal_breakers") or []):
+            return False
+        allow_internship = bool(profile.get("allow_internship", False))
+        if not allow_internship and _is_internship(candidate.title):
+            return False
+        return True
 
     def _submit_keyword(self, target_id: str, keyword: str) -> None:
         before_state = self._search_state(target_id)
@@ -709,6 +736,16 @@ class ZhilianCollector:
     def collect(self, request: PlatformCollectionRequest, hooks: CollectorHooks) -> PlatformCollectionResult:
         if any(not str(request.city_codes.get(city) or "").strip() for city in request.cities):
             return PlatformCollectionResult(self.platform, "failed", "no_valid_city", "智联城市编码未配置")
+
+        throttle_cfg = self.config.get("throttle", {}) if isinstance(self.config.get("throttle"), dict) else {}
+        send_windows = throttle_cfg.get("send_windows", ["09:00-16:00"])
+        if not SendWindowChecker(send_windows).is_active():
+            return PlatformCollectionResult(self.platform, "completed", "outside_window",
+                                            f"当前不在采集时间窗口内（{send_windows}）")
+        if should_take_day_off(float(throttle_cfg.get("day_off_probability", 0.05))):
+            return PlatformCollectionResult(self.platform, "completed", "day_off",
+                                            "今日随机休息，跳过智联采集")
+
         detail_requests = 0
         for city in request.cities:
             for keyword in request.keywords:
@@ -819,7 +856,11 @@ class ZhilianCollector:
                                     return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")
                                 continue
                             candidate = self._candidate_from_list(raw_item, city, keyword)
-                            if candidate is None or not hooks.on_list_candidate(candidate):
+                            if candidate is None:
+                                continue
+                            if not self._passes_filters(candidate):
+                                continue
+                            if not hooks.on_list_candidate(candidate):
                                 continue
                             if detail_requests:
                                 delay = max(0.0, self.uniform(*self.delay_range))
