@@ -28,6 +28,7 @@ import json
 import random
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -46,7 +47,9 @@ RENDER_POLL_ATTEMPTS = 10
 
 # Liepin uses 3-digit city codes passed via the ``dqs`` parameter. Only codes
 # verified live are bundled; unknown cities are rejected instead of guessing.
-CITY_SNAPSHOT = (
+CITY_SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "data" / "liepin_cities.json"
+
+CITY_SNAPSHOT_FALLBACK = (
     {"name": "北京", "code": "010"},
     {"name": "上海", "code": "020"},
     {"name": "广州", "code": "050"},
@@ -69,19 +72,27 @@ CITY_SNAPSHOT = (
 
 
 def load_liepin_city_snapshot() -> dict[str, Any]:
+    try:
+        payload = json.loads(CITY_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        payload = {}
+    cities = payload.get("cities") if isinstance(payload, dict) and isinstance(payload.get("cities"), list) else []
+    if not cities:
+        cities = [dict(item) for item in CITY_SNAPSHOT_FALLBACK]
     return {
         "schema": "bosshunter.liepin_cities.v1",
-        "source": "verified_snapshot",
-        "note": "当前内置已核验的猎聘 3 位城市编码（dqs 参数）；其他城市需核验后再加入。",
-        "cities": [dict(item) for item in CITY_SNAPSHOT],
+        "source": str(payload.get("source") or "verified_snapshot") if isinstance(payload, dict) else "verified_snapshot",
+        "fetched_at": payload.get("fetched_at") if isinstance(payload, dict) else None,
+        "note": payload.get("note", "猎聘 3 位城市编码（dqs 参数）") if isinstance(payload, dict) else "猎聘 3 位城市编码（dqs 参数）",
+        "cities": cities,
     }
 
 
 def get_liepin_city_code(city: str) -> str | None:
     normalized = str(city or "").strip().removesuffix("市")
-    for item in CITY_SNAPSHOT:
-        if item["name"].removesuffix("市") == normalized:
-            return item["code"]
+    for item in load_liepin_city_snapshot()["cities"]:
+        if str(item.get("name", "")).removesuffix("市") == normalized:
+            return item.get("code")
     return None
 
 
