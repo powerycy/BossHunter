@@ -358,6 +358,8 @@ class CollectionOrchestrator:
                         if platform == "boss" and self._uses_default_registry
                         else Job51Collector(config=self.config, safety_conn=conn)
                         if platform == "51job" and self._uses_default_registry
+                        else LiepinCollector(config=self.config, safety_conn=conn)
+                        if platform == "liepin" and self._uses_default_registry
                         else self.registry.get(platform)
                     )
                     result = collector.collect(request, hooks)

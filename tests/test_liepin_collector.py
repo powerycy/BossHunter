@@ -1,5 +1,6 @@
 import json
 from unittest import TestCase
+from unittest.mock import patch
 
 from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import PlatformCollectionRequest
@@ -15,6 +16,17 @@ from bosshunter.collection.text import clean_job_description
 
 
 class LiepinCollectorTests(TestCase):
+    def setUp(self):
+        self._patches = [
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
     def test_list_script_uses_stable_attribute_selector(self):
         self.assertIn('a[data-nick="job-detail-job-info"]', JS_EXTRACT_LIST)
         self.assertIn("liepin", JS_EXTRACT_LIST)
@@ -392,3 +404,148 @@ class LiepinCollectorTests(TestCase):
 
         self.assertEqual(result.status, "completed")
         self.assertEqual(len(collected), 0)
+
+
+class LiepinEnhancedTests(TestCase):
+    """猎聘采集器增强：时间窗口 / 过滤链 / config 集成。"""
+
+    def _hooks(self, collected=None):
+        collected = collected if collected is not None else []
+        return CollectorHooks(
+            stop_event=None,
+            on_list_candidate=lambda _c: True,
+            on_candidate=lambda c: collected.append(c) or True,
+            on_parse_failed=lambda _r: None,
+            on_event=lambda **_: None,
+        )
+
+    def _browser_with_list(self, jobs):
+        list_payload = json.dumps({"status": "ready", "jobs": jobs}, ensure_ascii=False)
+        detail_payload = json.dumps({"status": "login_required"})
+        return LiepinBrowser(
+            new_tab=lambda url, **_kw: url,
+            close_tab=lambda _t: True,
+            evaluate=lambda _t, s: list_payload if "job-detail-job-info" in s else detail_payload,
+            scroll=lambda *_a, **_kw: True,
+            wait_for_load=lambda *_a, **_kw: True,
+        )
+
+    def test_outside_send_window_skips_collection(self):
+        browser = self._browser_with_list([])
+        collector = LiepinCollector(browser=browser)
+        with patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=False):
+            result = collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+                self._hooks(),
+            )
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.reason_code, "outside_window")
+
+    def test_day_off_skips_collection(self):
+        browser = self._browser_with_list([])
+        collector = LiepinCollector(browser=browser)
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=True),
+        ):
+            result = collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+                self._hooks(),
+            )
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.reason_code, "day_off")
+
+    def test_deal_breaker_in_title_filtered(self):
+        jobs = [{"source_job_id": "1", "title": "外包AI", "company": "公司", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_list(jobs)
+        collected = []
+        collector = LiepinCollector(
+            browser=browser, sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+            config={"profile": {"deal_breakers": ["外包"]}},
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+        ):
+            result = collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+                self._hooks(collected),
+            )
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(collected), 0)
+
+    def test_blocked_company_filtered(self):
+        jobs = [{"source_job_id": "1", "title": "AI工程师", "company": "黑名单公司", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_list(jobs)
+        collected = []
+        collector = LiepinCollector(
+            browser=browser, sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+            config={"profile": {"blocked_companies": ["黑名单公司"]}},
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+        ):
+            collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+                self._hooks(collected),
+            )
+        self.assertEqual(len(collected), 0)
+
+    def test_internship_filtered_when_disallowed(self):
+        jobs = [{"source_job_id": "1", "title": "AI实习工程师", "company": "公司", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_list(jobs)
+        collected = []
+        collector = LiepinCollector(
+            browser=browser, sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+            config={"profile": {"allow_internship": False}},
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+        ):
+            collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+                self._hooks(collected),
+            )
+        self.assertEqual(len(collected), 0)
+
+    def test_internship_allowed_when_explicitly_enabled(self):
+        jobs = [{"source_job_id": "1", "title": "AI实习工程师", "company": "公司", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_list(jobs)
+        collected = []
+        collector = LiepinCollector(
+            browser=browser, sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+            config={"profile": {"allow_internship": True}},
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+        ):
+            collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+                self._hooks(collected),
+            )
+        self.assertEqual(len(collected), 1)
+
+    def test_no_filter_config_passes_all(self):
+        jobs = [{"source_job_id": "1", "title": "AI工程师", "company": "公司", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_list(jobs)
+        collected = []
+        collector = LiepinCollector(
+            browser=browser, sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+        ):
+            collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+                self._hooks(collected),
+            )
+        self.assertEqual(len(collected), 1)

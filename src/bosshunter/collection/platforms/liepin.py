@@ -34,6 +34,8 @@ from urllib.parse import quote
 from bosshunter.browser import close_tab, evaluate, navigate as browser_navigate, new_tab, scroll, wait_for_load
 from bosshunter.collection.base import CollectionError, CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
+from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
+from bosshunter.throttle import SendWindowChecker, should_take_day_off
 
 
 SEARCH_URL = "https://www.liepin.com/zhaopin/?key={keyword}&dqs={code}"
@@ -43,6 +45,11 @@ PAGE_DELAY_MIN_SECONDS = 20.0
 PAGE_DELAY_MAX_SECONDS = 35.0
 RENDER_POLL_INTERVAL_SECONDS = 0.75
 RENDER_POLL_ATTEMPTS = 10
+
+_INTERNSHIP_TITLE_TERMS = ("实习", "intern", "internship", "管培")
+
+WAVE_SHORT_PROB = 0.60
+WAVE_MEDIUM_PROB = 0.85
 
 # Liepin uses 3-digit city codes passed via the ``dqs`` parameter. Only codes
 # verified live are bundled; unknown cities are rejected instead of guessing.
@@ -191,18 +198,28 @@ def _payload(raw: Any) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _is_internship(title: str) -> bool:
+    """判断岗位是否为实习/管培（只查标题）。"""
+    t = (title or "").lower()
+    return any(s in t for s in _INTERNSHIP_TITLE_TERMS)
+
+
 class LiepinCollector:
     platform = "liepin"
 
     def __init__(
         self,
         *,
+        config: dict[str, Any] | None = None,
+        safety_conn: Any | None = None,
         browser: LiepinBrowser | None = None,
         sleep: Callable[[float], None] = time.sleep,
         uniform: Callable[[float, float], float] = random.SystemRandom().uniform,
         detail_delay_range: tuple[float, float] = (DETAIL_DELAY_MIN_SECONDS, DETAIL_DELAY_MAX_SECONDS),
         page_delay_range: tuple[float, float] = (PAGE_DELAY_MIN_SECONDS, PAGE_DELAY_MAX_SECONDS),
     ):
+        self.config = config or {}
+        self.safety_conn = safety_conn
         self.browser = browser or LiepinBrowser(navigate_action=browser_navigate)
         self.sleep = sleep
         self.uniform = uniform
@@ -244,10 +261,35 @@ class LiepinCollector:
                 self._wait(hooks, 2.0)
         return False
 
+    def _passes_filters(self, candidate: JobCandidate) -> bool:
+        """collector 增值过滤：deal_breakers / blocked_company / 实习 / 薪资。"""
+        profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
+        if matching_deal_breaker(candidate.title, profile.get("deal_breakers") or []):
+            return False
+        if matching_blocked_company(candidate.company, profile.get("blocked_companies") or []):
+            return False
+        if matching_deal_breaker(candidate.jd, profile.get("jd_deal_breakers") or []):
+            return False
+        allow_internship = bool(profile.get("allow_internship", False))
+        if not allow_internship and _is_internship(candidate.title):
+            return False
+        return True
+
     def collect(self, request: PlatformCollectionRequest, hooks: CollectorHooks) -> PlatformCollectionResult:
         for city in request.cities:
             if not request.city_codes.get(city):
                 return PlatformCollectionResult(self.platform, "failed", "no_valid_city", f"猎聘城市编码未配置：{city}")
+
+        throttle_cfg = self.config.get("throttle", {}) if isinstance(self.config.get("throttle"), dict) else {}
+        send_windows = throttle_cfg.get("send_windows", ["09:00-16:00"])
+        if not SendWindowChecker(send_windows).is_active():
+            return PlatformCollectionResult(self.platform, "completed", "outside_window",
+                                            f"当前不在采集时间窗口内（{send_windows}）")
+        if should_take_day_off(float(throttle_cfg.get("day_off_probability", 0.05))):
+            return PlatformCollectionResult(self.platform, "completed", "day_off",
+                                            "今日随机休息，跳过猎聘采集")
+
+        for city in request.cities:
             for keyword in request.keywords:
                 search_url = self.build_search_url(request, city, keyword, page=1)
                 initial_url = "about:blank" if self.browser.navigate_action is not None else search_url
@@ -288,7 +330,11 @@ class LiepinCollector:
 
                         for raw_item in payload["jobs"]:
                             candidate = self._candidate_from_list(raw_item, city, keyword)
-                            if candidate is None or not hooks.on_list_candidate(candidate):
+                            if candidate is None:
+                                continue
+                            if not self._passes_filters(candidate):
+                                continue
+                            if not hooks.on_list_candidate(candidate):
                                 continue
                             detail_req = self.uniform(*self.detail_delay_range)
                             hooks.on_event(phase="pacing", keyword=keyword, city=city, page=page, message=f"详情页安全间隔 {detail_req:.1f} 秒")
