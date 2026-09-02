@@ -833,6 +833,13 @@ class ConfigPageTests(unittest.TestCase):
         ):
             self.assertNotIn(f'label="{retired_label}"', self.source)
 
+    def test_boss_page_limit_estimate_is_directly_below_max_pages(self):
+        max_pages_field = self.source.index('<Field label="最大页数">')
+        estimate = self.source.index('理论最多 {bossTheoreticalPages} 页', max_pages_field)
+        field_end = self.source.index('</Field>', max_pages_field)
+
+        self.assertLess(estimate, field_end)
+
 
 class ConfigSchemaTests(unittest.TestCase):
     def setUp(self):

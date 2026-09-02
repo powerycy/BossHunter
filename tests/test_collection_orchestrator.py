@@ -61,6 +61,17 @@ class _FakeCollector:
         return PlatformCollectionResult(self.platform, "completed", "search_exhausted", "无更多结果")
 
 
+class _BlockedCollector:
+    def __init__(self, platform, events, reason_code):
+        self.platform = platform
+        self.events = events
+        self.reason_code = reason_code
+
+    def collect(self, _request, _hooks: CollectorHooks):
+        self.events.append(f"start:{self.platform}")
+        return PlatformCollectionResult(self.platform, "blocked", self.reason_code, "平台已阻断")
+
+
 class CollectionOrchestratorTests(TestCase):
     def test_two_platforms_are_strictly_serial_and_save_only_new_rows(self):
         events = []
@@ -151,6 +162,37 @@ class CollectionOrchestratorTests(TestCase):
         self.assertEqual(result["status"], "stopped")
         self.assertNotIn("start:zhilian", events)
         score_jobs.assert_not_called()
+
+    def test_login_required_stops_only_current_platform_and_continues_queue(self):
+        events = []
+        registry = CollectorRegistry({
+            "zhilian": lambda: _BlockedCollector("zhilian", events, "login_required"),
+            "boss": lambda: _FakeCollector("boss", events, [_candidate("boss", "boss-after-login")]),
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator(
+                {}, db_path=Path(tmp) / "collection.db", registry=registry
+            ).run(_options(order=["zhilian", "boss"]))
+
+        self.assertEqual(events, ["start:zhilian", "start:boss"])
+        self.assertEqual(result["status"], "completed_with_errors")
+        self.assertEqual(result["platforms"]["zhilian"]["reason_code"], "login_required")
+        self.assertEqual(result["platforms"]["boss"]["new"], 1)
+
+    def test_non_login_block_still_stops_the_remaining_queue(self):
+        events = []
+        registry = CollectorRegistry({
+            "zhilian": lambda: _BlockedCollector("zhilian", events, "rate_limit"),
+            "boss": lambda: _FakeCollector("boss", events, [_candidate("boss", "not-started")]),
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator(
+                {}, db_path=Path(tmp) / "collection.db", registry=registry
+            ).run(_options(order=["zhilian", "boss"]))
+
+        self.assertEqual(events, ["start:zhilian"])
+        self.assertEqual(result["status"], "completed_with_errors")
+        self.assertEqual(result["platforms"]["boss"]["status"], "queued")
 
     def test_legacy_search_values_override_empty_platform_defaults(self):
         result = normalize_collection_options({

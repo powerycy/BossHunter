@@ -122,6 +122,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
     _init_collection_runs(conn)
+    _init_collect_progress(conn)
 
 
 def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
@@ -1013,3 +1014,156 @@ def get_jobs_needing_resume(conn: sqlite3.Connection) -> list[dict]:
         "SELECT * FROM jobs WHERE status = 'needs_resume' AND deleted_at IS NULL ORDER BY updated_at DESC"
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+# =====================================================================
+# 51job 断点续采（词级 collect_progress + 页级 collect_progress_page）
+# 由 51job API-fetch 采集器使用，随该采集器一并引入
+# =====================================================================
+
+
+def _init_collect_progress(conn: sqlite3.Connection) -> None:
+    """采集断点续采进度表：记录已完成的 (source, city, keyword) 组合。
+
+    词级断点（collect_progress）：组合采集完成即标记，默认 24h 内整词跳过。
+    页级断点（collect_progress_page）：记录 51job API 采集每个词已采到的页码，
+    支持「中途停止 → 从 N+1 页续采」。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS collect_progress (
+            source TEXT NOT NULL,
+            city TEXT NOT NULL,
+            keyword TEXT NOT NULL,
+            finished_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (source, city, keyword)
+        );
+
+        CREATE TABLE IF NOT EXISTS collect_progress_page (
+            source TEXT NOT NULL,
+            city TEXT NOT NULL,
+            keyword TEXT NOT NULL,
+            page INTEGER NOT NULL DEFAULT 0,
+            finished_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (source, city, keyword)
+        );
+        """
+    )
+    conn.commit()
+
+
+def get_collected_combos(conn: sqlite3.Connection, source: str, within_hours: int | None = None) -> set[tuple[str, str]]:
+    """返回某来源已完成的 (city, keyword) 组合集合（用于断点续采跳过）。
+
+    within_hours：只返回最近 N 小时内完成的组合；超过该窗口的旧断点视为"过期"，
+    会在下次采集时重新采集（招聘岗位每天都有新增）。为 None 时返回全部（兼容旧行为）。
+    """
+    if within_hours is not None:
+        rows = conn.execute(
+            "SELECT city, keyword FROM collect_progress "
+            "WHERE source = ? AND finished_at >= datetime('now', ?)",
+            (source, f"-{int(within_hours)} hours"),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT city, keyword FROM collect_progress WHERE source = ?",
+            (source,),
+        ).fetchall()
+    return {(str(r["city"]), str(r["keyword"])) for r in rows}
+
+
+def clear_collected_combos(conn: sqlite3.Connection, source: str | None = None) -> int:
+    """清空词级断点记录；source 为 None 时清空所有来源。返回删除行数。"""
+    if source is not None:
+        cursor = conn.execute(
+            "DELETE FROM collect_progress WHERE source = ?", (source,)
+        )
+    else:
+        cursor = conn.execute("DELETE FROM collect_progress")
+    conn.commit()
+    return int(cursor.rowcount or 0)
+
+
+def prune_collected_combos(conn: sqlite3.Connection, source: str, keep_keywords: set[str]) -> int:
+    """清理孤儿词级断点：删除「已不在当前关键词列表里」的断点记录。
+
+    关键词可能在采集前被用户增删，删掉的词其断点记录应同步清理，
+    避免脏数据累积；重新加回该词时也会重新采集（符合预期）。返回删除行数。
+    """
+    if not keep_keywords:
+        return clear_collected_combos(conn, source)
+    placeholders = ",".join("?" for _ in keep_keywords)
+    cursor = conn.execute(
+        f"DELETE FROM collect_progress WHERE source = ? AND keyword NOT IN ({placeholders})",
+        (source, *keep_keywords),
+    )
+    conn.commit()
+    return int(cursor.rowcount or 0)
+
+
+def mark_combo_collected(conn: sqlite3.Connection, source: str, city: str, keyword: str) -> None:
+    """标记一个 (source, city, keyword) 组合已完成（INSERT OR IGNORE，幂等）。"""
+    conn.execute(
+        "INSERT OR IGNORE INTO collect_progress (source, city, keyword) VALUES (?, ?, ?)",
+        (source, city, keyword),
+    )
+    conn.commit()
+
+
+def upsert_page_progress(conn: sqlite3.Connection, source: str, city: str, keyword: str, page: int) -> None:
+    """记录/更新某词已采到的页码（页级断点，支持中途续采）。"""
+    conn.execute(
+        """
+        INSERT INTO collect_progress_page (source, city, keyword, page)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(source, city, keyword) DO UPDATE SET
+            page = excluded.page,
+            finished_at = CURRENT_TIMESTAMP
+        """,
+        (source, city, keyword, int(page or 0)),
+    )
+    conn.commit()
+
+
+def get_page_progress(conn: sqlite3.Connection, source: str, city: str, keyword: str) -> int:
+    """返回某词已采到的页码（0 = 未采过/无记录）。"""
+    row = conn.execute(
+        "SELECT page FROM collect_progress_page WHERE source = ? AND city = ? AND keyword = ?",
+        (source, city, keyword),
+    ).fetchone()
+    return int(row["page"] or 0) if row else 0
+
+
+def clear_page_progress(conn: sqlite3.Connection, source: str | None = None) -> int:
+    """清空页级断点；source 为 None 时清空所有来源。返回删除行数。"""
+    if source is not None:
+        cursor = conn.execute(
+            "DELETE FROM collect_progress_page WHERE source = ?", (source,)
+        )
+    else:
+        cursor = conn.execute("DELETE FROM collect_progress_page")
+    conn.commit()
+    return int(cursor.rowcount or 0)
+
+
+def delete_page_progress(conn: sqlite3.Connection, source: str, city: str, keyword: str) -> int:
+    """删除单个词的页级断点（词已完成，无需续页）。返回删除行数。"""
+    cursor = conn.execute(
+        "DELETE FROM collect_progress_page WHERE source = ? AND city = ? AND keyword = ?",
+        (source, city, keyword),
+    )
+    conn.commit()
+    return int(cursor.rowcount or 0)
+
+
+def prune_page_progress(conn: sqlite3.Connection, source: str, keep_keywords: set[str]) -> int:
+    """清理孤儿页级断点（已删除词），与 prune_collected_combos 保持一致。"""
+    if not keep_keywords:
+        return clear_page_progress(conn, source)
+    placeholders = ",".join("?" for _ in keep_keywords)
+    cursor = conn.execute(
+        f"DELETE FROM collect_progress_page WHERE source = ? AND keyword NOT IN ({placeholders})",
+        (source, *keep_keywords),
+    )
+    conn.commit()
+    return int(cursor.rowcount or 0)
