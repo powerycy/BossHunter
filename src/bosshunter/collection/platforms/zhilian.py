@@ -30,6 +30,15 @@ from bosshunter.browser import (
 )
 from bosshunter.collection.base import CollectionBlockedError, CollectionError, CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
+from bosshunter.db import (
+    delete_page_progress,
+    get_collected_combos,
+    get_page_progress,
+    mark_combo_collected,
+    prune_collected_combos,
+    prune_page_progress,
+    upsert_page_progress,
+)
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.throttle import SendWindowChecker, should_take_day_off
 
@@ -597,6 +606,22 @@ class ZhilianCollector:
             return False
         return True
 
+    def _resume_ttl_hours(self) -> int:
+        """断点续采有效期（默认 24h），与 51job/liepin 同规则。"""
+        search_cfg: dict[str, Any] = {}
+        platforms = self.config.get("platforms", {})
+        if isinstance(platforms, dict) and isinstance(platforms.get("zhilian"), dict):
+            pf = platforms["zhilian"]
+            if isinstance(pf.get("search"), dict):
+                search_cfg = pf["search"]
+        elif isinstance(self.config.get("search"), dict):
+            search_cfg = self.config["search"]
+        raw = search_cfg.get("resume_ttl_hours", 24)
+        try:
+            return max(1, min(int(raw or 24), 720))
+        except (TypeError, ValueError):
+            return 24
+
     def _submit_keyword(self, target_id: str, keyword: str) -> None:
         before_state = self._search_state(target_id)
         actions = (
@@ -746,9 +771,33 @@ class ZhilianCollector:
             return PlatformCollectionResult(self.platform, "completed", "day_off",
                                             "今日随机休息，跳过智联采集")
 
+        # 词级断点续采：跳过最近 N 小时内已完成的 (city, keyword) 组合。
+        collected_combos: set[tuple[str, str]] = set()
+        if self.safety_conn is not None:
+            all_keywords = set(request.keywords)
+            prune_collected_combos(self.safety_conn, "zhilian", all_keywords)
+            prune_page_progress(self.safety_conn, "zhilian", all_keywords)
+            collected_combos = get_collected_combos(
+                self.safety_conn, "zhilian", within_hours=self._resume_ttl_hours()
+            )
+
         detail_requests = 0
         for city in request.cities:
             for keyword in request.keywords:
+                if (city, keyword) in collected_combos:
+                    hooks.on_event(phase="completed_keyword", keyword=keyword, city=city,
+                                   message=f"智联 {keyword} 断点续采：{self._resume_ttl_hours()}h 内已完成，整词跳过")
+                    continue
+                # 页级断点：从上次采到页码的下一页继续
+                saved_page = get_page_progress(self.safety_conn, "zhilian", city, keyword) if self.safety_conn is not None else 0
+                start_page = saved_page + 1 if saved_page > 0 else 1
+                if start_page > request.max_pages:
+                    if self.safety_conn is not None:
+                        mark_combo_collected(self.safety_conn, "zhilian", city, keyword)
+                        delete_page_progress(self.safety_conn, "zhilian", city, keyword)
+                    hooks.on_event(phase="completed_keyword", keyword=keyword, city=city,
+                                   message=f"智联 {keyword} 页级断点已超最大页（{saved_page}/{request.max_pages}），视为已采完，跳过")
+                    continue
                 target_id: str | None = None
                 try:
                     try:
@@ -761,14 +810,16 @@ class ZhilianCollector:
                         return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "无法打开智联搜索页")
                     if self.browser.navigate_action is not None and not self.browser.navigate_action(target_id, search_url):
                         return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "智联搜索页导航失败")
-                    for page in range(1, request.max_pages + 1):
+                    for page in range(start_page, request.max_pages + 1):
                         if hooks.stop_event is not None and hooks.stop_event.is_set():
                             return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                         hooks.on_event(phase="loading_list", keyword=keyword, city=city, page=page)
                         try:
                             self.browser.wait_for_load(target_id, timeout=10)
-                            if page == 1:
+                            if page == start_page:
                                 self._submit_keyword(target_id, keyword)
+                                if start_page > 1:
+                                    self.browser.evaluate(target_id, _build_page_script(page))
                             else:
                                 self.browser.evaluate(target_id, _build_page_script(page))
                             self.browser.wait_for_load(target_id, timeout=10)
@@ -804,7 +855,7 @@ class ZhilianCollector:
                             message = str(exc) or "智联列表解析失败，可能是页面结构变化"
                             return PlatformCollectionResult(self.platform, "blocked", code, message)
                         if not items:
-                            return PlatformCollectionResult(self.platform, "completed", "no_results", "智联没有更多搜索结果")
+                            break
                         for raw_item in items:
                             card_index = raw_item.get("card_index") if isinstance(raw_item, dict) else None
                             if card_index is not None:
@@ -917,9 +968,16 @@ class ZhilianCollector:
                                 continue
                             if not hooks.on_candidate(final):
                                 return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")
+                        # 页级断点：每采完一页立即记录页码
+                        if self.safety_conn is not None:
+                            upsert_page_progress(self.safety_conn, "zhilian", city, keyword, page)
                 finally:
                     if target_id:
                         self.browser.close_tab(target_id)
+                # 词结束：标记词级断点 + 清页级断点
+                if self.safety_conn is not None:
+                    mark_combo_collected(self.safety_conn, "zhilian", city, keyword)
+                    delete_page_progress(self.safety_conn, "zhilian", city, keyword)
         return PlatformCollectionResult(self.platform, "completed", "search_exhausted", "智联搜索结果已采集完毕")
 
     @staticmethod
