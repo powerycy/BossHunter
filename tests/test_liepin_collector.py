@@ -549,3 +549,313 @@ class LiepinEnhancedTests(TestCase):
                 self._hooks(collected),
             )
         self.assertEqual(len(collected), 1)
+
+
+class LiepinResumeCheckpointTests(TestCase):
+    """猎聘断点续采：词级跳过 / 页级恢复 / checkpoint 记录 / 完成标记。"""
+
+    def _hooks(self, collected=None, events=None):
+        collected = collected if collected is not None else []
+        events = events if events is not None else []
+        return CollectorHooks(
+            stop_event=None,
+            on_list_candidate=lambda _c: True,
+            on_candidate=lambda c: collected.append(c) or True,
+            on_parse_failed=lambda _r: None,
+            on_event=lambda **kw: events.append(kw),
+        )
+
+    def _browser_with_pages(self, pages_jobs, detail_status="login_required"):
+        """pages_jobs: dict[int, list[dict]] — page number to list jobs."""
+        call_state = {"page": 0}
+
+        def evaluate(_target, script):
+            if "job-detail-job-info" in script:
+                call_state["page"] += 1
+                page_num = call_state["page"]
+                jobs = pages_jobs.get(page_num, [])
+                if jobs is None:
+                    return json.dumps({"status": "empty", "jobs": []})
+                return json.dumps({"status": "ready", "jobs": jobs}, ensure_ascii=False)
+            return json.dumps({"status": detail_status})
+
+        return LiepinBrowser(
+            new_tab=lambda url, **_kw: url,
+            close_tab=lambda _t: True,
+            evaluate=evaluate,
+            scroll=lambda *_a, **_kw: True,
+            wait_for_load=lambda *_a, **_kw: True,
+        )
+
+    def _resume_patches(self, collected_combos=None, saved_page=0):
+        collected_combos = collected_combos if collected_combos is not None else set()
+        return (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+            patch("bosshunter.collection.platforms.liepin.prune_collected_combos"),
+            patch("bosshunter.collection.platforms.liepin.prune_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.get_collected_combos", return_value=collected_combos),
+            patch("bosshunter.collection.platforms.liepin.get_page_progress", return_value=saved_page),
+            patch("bosshunter.collection.platforms.liepin.upsert_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.mark_combo_collected"),
+            patch("bosshunter.collection.platforms.liepin.delete_page_progress"),
+        )
+
+    def test_completed_combo_skipped_entirely(self):
+        jobs = [{"source_job_id": "1", "title": "AI", "company": "c", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_pages({1: jobs})
+        collected = []
+        events = []
+        collector = LiepinCollector(
+            browser=browser, safety_conn=object(),
+            sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+            patch("bosshunter.collection.platforms.liepin.prune_collected_combos"),
+            patch("bosshunter.collection.platforms.liepin.prune_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.get_collected_combos", return_value={("上海", "AI")}),
+            patch("bosshunter.collection.platforms.liepin.get_page_progress", return_value=0),
+            patch("bosshunter.collection.platforms.liepin.upsert_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.mark_combo_collected"),
+            patch("bosshunter.collection.platforms.liepin.delete_page_progress"),
+        ):
+            result = collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+                self._hooks(collected, events),
+            )
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(collected), 0)
+        skip_events = [e for e in events if e.get("phase") == "completed_keyword"]
+        self.assertTrue(any("断点续采" in str(e.get("message", "")) for e in skip_events))
+
+    def test_page_progress_resumes_from_saved_page(self):
+        jobs_p3 = [{"source_job_id": "j3", "title": "AI", "company": "c", "city": "上海",
+                    "url": "https://www.liepin.com/job/3001.shtml"}]
+        browser = self._browser_with_pages({3: jobs_p3, 4: None})
+        collected = []
+        collector = LiepinCollector(
+            browser=browser, safety_conn=object(),
+            sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+        )
+        navigation_urls = []
+        browser.navigate_action = lambda _t, url: navigation_urls.append(url) or True
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+            patch("bosshunter.collection.platforms.liepin.prune_collected_combos"),
+            patch("bosshunter.collection.platforms.liepin.prune_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.get_collected_combos", return_value=set()),
+            patch("bosshunter.collection.platforms.liepin.get_page_progress", return_value=2),
+            patch("bosshunter.collection.platforms.liepin.upsert_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.mark_combo_collected"),
+            patch("bosshunter.collection.platforms.liepin.delete_page_progress"),
+        ):
+            result = collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=4),
+                self._hooks(collected),
+            )
+        self.assertEqual(result.status, "completed")
+        self.assertTrue(any("curPage=2" in url for url in navigation_urls))
+
+    def test_pages_are_checkpointed_in_ascending_order(self):
+        jobs = [{"source_job_id": "j", "title": "AI", "company": "c", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_pages({1: jobs, 2: jobs, 3: None})
+        collected = []
+        checkpoints = []
+        collector = LiepinCollector(
+            browser=browser, safety_conn=object(),
+            sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+            patch("bosshunter.collection.platforms.liepin.prune_collected_combos"),
+            patch("bosshunter.collection.platforms.liepin.prune_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.get_collected_combos", return_value=set()),
+            patch("bosshunter.collection.platforms.liepin.get_page_progress", return_value=0),
+            patch("bosshunter.collection.platforms.liepin.upsert_page_progress",
+                  side_effect=lambda _c, _s, _ci, _k, page: checkpoints.append(page)),
+            patch("bosshunter.collection.platforms.liepin.mark_combo_collected"),
+            patch("bosshunter.collection.platforms.liepin.delete_page_progress"),
+        ):
+            result = collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=3),
+                self._hooks(collected),
+            )
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(checkpoints, [1, 2])
+
+    def test_word_completion_marks_combo_and_clears_page_progress(self):
+        jobs = [{"source_job_id": "j", "title": "AI", "company": "c", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_pages({1: jobs, 2: None})
+        collected = []
+        collector = LiepinCollector(
+            browser=browser, safety_conn=object(),
+            sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+            patch("bosshunter.collection.platforms.liepin.prune_collected_combos"),
+            patch("bosshunter.collection.platforms.liepin.prune_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.get_collected_combos", return_value=set()),
+            patch("bosshunter.collection.platforms.liepin.get_page_progress", return_value=0),
+            patch("bosshunter.collection.platforms.liepin.upsert_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.mark_combo_collected") as mark_complete,
+            patch("bosshunter.collection.platforms.liepin.delete_page_progress") as delete_progress,
+        ):
+            result = collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=2),
+                self._hooks(collected),
+            )
+        self.assertEqual(result.status, "completed")
+        mark_complete.assert_called_once()
+        delete_progress.assert_called_once()
+
+    def test_blocked_page_does_not_mark_combo(self):
+        browser = LiepinBrowser(
+            new_tab=lambda url, **_kw: url,
+            close_tab=lambda _t: True,
+            evaluate=lambda _t, _s: json.dumps({"status": "blocked", "jobs": []}),
+            scroll=lambda *_a, **_kw: True,
+            wait_for_load=lambda *_a, **_kw: True,
+        )
+        collector = LiepinCollector(
+            browser=browser, safety_conn=object(),
+            sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+            patch("bosshunter.collection.platforms.liepin.prune_collected_combos"),
+            patch("bosshunter.collection.platforms.liepin.prune_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.get_collected_combos", return_value=set()),
+            patch("bosshunter.collection.platforms.liepin.get_page_progress", return_value=0),
+            patch("bosshunter.collection.platforms.liepin.upsert_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.mark_combo_collected") as mark_complete,
+            patch("bosshunter.collection.platforms.liepin.delete_page_progress"),
+        ):
+            result = collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=3),
+                self._hooks(),
+            )
+        self.assertEqual(result.status, "blocked")
+        mark_complete.assert_not_called()
+
+    def test_saved_page_exceeds_max_pages_skips_keyword(self):
+        jobs = [{"source_job_id": "j", "title": "AI", "company": "c", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_pages({1: jobs})
+        collected = []
+        events = []
+        collector = LiepinCollector(
+            browser=browser, safety_conn=object(),
+            sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+            patch("bosshunter.collection.platforms.liepin.prune_collected_combos"),
+            patch("bosshunter.collection.platforms.liepin.prune_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.get_collected_combos", return_value=set()),
+            patch("bosshunter.collection.platforms.liepin.get_page_progress", return_value=5),
+            patch("bosshunter.collection.platforms.liepin.upsert_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.mark_combo_collected") as mark_complete,
+            patch("bosshunter.collection.platforms.liepin.delete_page_progress") as delete_progress,
+        ):
+            result = collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=3),
+                self._hooks(collected, events),
+            )
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(collected), 0)
+        mark_complete.assert_called_once()
+        delete_progress.assert_called_once()
+        skip_events = [e for e in events if e.get("phase") == "completed_keyword"]
+        self.assertTrue(any("页级断点" in str(e.get("message", "")) for e in skip_events))
+
+    def test_prune_called_on_collect_start(self):
+        jobs = [{"source_job_id": "j", "title": "AI", "company": "c", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_pages({1: jobs, 2: None})
+        collector = LiepinCollector(
+            browser=browser, safety_conn=object(),
+            sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+            patch("bosshunter.collection.platforms.liepin.prune_collected_combos") as prune_combos,
+            patch("bosshunter.collection.platforms.liepin.prune_page_progress") as prune_pages,
+            patch("bosshunter.collection.platforms.liepin.get_collected_combos", return_value=set()),
+            patch("bosshunter.collection.platforms.liepin.get_page_progress", return_value=0),
+            patch("bosshunter.collection.platforms.liepin.upsert_page_progress"),
+            patch("bosshunter.collection.platforms.liepin.mark_combo_collected"),
+            patch("bosshunter.collection.platforms.liepin.delete_page_progress"),
+        ):
+            collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=2),
+                self._hooks(),
+            )
+        prune_combos.assert_called_once()
+        prune_pages.assert_called_once()
+
+    def test_resume_ttl_hours_from_config(self):
+        collector = LiepinCollector(
+            config={"platforms": {"liepin": {"search": {"resume_ttl_hours": 48}}}},
+        )
+        self.assertEqual(collector._resume_ttl_hours(), 48)
+
+    def test_resume_ttl_hours_clamped_to_range(self):
+        collector_low = LiepinCollector(
+            config={"platforms": {"liepin": {"search": {"resume_ttl_hours": -5}}}},
+        )
+        self.assertEqual(collector_low._resume_ttl_hours(), 1)
+        collector_high = LiepinCollector(
+            config={"platforms": {"liepin": {"search": {"resume_ttl_hours": 9999}}}},
+        )
+        self.assertEqual(collector_high._resume_ttl_hours(), 720)
+
+    def test_resume_ttl_hours_default_when_missing(self):
+        collector = LiepinCollector()
+        self.assertEqual(collector._resume_ttl_hours(), 24)
+
+    def test_resume_ttl_hours_invalid_falls_back_to_default(self):
+        collector = LiepinCollector(
+            config={"platforms": {"liepin": {"search": {"resume_ttl_hours": "invalid"}}}},
+        )
+        self.assertEqual(collector._resume_ttl_hours(), 24)
+
+    def test_no_safety_conn_skips_resume_logic(self):
+        jobs = [{"source_job_id": "j", "title": "AI", "company": "c", "city": "上海",
+                 "url": "https://www.liepin.com/job/1001.shtml"}]
+        browser = self._browser_with_pages({1: jobs, 2: None})
+        collected = []
+        collector = LiepinCollector(
+            browser=browser, safety_conn=None,
+            sleep=lambda _s: None, uniform=lambda _a, _b: 10.0,
+        )
+        with (
+            patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False),
+            patch("bosshunter.collection.platforms.liepin.prune_collected_combos") as prune_combos,
+            patch("bosshunter.collection.platforms.liepin.get_collected_combos") as get_combos,
+            patch("bosshunter.collection.platforms.liepin.get_page_progress") as get_progress,
+            patch("bosshunter.collection.platforms.liepin.upsert_page_progress") as upsert,
+            patch("bosshunter.collection.platforms.liepin.mark_combo_collected") as mark,
+        ):
+            result = collector.collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=2),
+                self._hooks(collected),
+            )
+        self.assertEqual(result.status, "completed")
+        prune_combos.assert_not_called()
+        get_combos.assert_not_called()
+        get_progress.assert_not_called()
+        upsert.assert_not_called()
+        mark.assert_not_called()
