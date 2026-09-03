@@ -17,8 +17,12 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from bosshunter.db import (
     add_history,
+    edit_job_greeting,
     get_db,
     insert_job,
+    mark_existing_greeting_ready,
+    reject_jobs,
+    save_generated_greeting,
     update_job_greeting,
     update_job_score,
     update_job_status,
@@ -1620,6 +1624,568 @@ class WebApiRouteTests(unittest.TestCase):
                 {"job_id": "reject-b", "action": "rejected", "detail": "Web Dashboard 放弃投递"},
             ],
         )
+
+    def test_web_api_workbench_reject_rejects_mixed_status_batch_without_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("reject-safe"))
+                update_job_status(db, "reject-safe", "ready")
+                insert_job(db, _job("reject-sent"))
+                update_job_greeting(db, "reject-sent", "已发送文本")
+                update_job_status(db, "reject-sent", "sent")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/workbench/reject",
+                method="POST",
+                json_body={"job_ids": ["reject-safe", "reject-sent"]},
+            )
+
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                rows = verify_db.execute(
+                    "SELECT id, status FROM jobs WHERE id IN ('reject-safe', 'reject-sent') ORDER BY id"
+                ).fetchall()
+                history = verify_db.execute(
+                    "SELECT action FROM history WHERE job_id IN ('reject-safe', 'reject-sent')"
+                ).fetchall()
+            finally:
+                verify_db.close()
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("409"), body)
+        self.assertEqual(payload["code"], "reject_status_blocked")
+        self.assertEqual(payload["invalid_ids"], ["reject-sent"])
+        self.assertEqual([(row["id"], row["status"]) for row in rows], [
+            ("reject-safe", "ready"),
+            ("reject-sent", "sent"),
+        ])
+        self.assertEqual(history, [])
+
+    def test_web_api_workbench_reject_allows_error_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("reject-error"))
+                update_job_status(db, "reject-error", "error")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/workbench/reject",
+                method="POST",
+                json_body={"job_ids": ["reject-error"]},
+            )
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(json.loads(body), {"success": True, "count": 1})
+
+    def test_web_api_greeting_generation_rejects_scored_and_terminal_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                for job_id, status_name in (("greet-scored", "scored"), ("greet-sent", "sent")):
+                    insert_job(db, _job(job_id))
+                    update_job_greeting(db, job_id, f"{job_id} 的历史招呼语")
+                    update_job_status(db, job_id, status_name)
+                add_history(db, "greet-sent", "sent", "已发送")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch("bosshunter.ai.greeter.generate_greetings") as generate:
+                status, _, body = self._request(
+                    "/api/workbench/greetings",
+                    method="POST",
+                    json_body={"job_ids": ["greet-scored", "greet-sent"]},
+                )
+
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                rows = {
+                    str(row["id"]): dict(row)
+                    for row in verify_db.execute(
+                        "SELECT id, greeting, status FROM jobs WHERE id IN ('greet-scored', 'greet-sent')"
+                    ).fetchall()
+                }
+                history = verify_db.execute(
+                    "SELECT job_id, action FROM history WHERE job_id IN ('greet-scored', 'greet-sent') ORDER BY id"
+                ).fetchall()
+            finally:
+                verify_db.close()
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("409"), body)
+        self.assertEqual(payload["code"], "greeting_status_blocked")
+        self.assertEqual(payload["invalid_ids"], ["greet-scored", "greet-sent"])
+        generate.assert_not_called()
+        # PR #90 审查回归要求：接口被拒后 greeting、状态、历史记录必须完全不变。
+        self.assertEqual(rows["greet-scored"]["greeting"], "greet-scored 的历史招呼语")
+        self.assertEqual(rows["greet-scored"]["status"], "scored")
+        self.assertEqual(rows["greet-sent"]["greeting"], "greet-sent 的历史招呼语")
+        self.assertEqual(rows["greet-sent"]["status"], "sent")
+        self.assertEqual(
+            [(str(entry["job_id"]), entry["action"]) for entry in history],
+            [("greet-sent", "sent")],
+        )
+
+    def test_web_api_greeting_generation_starts_background_task_for_error_status(self):
+        seen_configs: list[dict] = []
+
+        def fake_generate(config, job_ids=None):
+            seen_configs.append(dict(config))
+            config["_workbench_greeting_report"] = {
+                "requested_count": 1,
+                "generated_count": 1,
+                "skipped_existing": 0,
+                "failed_count": 0,
+                "conflict_ids": [],
+            }
+            return 1
+
+        runner = WorkbenchTaskRunner({"greet": server._execute_greet})
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("greet-error"))
+                update_job_status(db, "greet-error", "error")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch("bosshunter.ai.greeter.generate_greetings", side_effect=fake_generate), \
+                 patch.object(server, "load_config", return_value={}), \
+                 patch.object(server, "task_runner", runner):
+                status, _, body = self._request(
+                    "/api/workbench/greetings",
+                    method="POST",
+                    json_body={"job_ids": ["greet-error"], "regenerate": True},
+                )
+            runner.wait(timeout=2)
+            result = runner.status()["last_task"]
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), body)
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["task"]["mode"], "greet")
+        self.assertEqual(payload["task"]["status"], "running")
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["metrics"]["greet_generated"], 1)
+        self.assertEqual(seen_configs[0]["_workbench_job_ids"], ["greet-error"])
+        self.assertTrue(seen_configs[0]["_workbench_regenerate"])
+        self.assertIsNotNone(seen_configs[0].get("_workbench_stop_event"))
+        self.assertTrue(callable(seen_configs[0].get("_workbench_log")))
+        self.assertIn("开始为 1 个岗位生成招呼语", result["logs"][0])
+
+    def test_web_api_greeting_generation_rejected_while_task_running(self):
+        started = Event()
+        release = Event()
+
+        def blocking_executor(task, config):
+            started.set()
+            release.wait(timeout=2)
+
+        runner = WorkbenchTaskRunner({"collect": blocking_executor, "greet": server._execute_greet})
+        task = runner.start("collect", {})
+        try:
+            self.assertTrue(started.wait(timeout=1))
+            with tempfile.TemporaryDirectory() as tmp:
+                base_dir = Path(tmp)
+                db = get_db(base_dir / "data" / "bosshunter.db")
+                try:
+                    insert_job(db, _job("greet-busy"))
+                    update_job_status(db, "greet-busy", "ready")
+                finally:
+                    db.close()
+                server.set_base_dir(base_dir)
+
+                with patch.object(server, "task_runner", runner):
+                    status, _, body = self._request(
+                        "/api/workbench/greetings",
+                        method="POST",
+                        json_body={"job_ids": ["greet-busy"]},
+                    )
+        finally:
+            release.set()
+            runner.wait(timeout=2)
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("409"), body)
+        self.assertIn("正在运行", payload["error"])
+        self.assertEqual(task["mode"], "collect")
+
+    def test_greet_task_failure_keeps_jobs_retryable(self):
+        def failing_generate(config, job_ids=None):
+            raise RuntimeError("AI 服务暂不可用")
+
+        runner = WorkbenchTaskRunner({"greet": server._execute_greet})
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("greet-ai-fail"))
+                update_job_status(db, "greet-ai-fail", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch("bosshunter.ai.greeter.generate_greetings", side_effect=failing_generate), \
+                 patch.object(server, "load_config", return_value={}), \
+                 patch.object(server, "task_runner", runner):
+                status, _, body = self._request(
+                    "/api/workbench/greetings",
+                    method="POST",
+                    json_body={"job_ids": ["greet-ai-fail"]},
+                )
+            runner.wait(timeout=2)
+            result = runner.status()["last_task"]
+
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                row = verify_db.execute(
+                    "SELECT greeting, status FROM jobs WHERE id = 'greet-ai-fail'"
+                ).fetchone()
+            finally:
+                verify_db.close()
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("AI 服务暂不可用", result["error"])
+        # AI 异常不落库：岗位保持原状态与空招呼语，可重试。
+        self.assertIsNone(row["greeting"])
+        self.assertEqual(row["status"], "ready")
+
+    def test_greet_task_marks_zero_output_pause_as_failed(self):
+        # 审计回归：服务级 AI 故障且零产出时，任务不得伪装成 completed。
+        def paused_generate(config, job_ids=None):
+            config["_workbench_greeting_report"] = {
+                "requested_count": 1,
+                "generated_count": 0,
+                "skipped_existing": 0,
+                "failed_count": 0,
+                "conflict_ids": [],
+                "pause_reason": "AI 账户额度不足 (quota, status=402)",
+            }
+            return 0
+
+        runner = WorkbenchTaskRunner({"greet": server._execute_greet})
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("greet-quota-paused"))
+                update_job_status(db, "greet-quota-paused", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch("bosshunter.ai.greeter.generate_greetings", side_effect=paused_generate), \
+                 patch.object(server, "load_config", return_value={}), \
+                 patch.object(server, "task_runner", runner):
+                status, _, body = self._request(
+                    "/api/workbench/greetings",
+                    method="POST",
+                    json_body={"job_ids": ["greet-quota-paused"]},
+                )
+            runner.wait(timeout=2)
+            result = runner.status()["last_task"]
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), payload)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("已安全暂停", result["error"])
+        self.assertIn("额度不足", result["error"])
+        self.assertEqual(result["metrics"]["greet_paused"], 1)
+        self.assertEqual(result["metrics"]["greet_generated"], 0)
+        self.assertEqual(result["metrics"]["greet_pause_reason"], "AI 账户额度不足 (quota, status=402)")
+        self.assertTrue(any("AI 服务异常，任务提前结束" in message for message in result["logs"]))
+
+    def test_greet_task_partial_pause_completes_with_annotation(self):
+        # 部分成功的服务级故障保留 completed，但必须显式标注提前结束。
+        def partial_paused_generate(config, job_ids=None):
+            config["_workbench_greeting_report"] = {
+                "requested_count": 2,
+                "generated_count": 1,
+                "skipped_existing": 0,
+                "failed_count": 0,
+                "conflict_ids": [],
+                "pause_reason": "API 请求被限流 (rate_limit)",
+            }
+            return 1
+
+        runner = WorkbenchTaskRunner({"greet": server._execute_greet})
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                for job_id in ("greet-done", "greet-remaining"):
+                    insert_job(db, _job(job_id))
+                    update_job_status(db, job_id, "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch("bosshunter.ai.greeter.generate_greetings", side_effect=partial_paused_generate), \
+                 patch.object(server, "load_config", return_value={}), \
+                 patch.object(server, "task_runner", runner):
+                status, _, body = self._request(
+                    "/api/workbench/greetings",
+                    method="POST",
+                    json_body={"job_ids": ["greet-done", "greet-remaining"]},
+                )
+            runner.wait(timeout=2)
+            result = runner.status()["last_task"]
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), payload)
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["metrics"]["greet_generated"], 1)
+        self.assertEqual(result["metrics"]["greet_paused"], 1)
+        self.assertEqual(result["metrics"]["greet_pause_reason"], "API 请求被限流 (rate_limit)")
+        self.assertTrue(any("本轮提前结束" in message for message in result["logs"]))
+        self.assertTrue(any("rate_limit" in message for message in result["logs"]))
+
+    def test_web_api_greeting_generation_reports_conflict_ids_on_cas_failure(self):
+        def fake_generate(config, job_ids=None):
+            config["_workbench_greeting_report"] = {
+                "requested_count": 1,
+                "generated_count": 0,
+                "skipped_existing": 0,
+                "failed_count": 0,
+                "conflict_ids": ["greet-cas"],
+            }
+            return 0
+
+        runner = WorkbenchTaskRunner({"greet": server._execute_greet})
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("greet-cas"))
+                update_job_status(db, "greet-cas", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch("bosshunter.ai.greeter.generate_greetings", side_effect=fake_generate), \
+                 patch.object(server, "load_config", return_value={}), \
+                 patch.object(server, "task_runner", runner):
+                status, _, body = self._request(
+                    "/api/workbench/greetings",
+                    method="POST",
+                    json_body={"job_ids": ["greet-cas"]},
+                )
+            runner.wait(timeout=2)
+            result = runner.status()["last_task"]
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(payload["task"]["mode"], "greet")
+        # CAS 冲突在任务完成后经 metrics/progress 上报，不再阻塞 HTTP 响应。
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["metrics"]["greet_conflicts"], 1)
+        self.assertEqual(result["progress"]["conflict_ids"], ["greet-cas"])
+        self.assertTrue(any("状态冲突 1" in message for message in result["logs"]))
+
+    def test_web_api_greeting_generation_reports_partial_conflict_with_success(self):
+        def fake_generate(config, job_ids=None):
+            config["_workbench_greeting_report"] = {
+                "requested_count": 2,
+                "generated_count": 1,
+                "skipped_existing": 0,
+                "failed_count": 0,
+                "conflict_ids": ["greet-conflict"],
+            }
+            return 1
+
+        runner = WorkbenchTaskRunner({"greet": server._execute_greet})
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("greet-ok"))
+                update_job_status(db, "greet-ok", "ready")
+                insert_job(db, _job("greet-conflict"))
+                update_job_status(db, "greet-conflict", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch("bosshunter.ai.greeter.generate_greetings", side_effect=fake_generate), \
+                 patch.object(server, "load_config", return_value={}), \
+                 patch.object(server, "task_runner", runner):
+                status, _, body = self._request(
+                    "/api/workbench/greetings",
+                    method="POST",
+                    json_body={"job_ids": ["greet-ok", "greet-conflict"]},
+                )
+            runner.wait(timeout=2)
+            result = runner.status()["last_task"]
+
+        payload = json.loads(body)
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["metrics"]["greet_generated"], 1)
+        self.assertEqual(result["metrics"]["greet_conflicts"], 1)
+        self.assertEqual(result["progress"]["conflict_ids"], ["greet-conflict"])
+
+    def test_web_api_greeting_edit_blocks_sent_without_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("edit-sent"))
+                update_job_greeting(db, "edit-sent", "原招呼语")
+                update_job_status(db, "edit-sent", "sent")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/jobs/edit-sent/greeting",
+                method="POST",
+                json_body={"greeting": "不应保存的新招呼语"},
+            )
+
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                row = verify_db.execute(
+                    "SELECT greeting, status FROM jobs WHERE id = 'edit-sent'"
+                ).fetchone()
+                history = verify_db.execute(
+                    "SELECT action FROM history WHERE job_id = 'edit-sent'"
+                ).fetchall()
+            finally:
+                verify_db.close()
+
+        self.assertTrue(status.startswith("409"), body)
+        self.assertEqual(json.loads(body)["code"], "greeting_status_blocked")
+        self.assertEqual((row["greeting"], row["status"]), ("原招呼语", "sent"))
+        self.assertEqual(history, [])
+
+    def test_web_api_greeting_edit_allows_error_and_keeps_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("edit-error"))
+                update_job_status(db, "edit-error", "error")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/jobs/edit-error/greeting",
+                method="POST",
+                json_body={"greeting": "人工修正后的招呼语"},
+            )
+
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                row = verify_db.execute(
+                    "SELECT greeting, status FROM jobs WHERE id = 'edit-error'"
+                ).fetchone()
+                history = verify_db.execute(
+                    "SELECT action, detail FROM history WHERE job_id = 'edit-error'"
+                ).fetchall()
+            finally:
+                verify_db.close()
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual((row["greeting"], row["status"]), ("人工修正后的招呼语", "error"))
+        self.assertEqual([(item["action"], item["detail"]) for item in history], [
+            ("greeting_edited", "Web Dashboard 编辑招呼语"),
+        ])
+
+    def test_web_api_greeting_edit_rejects_over_300_characters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("edit-too-long"))
+                update_job_status(db, "edit-too-long", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            status, _, body = self._request(
+                "/api/jobs/edit-too-long/greeting",
+                method="POST",
+                json_body={"greeting": "长" * 301},
+            )
+
+        self.assertTrue(status.startswith("400"), body)
+        self.assertIn("300", json.loads(body)["error"])
+
+    def test_db_greeting_mutations_refuse_terminal_or_stale_statuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = get_db(Path(tmp) / "bosshunter.db")
+            try:
+                insert_job(db, _job("db-ready"))
+                update_job_status(db, "db-ready", "ready")
+                self.assertTrue(save_generated_greeting(db, "db-ready", "AI 招呼语"))
+
+                insert_job(db, _job("db-manual-race"))
+                update_job_status(db, "db-manual-race", "ready")
+                update_job_greeting(db, "db-manual-race", "并发人工编辑")
+                self.assertFalse(save_generated_greeting(
+                    db,
+                    "db-manual-race",
+                    "过期 AI 结果",
+                    expected_greeting="旧快照",
+                ))
+
+                insert_job(db, _job("db-sent"))
+                update_job_greeting(db, "db-sent", "已发送文本")
+                update_job_status(db, "db-sent", "sent")
+                self.assertFalse(save_generated_greeting(db, "db-sent", "不应保存"))
+                self.assertFalse(edit_job_greeting(db, "db-sent", "不应编辑", expected_status="sent"))
+
+                insert_job(db, _job("db-existing"))
+                update_job_greeting(db, "db-existing", "人工文本")
+                update_job_status(db, "db-existing", "approved")
+                self.assertFalse(mark_existing_greeting_ready(
+                    db,
+                    "db-existing",
+                    expected_greeting="旧快照",
+                ))
+
+                insert_job(db, _job("db-reject-ready"))
+                update_job_status(db, "db-reject-ready", "ready")
+                insert_job(db, _job("db-reject-scored"))
+                update_job_status(db, "db-reject-scored", "scored")
+                result = reject_jobs(db, ["db-reject-ready", "db-reject-scored"])
+                self.assertEqual(result["affected_count"], 0)
+                self.assertEqual(result["invalid_ids"], ["db-reject-scored"])
+
+                rows = {
+                    row["id"]: dict(row)
+                    for row in db.execute(
+                        "SELECT id, greeting, status FROM jobs WHERE id LIKE 'db-%'"
+                    ).fetchall()
+                }
+                history = db.execute(
+                    "SELECT action FROM history WHERE job_id LIKE 'db-%'"
+                ).fetchall()
+            finally:
+                db.close()
+
+        self.assertEqual((rows["db-manual-race"]["greeting"], rows["db-manual-race"]["status"]), ("并发人工编辑", "ready"))
+        self.assertEqual((rows["db-sent"]["greeting"], rows["db-sent"]["status"]), ("已发送文本", "sent"))
+        self.assertEqual(rows["db-existing"]["status"], "approved")
+        self.assertEqual(rows["db-reject-ready"]["status"], "ready")
+        self.assertEqual(rows["db-reject-scored"]["status"], "scored")
+        self.assertEqual(history, [])
 
     def test_web_api_workbench_reject_removes_jobs_from_pending_confirmation(self):
         # Arrange

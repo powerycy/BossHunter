@@ -25,6 +25,8 @@ from bosshunter.ai.credentials import get_ai_api_key
 from bosshunter.cities import CityRefreshError, get_city_map, load_city_snapshot, refresh_city_cache
 from bosshunter.config import AI_SERVICE_PRESETS, load_config, remove_retired_collection_settings, save_config
 from bosshunter.db import (
+	GREETING_ALLOWED_STATUSES,
+	REJECT_ALLOWED_STATUSES,
 	JobDeletionConflictError,
 	JobManualSentConflictError,
 	add_history,
@@ -46,8 +48,10 @@ from bosshunter.db import (
 	mark_external_jobs_sent,
 	permanent_delete_jobs,
 	query_jobs,
+	reject_jobs,
 	restore_jobs,
 	soft_delete_jobs,
+	edit_job_greeting,
 	update_job_status,
 )
 from bosshunter.collection.capabilities import platform_supports
@@ -834,11 +838,62 @@ def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
 		raise RuntimeError(f"发送已安全暂停：检测到{reason_labels[stop_reason]}")
 
 
+def _execute_greet(task: WorkbenchTask, config: dict) -> None:
+	from bosshunter.ai.greeter import generate_greetings
+
+	config = dict(config)
+	config["_workbench_stop_event"] = task.stop_requested
+	config["_workbench_log"] = lambda message: _log(task, message)
+	selected_job_ids = [str(job_id) for job_id in config.get("_workbench_job_ids", []) if str(job_id)]
+	_log(task, f"开始为 {len(selected_job_ids)} 个岗位生成招呼语")
+	generated_count = generate_greetings(config, job_ids=selected_job_ids)
+	report = config.get("_workbench_greeting_report", {})
+	conflict_ids = [str(job_id) for job_id in report.get("conflict_ids", [])]
+	preserved_count = int(report.get("skipped_existing", 0) or 0)
+	failed_count = int(report.get("failed_count", 0) or 0)
+	pause_reason = str(report.get("pause_reason") or "")
+	greet_metrics = {
+		"greet_requested": len(selected_job_ids),
+		"greet_generated": int(generated_count),
+		"greet_preserved": preserved_count,
+		"greet_failed": failed_count,
+		"greet_conflicts": len(conflict_ids),
+		"greet_paused": 1 if pause_reason else 0,
+	}
+	if pause_reason:
+		# 暂停原因（鉴权/额度/限流等类别 + 状态码）随指标透出，前端通知与任务面板据此展示具体原因。
+		greet_metrics["greet_pause_reason"] = pause_reason
+	task.metrics.update(greet_metrics)
+	if conflict_ids:
+		task.progress["conflict_ids"] = conflict_ids
+	_log(
+		task,
+		"招呼语生成结果：新生成 {generated}，保留现有 {preserved}，失败 {failed}{conflicts}".format(
+			generated=int(generated_count),
+			preserved=preserved_count,
+			failed=failed_count,
+			conflicts=f"，状态冲突 {len(conflict_ids)}（岗位状态已变更，招呼语未保存）" if conflict_ids else "",
+		),
+	)
+	if pause_reason:
+		if generated_count or preserved_count:
+			# 部分成功：保留 completed 语义，但显式标注提前结束原因与可续跑事实。
+			_log(
+				task,
+				f"AI 服务异常，本轮提前结束：{pause_reason}；已生成内容已保存，剩余岗位下次运行会继续处理。",
+			)
+		else:
+			# 零产出：服务级故障不得伪装成"任务完成"。
+			_log(task, f"AI 服务异常，任务提前结束：{pause_reason}")
+			raise RuntimeError(f"招呼语生成已安全暂停：{pause_reason}")
+
+
 task_runner._executors.update({
 	"full": _execute_full,
 	"collect": _execute_collect,
 	"rescore": _execute_rescore,
 	"score": _execute_score,
+	"greet": _execute_greet,
 	"monitor": _execute_monitor,
 	"deliver": _execute_deliver,
 })
@@ -1697,23 +1752,112 @@ def api_workbench_reject():
 		db = _get_web_db()
 		try:
 			placeholders = ",".join("?" for _ in job_ids)
-			active_ids = {
-				str(row["id"])
-				for row in db.execute(
-					f"SELECT id FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
-					job_ids,
-				).fetchall()
-			}
-			invalid_ids = [job_id for job_id in job_ids if job_id not in active_ids]
+			rows = db.execute(
+				f"SELECT id, status FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
+				job_ids,
+			).fetchall()
+			expected_statuses = {str(row["id"]): str(row["status"] or "") for row in rows}
+			invalid_ids = [
+				job_id
+				for job_id in job_ids
+				if expected_statuses.get(job_id) not in REJECT_ALLOWED_STATUSES
+			]
 			if invalid_ids:
-				return _json_response({"error": "所选岗位不存在或已进入回收站", "invalid_ids": invalid_ids}, 409)
-			for job_id in job_ids:
-				update_job_status(db, job_id, "rejected")
-				add_history(db, job_id, "rejected", "Web Dashboard 放弃投递")
+				return _json_response({
+					"error": "所选岗位状态不允许放弃",
+					"code": "reject_status_blocked",
+					"invalid_ids": invalid_ids,
+				}, 409)
+			result = reject_jobs(db, job_ids, expected_statuses=expected_statuses)
+			if result["invalid_ids"]:
+				return _json_response({
+					"error": "岗位状态已变化，放弃操作未执行",
+					"code": "reject_status_blocked",
+					"invalid_ids": result["invalid_ids"],
+				}, 409)
 		finally:
 			db.close()
 
-		return _json_response({"success": True, "count": len(job_ids)})
+		return _json_response({"success": True, "count": result["affected_count"]})
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/workbench/greetings", method="POST")
+def api_workbench_generate_greetings():
+	"""Start a background task that generates greetings for selected jobs without sending them."""
+	try:
+		body = request.json or {}
+		job_ids = [str(job_id) for job_id in body.get("job_ids", []) if str(job_id)]
+		if not job_ids:
+			return _json_response({"error": "请选择要生成招呼语的岗位"}, 400)
+
+		db = _get_web_db()
+		try:
+			placeholders = ",".join("?" for _ in job_ids)
+			rows = db.execute(
+				f"SELECT id, status FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
+				job_ids,
+			).fetchall()
+		finally:
+			db.close()
+		by_id = {str(row["id"]): str(row["status"] or "") for row in rows}
+		invalid_ids = [
+			job_id
+			for job_id in job_ids
+			if by_id.get(job_id) not in GREETING_ALLOWED_STATUSES
+		]
+		if invalid_ids:
+			return _json_response({
+				"error": "所选岗位状态不允许生成招呼语",
+				"code": "greeting_status_blocked",
+				"invalid_ids": invalid_ids,
+			}, 409)
+
+		with job_mutation_lock:
+			task = task_runner.start("greet", _task_config({
+				"_workbench_job_ids": job_ids,
+				"_workbench_regenerate": body.get("regenerate") is True,
+			}))
+		return _json_response({"success": True, "task": task})
+	except TaskAlreadyRunningError as e:
+		return _json_response({"error": str(e)}, 409)
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/jobs/<job_id>/greeting", method="POST")
+def api_job_update_greeting(job_id):
+	"""Update the greeting text for a single job."""
+	try:
+		body = request.json or {}
+		greeting = str(body.get("greeting") or "").strip()
+		if not greeting:
+			return _json_response({"error": "招呼语不能为空"}, 400)
+		if len(greeting) > 300:
+			return _json_response({"error": "招呼语不能超过300字"}, 400)
+
+		db = _get_web_db()
+		try:
+			row = db.execute(
+				"SELECT id, status FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+			).fetchone()
+			if not row:
+				return _json_response({"error": "岗位不存在或已进入回收站"}, 404)
+			status = str(row["status"] or "")
+			if status not in GREETING_ALLOWED_STATUSES:
+				return _json_response({
+					"error": "当前岗位状态不能修改招呼语",
+					"code": "greeting_status_blocked",
+				}, 409)
+			if not edit_job_greeting(db, job_id, greeting, expected_status=status):
+				return _json_response({
+					"error": "岗位状态已变化，招呼语未保存",
+					"code": "greeting_status_blocked",
+				}, 409)
+		finally:
+			db.close()
+		return _json_response({"success": True, "greeting": greeting})
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
 
