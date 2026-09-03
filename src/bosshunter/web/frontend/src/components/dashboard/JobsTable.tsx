@@ -162,6 +162,22 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                           <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${job.source_platform === 'boss' || !job.source_platform ? 'bg-[#FFF0E5] text-primary' : 'bg-blue-50 text-blue-700'}`}>
                             {job.source_platform === 'zhilian' ? '智联' : job.source_platform === '51job' ? '51job' : 'BOSS'}
                           </span>
+                          {job.outsourcing_level === 'confirmed' && (
+                            <span
+                              className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-black text-red-700"
+                              title={job.outsourcing_matches?.length ? `命中：${job.outsourcing_matches.join('、')}` : '疑似外包'}
+                            >
+                              外包
+                            </span>
+                          )}
+                          {job.outsourcing_level === 'suspected' && (
+                            <span
+                              className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700"
+                              title={job.outsourcing_matches?.length ? `命中：${job.outsourcing_matches.join('、')}` : '可能外包'}
+                            >
+                              疑似外包
+                            </span>
+                          )}
                           {job.company_size && (
                             <span className="rounded-full bg-[#FFFCFA] px-2 py-0.5 text-[10px] font-bold text-muted">{job.company_size}</span>
                           )}

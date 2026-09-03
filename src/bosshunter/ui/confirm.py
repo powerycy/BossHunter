@@ -4,15 +4,25 @@ from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt
 
-from bosshunter.db import get_db, get_jobs_pending_confirmation, update_job_status, add_history
+from bosshunter.db import get_db, get_jobs_pending_confirmation, serialize_job, update_job_status, add_history
 
 console = Console()
+
+
+def _outsourcing_badge(job: dict) -> str:
+    """Return a Rich-styled outsourcing chip or empty string."""
+    level = job.get("outsourcing_level") or "clean"
+    if level == "confirmed":
+        return " [red]外包[/red]"
+    if level == "suspected":
+        return " [yellow]疑似外包[/yellow]"
+    return ""
 
 
 def show_confirmation(config: dict) -> bool:
     """Display jobs for confirmation. Returns True if any jobs were approved."""
     db = get_db()
-    jobs = get_jobs_pending_confirmation(db)
+    jobs = [serialize_job(job) for job in get_jobs_pending_confirmation(db)]
 
     if not jobs:
         console.print("[yellow]没有待确认的岗位[/yellow]")
@@ -24,7 +34,7 @@ def show_confirmation(config: dict) -> bool:
 
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("#", style="dim", width=3)
-    table.add_column("公司", width=16)
+    table.add_column("公司", width=22)
     table.add_column("职位", width=24)
     table.add_column("薪资", width=10)
     table.add_column("匹配分", width=6, justify="center")
@@ -39,7 +49,7 @@ def show_confirmation(config: dict) -> bool:
 
         table.add_row(
             str(i),
-            (job["company"] or "")[:14],
+            (job["company"] or "")[:14] + _outsourcing_badge(job),
             (job["title"] or "")[:22],
             job.get("salary", "") or "面议",
             f"[{score_style}]{job['score']}[/{score_style}]",
@@ -73,7 +83,7 @@ def show_confirmation(config: dict) -> bool:
     # Individual selection mode
     approved_count = 0
     for i, job in enumerate(jobs, 1):
-        console.print(f"\n[bold]#{i}[/bold] {job['company']} - {job['title']} ({job.get('salary', '面议')})")
+        console.print(f"\n[bold]#{i}[/bold] {job['company']}{_outsourcing_badge(job)} - {job['title']} ({job.get('salary', '面议')})")
         console.print(f"  匹配分: {job['score']} | {job.get('score_reason', '')}")
         console.print(f"  招呼语: {job.get('greeting', '')}")
 

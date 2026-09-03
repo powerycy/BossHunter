@@ -20,6 +20,7 @@ from bosshunter.collection.platforms.boss import BossBrowser, BossCollector, gen
 from bosshunter.config import CITY_CODES
 from bosshunter.db import get_db, insert_job, job_exists
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
+from bosshunter.outsourcing import load_rules
 from bosshunter.platform_safety import PlatformSafetyStop
 from bosshunter.throttle import PageThrottle
 
@@ -90,6 +91,7 @@ def _scrape_jobs_impl(
     }
     progress_callback = config.get("_workbench_collect_progress")
     profile = config.get("profile", {}) if isinstance(config.get("profile"), dict) else {}
+    outsourcing_rules = load_rules(config)
 
     def emit() -> None:
         if callable(progress_callback):
@@ -118,7 +120,7 @@ def _scrape_jobs_impl(
             emit()
             return True
         try:
-            inserted = insert_job(db, candidate.as_job_record())
+            inserted = insert_job(db, candidate.as_job_record(), rules=outsourcing_rules)
         except Exception:
             counts["save_failed"] += 1
             emit()
