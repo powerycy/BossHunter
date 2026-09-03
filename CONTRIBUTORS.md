@@ -1,8 +1,25 @@
 # BossHunter 贡献记录
 
-本页保存完整贡献榜、近 30 天榜单、历史快照和计算口径。README 只展示贡献总榜前 10、近 30 天前 10 和现任维护者。
+本页保存近 30 天榜单、完整贡献榜、历史快照和计算口径。README 先展示现任维护者及其维护贡献占比，再展示近 30 天前 10，最后展示贡献总榜前 10。
 
 维护者身份、候选观察期和历任记录见 [MAINTAINERS.md](MAINTAINERS.md)；两类记录相互独立，贡献排名不会自动产生维护权限。
+
+## 近 30 天贡献榜
+
+当前统计窗口：**2026-08-03 00:00 至 2026-09-01 23:59（Asia/Shanghai）**。窗口按榜单更新日向前滚动 30 个自然日；同分并列，后续名次顺延。
+
+| 排名 | 贡献者 | 本期主要贡献 | 证据 |
+|:---:|---|---|---|
+| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | 可恢复岗位工具与智联统一采集架构 | [#40](https://github.com/shengjidaguai-china/BossHunter/pull/40) · [#45](https://github.com/shengjidaguai-china/BossHunter/pull/45) → [#62](https://github.com/shengjidaguai-china/BossHunter/pull/62) |
+| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | 评分 JSON 兼容、错误传播、暂停恢复和凭据优先级 | [#114](https://github.com/shengjidaguai-china/BossHunter/pull/114) · [#115](https://github.com/shengjidaguai-china/BossHunter/pull/115) · [#117](https://github.com/shengjidaguai-china/BossHunter/pull/117) · [#118](https://github.com/shengjidaguai-china/BossHunter/pull/118) |
+| 🥉 | [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 监测会话闭环、安全操作、本地凭据迁移和面板交互 | [#119 → #124](https://github.com/shengjidaguai-china/BossHunter/pull/124) · [#134](https://github.com/shengjidaguai-china/BossHunter/pull/134) |
+| 4 | [@yuppiez99999](https://github.com/yuppiez99999) | 平台采集回归、能力边界、注册模型和 51job API 安全复核 | [#122](https://github.com/shengjidaguai-china/BossHunter/pull/122) · [#126](https://github.com/shengjidaguai-china/BossHunter/pull/126) · [#127](https://github.com/shengjidaguai-china/BossHunter/pull/127) · [#130](https://github.com/shengjidaguai-china/BossHunter/pull/130)–[#132](https://github.com/shengjidaguai-china/BossHunter/pull/132) · [#142](https://github.com/shengjidaguai-china/BossHunter/pull/142) |
+| 5 | [@yuj-029](https://github.com/yuj-029) | 51job API 只读采集、保守采样与断点续采核心 | [#81 → #142](https://github.com/shengjidaguai-china/BossHunter/pull/142) |
+| 6 | [@haohao-fly](https://github.com/haohao-fly) | 岗位筛选、评分与投递队列 | [#38](https://github.com/shengjidaguai-china/BossHunter/pull/38) → [#39](https://github.com/shengjidaguai-china/BossHunter/pull/39) |
+| 7 | [@meixiaoxie](https://github.com/meixiaoxie) | 配置安全、公司屏蔽与城市查询 | [#37](https://github.com/shengjidaguai-china/BossHunter/pull/37) → [#39](https://github.com/shengjidaguai-china/BossHunter/pull/39) |
+| 7 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | 会话送达、消息方向与招呼语约束 | [#49](https://github.com/shengjidaguai-china/BossHunter/pull/49) · [#50](https://github.com/shengjidaguai-china/BossHunter/pull/50) · [#51](https://github.com/shengjidaguai-china/BossHunter/pull/51) → [#62](https://github.com/shengjidaguai-china/BossHunter/pull/62) |
+| 7 | [@hdfhssg](https://github.com/hdfhssg) | 学历、招聘类型与岗位池增强 | [#54](https://github.com/shengjidaguai-china/BossHunter/pull/54) · [#55](https://github.com/shengjidaguai-china/BossHunter/pull/55) → [#62](https://github.com/shengjidaguai-china/BossHunter/pull/62) |
+| 10 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | 招呼语队列体验与虚构网址防护 | [#86](https://github.com/shengjidaguai-china/BossHunter/pull/86) · [#88](https://github.com/shengjidaguai-china/BossHunter/pull/88) |
 
 ## 贡献总榜
 
@@ -30,23 +47,6 @@
 | 18 | [@zeroTwo0617](https://github.com/zeroTwo0617) | **1%** | 已适配合入 | 岗位池安全打开 BOSS 原职位链接 | [#112](https://github.com/shengjidaguai-china/BossHunter/pull/112) → [#123](https://github.com/shengjidaguai-china/BossHunter/pull/123) |
 | 18 | [@Colin-Cai0318](https://github.com/Colin-Cai0318) | **1%** | 部分适配合入 | Markdown 简历 UTF-8 校验 | [#61](https://github.com/shengjidaguai-china/BossHunter/pull/61) → [#62](https://github.com/shengjidaguai-china/BossHunter/pull/62) |
 
-## 近 30 天贡献榜
-
-当前统计窗口：**2026-08-03 00:00 至 2026-09-01 23:59（Asia/Shanghai）**。窗口按榜单更新日向前滚动 30 个自然日；同分并列，后续名次顺延。
-
-| 排名 | 贡献者 | 本期主要贡献 | 证据 |
-|:---:|---|---|---|
-| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | 可恢复岗位工具与智联统一采集架构 | [#40](https://github.com/shengjidaguai-china/BossHunter/pull/40) · [#45](https://github.com/shengjidaguai-china/BossHunter/pull/45) → [#62](https://github.com/shengjidaguai-china/BossHunter/pull/62) |
-| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | 评分 JSON 兼容、错误传播、暂停恢复和凭据优先级 | [#114](https://github.com/shengjidaguai-china/BossHunter/pull/114) · [#115](https://github.com/shengjidaguai-china/BossHunter/pull/115) · [#117](https://github.com/shengjidaguai-china/BossHunter/pull/117) · [#118](https://github.com/shengjidaguai-china/BossHunter/pull/118) |
-| 🥉 | [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 监测会话闭环、安全操作、本地凭据迁移和面板交互 | [#119 → #124](https://github.com/shengjidaguai-china/BossHunter/pull/124) · [#134](https://github.com/shengjidaguai-china/BossHunter/pull/134) |
-| 4 | [@yuppiez99999](https://github.com/yuppiez99999) | 平台采集回归、能力边界、注册模型和 51job API 安全复核 | [#122](https://github.com/shengjidaguai-china/BossHunter/pull/122) · [#126](https://github.com/shengjidaguai-china/BossHunter/pull/126) · [#127](https://github.com/shengjidaguai-china/BossHunter/pull/127) · [#130](https://github.com/shengjidaguai-china/BossHunter/pull/130)–[#132](https://github.com/shengjidaguai-china/BossHunter/pull/132) · [#142](https://github.com/shengjidaguai-china/BossHunter/pull/142) |
-| 5 | [@yuj-029](https://github.com/yuj-029) | 51job API 只读采集、保守采样与断点续采核心 | [#81 → #142](https://github.com/shengjidaguai-china/BossHunter/pull/142) |
-| 6 | [@haohao-fly](https://github.com/haohao-fly) | 岗位筛选、评分与投递队列 | [#38](https://github.com/shengjidaguai-china/BossHunter/pull/38) → [#39](https://github.com/shengjidaguai-china/BossHunter/pull/39) |
-| 7 | [@meixiaoxie](https://github.com/meixiaoxie) | 配置安全、公司屏蔽与城市查询 | [#37](https://github.com/shengjidaguai-china/BossHunter/pull/37) → [#39](https://github.com/shengjidaguai-china/BossHunter/pull/39) |
-| 7 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | 会话送达、消息方向与招呼语约束 | [#49](https://github.com/shengjidaguai-china/BossHunter/pull/49) · [#50](https://github.com/shengjidaguai-china/BossHunter/pull/50) · [#51](https://github.com/shengjidaguai-china/BossHunter/pull/51) → [#62](https://github.com/shengjidaguai-china/BossHunter/pull/62) |
-| 7 | [@hdfhssg](https://github.com/hdfhssg) | 学历、招聘类型与岗位池增强 | [#54](https://github.com/shengjidaguai-china/BossHunter/pull/54) · [#55](https://github.com/shengjidaguai-china/BossHunter/pull/55) → [#62](https://github.com/shengjidaguai-china/BossHunter/pull/62) |
-| 10 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | 招呼语队列体验与虚构网址防护 | [#86](https://github.com/shengjidaguai-china/BossHunter/pull/86) · [#88](https://github.com/shengjidaguai-china/BossHunter/pull/88) |
-
 ## 计算口径
 
 | 维度 | 权重 | 判断内容 |
@@ -69,7 +69,7 @@
 - 榜单变更必须通过 Pull Request，并给出 PR、Issue、Review 或 Release 链接。
 - 贡献者可以提交更正或补充证据，但不能批准或合并涉及自己排名的修改。
 - 自动化可以生成候选数据，最终采纳范围和排序由未涉及该条记录的治理责任人确认。
-- README 的两个 Top 10 必须与本页同一数据快照保持一致。
+- README 的近 30 天和总榜两个 Top 10 必须与本页同一数据快照保持一致。
 - 排名争议先保留原记录，通过 Issue 收集证据，不直接删除历史。
 
 ## 历月快照

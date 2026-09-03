@@ -116,34 +116,19 @@ bosshunter run
 
 ## 🧭 现任维护者
 
-维护者按责任域展示，不进行名次竞争。候选人通过治理 PR 正式晋升后才会出现在这里。
+4 名正式维护者共同维护全项目，不设置固定模块；擅长方向仅用于协作参考。
 
-| GitHub | 角色 | 负责范围 | 任期 |
-|---|---|---|---|
-| [@powerycy](https://github.com/powerycy) 跑跑蹦蹦跳跳 | 项目负责人 | 全项目；核心与安全最终审批 | 项目发起至今 |
-| [@yuppiez99999](https://github.com/yuppiez99999) | 平台适配维护者 | 招聘平台采集器、城市数据、适配测试与平台域 PR 治理 | 2026-08-29 起 |
-| [@yukinoshi](https://github.com/yukinoshi) | 产品与 AI 维护者 | AI 评分、招呼语、错误恢复与产品域 PR 治理；高风险路径转核心与安全复核 | 2026-08-29 起 |
-| [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 核心与安全维护者 | 发送安全、运行时、数据库、监测链路与核心域 PR 治理；高风险修改与项目负责人共同复核 | 2026-08-30 起 |
-| [@bianshilong0604](https://github.com/bianshilong0604) | 产品与 AI 维护者 | Web 工作台、AI 评分、招呼语与产品域 PR 治理；高风险路径转核心与安全复核 | 2026-08-30 起 |
+| GitHub | 身份 | 贡献占比 | 擅长方向 | 任期 |
+|---|---|---|---|---|
+| [@yuppiez99999](https://github.com/yuppiez99999) | 正式维护者（Write） | 33.9%（试算） | 平台采集、城市数据与测试 | 2026-08-29 起 |
+| [@yukinoshi](https://github.com/yukinoshi) | 正式维护者（Write） | 28.8%（试算） | AI、错误恢复与产品流程 | 2026-08-29 起 |
+| [@bianshilong0604](https://github.com/bianshilong0604) | 正式维护者（Write） | 26.3%（试算） | Web、产品流程与隐私边界 | 2026-08-30 起 |
+| [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 正式维护者（Write） | 11.0%（试算） | 运行时、发送安全与监测链路 | 2026-08-30 起 |
+| [@powerycy](https://github.com/powerycy) 跑跑蹦蹦跳跳 | 项目负责人（Admin） | 不参评 | 项目治理与发布协调 | 项目发起至今 |
 
-[查看候选与历任维护者、任期和治理贡献](MAINTAINERS.md) · [查看维护者统计与治理规则](GOVERNANCE.md)
+以上为截至 **2026-09-03**、尚未经双人复核的基线试算。维护者任职满 30 天后，按任期开始至核算日的全部维护成果计算正式贡献占比；不是只计算最近 30 天，也不会每 30 天重置。维护贡献只计算 Review、问题闭环、安全复核、发布验证和治理交接，不计算本人提交的功能或修复。
 
-## 🏆 贡献总榜 Top 10
-
-只统计实际进入主线的外部人类贡献，不按提交次数或代码行数排名。
-
-| 排名 | 贡献者 | 贡献度 | 主要贡献方向 |
-|:---:|---|:---:|---|
-| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | **11%** | 岗位导出、城市目录、回收站、独立 AI 评分与多平台采集架构 |
-| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | **10%** | AI 兼容、评分恢复、错误传播与凭据优先级 |
-| 🥉 | [@GioiaZheng](https://github.com/GioiaZheng) | **9.5%** | API Key 安全、PDF 依赖降级与人工确认流程修复 |
-| 4 | [@atticus-zhou](https://github.com/atticus-zhou) | **8%** | AI 重试、浏览器交互、送达验证与防重复发送 |
-| 5 | [@yuppiez99999](https://github.com/yuppiez99999) | **7.5%** | 平台采集回归、能力边界、注册模型与 51job API 安全复核 |
-| 6 | [@haohao-fly](https://github.com/haohao-fly) | **7%** | 岗位筛选、评分重试、投递队列与任务保护 |
-| 7 | [@meixiaoxie](https://github.com/meixiaoxie) | **6%** | 配置安全、公司屏蔽、城市查询与 Windows 回归测试 |
-| 7 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | **6%** | 送达确认、消息方向识别与招呼语约束 |
-| 7 | [@hdfhssg](https://github.com/hdfhssg) | **6%** | 学历与招聘类型筛选、岗位池与投递队列 |
-| 10 | [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | **5.5%** | 监测会话闭环、安全操作、本地凭据迁移与面板交互 |
+[查看任期与贡献详情](MAINTAINERS.md#现任维护者贡献详情) · [查看审批及核算规则](GOVERNANCE.md)
 
 ## 🔥 近 30 天贡献榜 Top 10
 
@@ -161,6 +146,23 @@ bosshunter run
 | 7 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | 会话送达、消息方向与招呼语约束 |
 | 7 | [@hdfhssg](https://github.com/hdfhssg) | 学历、招聘类型与岗位池增强 |
 | 10 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | 招呼语队列体验与虚构网址防护 |
+
+## 🏆 贡献总榜 Top 10
+
+只统计实际进入主线的外部人类贡献，不按提交次数或代码行数排名。
+
+| 排名 | 贡献者 | 贡献度 | 主要贡献方向 |
+|:---:|---|:---:|---|
+| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | **11%** | 岗位导出、城市目录、回收站、独立 AI 评分与多平台采集架构 |
+| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | **10%** | AI 兼容、评分恢复、错误传播与凭据优先级 |
+| 🥉 | [@GioiaZheng](https://github.com/GioiaZheng) | **9.5%** | API Key 安全、PDF 依赖降级与人工确认流程修复 |
+| 4 | [@atticus-zhou](https://github.com/atticus-zhou) | **8%** | AI 重试、浏览器交互、送达验证与防重复发送 |
+| 5 | [@yuppiez99999](https://github.com/yuppiez99999) | **7.5%** | 平台采集回归、能力边界、注册模型与 51job API 安全复核 |
+| 6 | [@haohao-fly](https://github.com/haohao-fly) | **7%** | 岗位筛选、评分重试、投递队列与任务保护 |
+| 7 | [@meixiaoxie](https://github.com/meixiaoxie) | **6%** | 配置安全、公司屏蔽、城市查询与 Windows 回归测试 |
+| 7 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | **6%** | 送达确认、消息方向识别与招呼语约束 |
+| 7 | [@hdfhssg](https://github.com/hdfhssg) | **6%** | 学历与招聘类型筛选、岗位池与投递队列 |
+| 10 | [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | **5.5%** | 监测会话闭环、安全操作、本地凭据迁移与面板交互 |
 
 [查看完整榜单、证据链接、历月快照与计算口径](CONTRIBUTORS.md)
 
