@@ -35,6 +35,7 @@ class AiPreflightTests(unittest.TestCase):
 		self.assertEqual(checks[0]["status"], "pass")
 		self.assertIn("连接正常", checks[0]["message"])
 		http_get.assert_called_once()
+		self.assertFalse(http_get.call_args.kwargs["trust_env"])
 
 	def test_openai_compatible_provider_requires_base_url(self):
 		config = {
@@ -60,6 +61,25 @@ class AiPreflightTests(unittest.TestCase):
 
 		self.assertEqual(checks[0]["status"], "error")
 		self.assertIn("连接超时", checks[0]["message"])
+
+	@patch("bosshunter.web.preflight.httpx.get")
+	def test_invalid_ai_base_url_has_specific_feedback(self, http_get):
+		http_get.side_effect = httpx.InvalidURL("Invalid port: ':1'")
+		config = {
+			"ai": {
+				"provider": "openai_compatible",
+				"service": "custom",
+				"base_url": "http://::1:8000",
+				"api_key": "secret-key",
+				"model": "local-model",
+			}
+		}
+
+		checks = check_ai_connection(config, required=True)
+
+		self.assertEqual(checks[0]["status"], "error")
+		self.assertIn("地址无效", checks[0]["message"])
+		self.assertIn("[::1]", checks[0]["detail"])
 
 
 class BrowserPreflightTests(unittest.TestCase):

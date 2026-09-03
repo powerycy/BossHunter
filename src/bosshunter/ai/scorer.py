@@ -43,6 +43,8 @@ SCORING_PROMPT = """你是一位严谨的招聘匹配评估员。请只依据简
 ## 候选人个人信息
 - 最高学历：{candidate_education}
 - 求职招聘类型：{candidate_recruitment_type}
+- 期望薪资区间：{salary_min}K-{salary_max}K
+- 薪资上限放宽线：{salary_ceil}K
 
 ## 岗位信息
 - 职位：{title}
@@ -60,6 +62,9 @@ SCORING_PROMPT = """你是一位严谨的招聘匹配评估员。请只依据简
 3. 硬性要求（0-15分）：年限、学历、必备技能等明确硬要求的满足程度。
 4. 工具与行业（0-10分）：工具、产品类型、客户类型或行业背景；JD仅写“优先/加分”时不能当作硬缺口。
 5. 实际条件（0-10分）：城市、薪资、工作方式和稳定性等可判断条件。
+
+## 薪资判断
+若用户填写了期望薪资上限，岗位薪资在放宽线以内时不要因“略高”扣重分；明显高出时只影响“实际条件”，不要覆盖核心职责与硬性要求判断。
 
 ## 封顶规则
 仅在JD把相关内容作为核心职责或明确必备条件，且简历没有相应证据时填写caps：
@@ -172,6 +177,11 @@ def _truncate_prompt_text(text: str, limit: int) -> str:
 
 def _build_scoring_prompt(job: dict, resume: str, config: dict | None = None, *, compact: bool = False) -> str:
     config = config or {}
+    profile = config.get("profile", {}) if isinstance(config.get("profile"), dict) else {}
+    salary_min = _as_number(profile.get("salary_min", 0))
+    salary_max = _as_number(profile.get("salary_max", 0))
+    salary_ceil_ratio = max(_as_number(profile.get("salary_ceil_ratio", 1.5)), 1.0)
+    salary_ceil = salary_max * salary_ceil_ratio if salary_max > 0 else 0
     resume_limit = 1400 if compact else 3000
     jd_limit = 900 if compact else 2000
     return SCORING_PROMPT.format(
@@ -190,8 +200,23 @@ def _build_scoring_prompt(job: dict, resume: str, config: dict | None = None, *,
             "experienced": "社招",
             "both": "校招/社招均可",
         }.get(config.get("profile", {}).get("recruitment_type", ""), "未填写"),
+        salary_min=_format_salary_k(salary_min),
+        salary_max=_format_salary_k(salary_max),
+        salary_ceil=_format_salary_k(salary_ceil),
         jd=_truncate_prompt_text(clean_job_description(job.get("jd", "")), jd_limit),
     )
+
+
+def _as_number(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _format_salary_k(value: float) -> str:
+    value = float(value or 0)
+    return str(int(value)) if value.is_integer() else str(value)
 
 
 def _build_review_prompt(job: dict, resume: str, first: ScoreResult, config: dict | None = None) -> str:

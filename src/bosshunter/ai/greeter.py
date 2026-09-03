@@ -2,6 +2,7 @@
 
 import json
 import re
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -52,6 +53,8 @@ GREETING_PROMPT = """你是一位求职者，需要在{platform}上给HR发送�
 11. 可以压缩和概括“我的背景”，但不得新增事实、夸大结果或改写成更高职级经历
 12. 【严禁】不得生成“我的背景”或“可用亮点”中未明确提供的网址；
     没有提供网址时，不得输出任何网址
+13. 【严禁】不得提及我的缺点、短板、不足、经验缺口或仍在学习某项岗位要求；只突出已具备的优势与匹配点
+14. 若“我的背景”中明确给出毕业年份、届别或在读/已毕业状态，必须严格照用；没有明确事实时不要自行推断届别
 {critique_section}
 请直接输出招呼语文本，不要加任何标记或解释。
 """
@@ -94,6 +97,41 @@ def _get_resume_text(config: dict) -> str:
 def _get_resume_summary(config: dict) -> str:
     """Get the resume prefix allowed in the greeting prompt."""
     return _get_resume_text(config)[:1500]
+
+
+_GRADUATION_RANGE_RE = re.compile(
+    r"(20\d{2})\s*[年./-]\s*(\d{1,2})\s*(?:月)?\s*(?:至|到|-|—|~|～)\s*"
+    r"(20\d{2})\s*[年./-]\s*(\d{1,2})\s*(?:月)?"
+)
+_MISSING_SUFFIX_RE = re.compile(r"\s*[|｜]\s*缺失[:：].*$", re.S)
+
+
+def _parse_graduation_context(resume_content: str) -> str:
+    """Extract explicit graduation timing from the education section."""
+    text = str(resume_content or "")
+    section_start = text.find("教育经历")
+    if section_start < 0:
+        return ""
+    section = text[section_start:section_start + 800]
+    match = _GRADUATION_RANGE_RE.search(section)
+    if not match:
+        return ""
+
+    end_year = int(match.group(3))
+    end_month = int(match.group(4))
+    graduation_class = f"{end_year} 届"
+    graduated = (date.today().year, date.today().month) >= (end_year, end_month)
+    status = "已毕业" if graduated else "在读/未毕业"
+    return (
+        f"教育经历明确显示：{match.group(1)} 年 {int(match.group(2))} 月至 "
+        f"{end_year} 年 {end_month} 月；{status}，{graduation_class}。"
+        "生成招呼语时必须严格使用该毕业信息，不得改写为其他届别或状态。"
+    )
+
+
+def _positive_match_reason(score_reason: str) -> str:
+    """Remove the persisted missing-gaps suffix before greeting generation."""
+    return _MISSING_SUFFIX_RE.sub("", str(score_reason or "")).strip()
 
 
 def _call_claude(
@@ -314,6 +352,22 @@ def _greeting_style_issues(
     if sum(technical_concepts) > 2:
         issues.append("技术名词最多保留2个，只留下与岗位最相关的能力证据")
 
+    weakness_markers = (
+        "经验不足",
+        "缺乏",
+        "短板",
+        "不足",
+        "还在学习",
+        "仍在学习",
+        "正在学习",
+        "没有做过",
+        "但缺",
+        "尚需",
+        "需要适应",
+    )
+    if any(marker in greeting for marker in weakness_markers):
+        issues.append("不要暴露缺点、短板或经验缺口，只保留已经具备的优势")
+
     opening = _opening_signature(greeting)
     if opening and opening in set(recent_openings or []):
         issues.append("本批次已使用相同开头，请换一种自然切入方式")
@@ -411,7 +465,7 @@ def _generate_greeting_once(
             job.get("recruitment_type", ""), "未识别"
         ),
         jd_summary=jd_summary,
-        match_reason=_truncate_prompt_text(job.get("score_reason", ""), 240),
+        match_reason=_truncate_prompt_text(_positive_match_reason(job.get("score_reason", "")), 240),
         critique_section=critique_section,
         extra_highlights=_truncate_prompt_text(extra_highlights, 500),
         recent_openings=(
@@ -596,6 +650,9 @@ def generate_greetings(config: dict) -> int:
         console.print("[red]无法读取简历[/red]")
         db.close()
         return 0
+    graduation_context = _parse_graduation_context(resume_summary)
+    if graduation_context:
+        resume_summary = f"{graduation_context}\n\n{resume_summary}"
 
     ai_cfg = config.get("ai", {})
     review_threshold = ai_cfg.get("greeting_review_threshold", 7.0)
