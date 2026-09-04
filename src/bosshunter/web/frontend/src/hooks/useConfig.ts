@@ -1,4 +1,28 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+
+function readConfigPath(config: Record<string, any>, path: string): unknown {
+  const keys = path.split('.')
+  let existing: any = config
+  for (const key of keys) {
+    if (existing == null || typeof existing !== 'object') {
+      return undefined
+    }
+    existing = existing[key]
+  }
+  return existing
+}
+
+function writeConfigPath(config: Record<string, any>, path: string, value: unknown): Record<string, any> {
+  const keys = path.split('.')
+  const next = JSON.parse(JSON.stringify(config))
+  let obj = next
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (!obj[keys[i]]) obj[keys[i]] = {}
+    obj = obj[keys[i]]
+  }
+  obj[keys[keys.length - 1]] = value
+  return next
+}
 
 export function useConfig() {
   const [config, setConfig] = useState<Record<string, any> | null>(null)
@@ -8,6 +32,7 @@ export function useConfig() {
   const [dirty, setDirty] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const configRef = useRef<Record<string, any> | null>(null)
 
   const fetchConfig = async () => {
     try {
@@ -20,11 +45,13 @@ export function useConfig() {
       if (!schemaRes.ok) throw new Error('配置结构接口请求失败')
       const configData = await configRes.json()
       const schemaData = await schemaRes.json()
+      configRef.current = configData
       setConfig(configData)
       setSchema(schemaData)
       setDirty(false)
     } catch (err) {
       console.error('Failed to fetch config:', err)
+      configRef.current = null
       setConfig(null)
       setError(err instanceof Error ? err.message : '配置加载失败')
     } finally {
@@ -36,31 +63,29 @@ export function useConfig() {
     fetchConfig()
   }, [])
 
-  const updateConfig = useCallback((path: string, value: any) => {
-    setConfig(prev => {
-      if (!prev) return prev
-      const keys = path.split('.')
-      const next = JSON.parse(JSON.stringify(prev))
-      let obj = next
-      for (let i = 0; i < keys.length - 1; i++) {
-        if (!obj[keys[i]]) obj[keys[i]] = {}
-        obj = obj[keys[i]]
-      }
-      obj[keys[keys.length - 1]] = value
-      return next
-    })
-    setDirty(true)
+  const updateConfig = useCallback((path: string, value: any, options?: { markDirty?: boolean }) => {
+    const prev = configRef.current
+    if (!prev) return
+    if (Object.is(readConfigPath(prev, path), value)) return
+    const next = writeConfigPath(prev, path, value)
+    configRef.current = next
+    setConfig(next)
+    // Server-persisted fields (e.g. resume upload) sync local state without dirtying.
+    if (options?.markDirty !== false) {
+      setDirty(true)
+    }
   }, [])
 
   const saveConfig = async () => {
-    if (!config) return
+    const snapshot = configRef.current
+    if (!snapshot) return
     setSaving(true)
     setMessage(null)
     try {
       const res = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
+        body: JSON.stringify(snapshot),
       })
       const data = await res.json()
       if (data.success) {
