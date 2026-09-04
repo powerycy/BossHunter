@@ -13,7 +13,7 @@ from urllib.parse import quote, urlencode
 
 from bosshunter.ai.prefilter import quick_score
 from bosshunter.browser import close_tab, evaluate, navigate, new_tab, scroll, wait_for_load
-from bosshunter.collection.base import CollectionError, CollectorHooks
+from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
 from bosshunter.config import CITY_CODES
 from bosshunter.db import add_risk_event
