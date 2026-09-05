@@ -61,6 +61,37 @@ class AiPreflightTests(unittest.TestCase):
 		self.assertEqual(checks[0]["status"], "error")
 		self.assertIn("连接超时", checks[0]["message"])
 
+	@patch("bosshunter.web.preflight.httpx.get")
+	def test_client_init_crash_is_reported_as_environment_error(self, http_get):
+		http_get.side_effect = TypeError("cannot convert 'NoneType' object to bytes")
+		config = {"ai": {"api_key": "secret-key", "base_url": "http://127.0.0.1:8000", "model": "local-model"}}
+
+		checks = check_ai_connection(config, required=True)
+
+		self.assertEqual(checks[0]["status"], "error")
+		self.assertIn("请求尚未发出", checks[0]["message"])
+		self.assertIn("运行环境异常", checks[0]["message"])
+		self.assertNotIn("请检查 AI 设置", str(checks))
+		self.assertIn(f"HTTPX {httpx.__version__}", checks[0]["detail"])
+		self.assertNotIn("secret-key", str(checks))
+		self.assertNotIn("127.0.0.1:8000", str(checks))
+
+	def test_pre_release_python_adds_warning_check(self):
+		from types import SimpleNamespace
+
+		from bosshunter.web.preflight import _python_release_checks
+
+		with patch("sys.version_info", SimpleNamespace(releaselevel="alpha")):
+			checks = _python_release_checks()
+
+		self.assertEqual(len(checks), 1)
+		self.assertEqual(checks[0]["status"], "warning")
+		self.assertIn("预发布版 Python", checks[0]["message"])
+		self.assertIn("稳定版 Python", checks[0]["detail"])
+
+		with patch("sys.version_info", SimpleNamespace(releaselevel="final")):
+			self.assertEqual(_python_release_checks(), [])
+
 
 class BrowserPreflightTests(unittest.TestCase):
 	@patch("bosshunter.web.preflight.run_browser_diagnostics")

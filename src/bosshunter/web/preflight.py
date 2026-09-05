@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+from bosshunter import __version__
 
 from bosshunter.ai.credentials import (
 	get_ai_api_key,
@@ -22,6 +25,23 @@ from bosshunter.collection.orchestrator import normalize_collection_options
 
 
 VALID_MODES = {"full", "collect", "rescore", "monitor"}
+
+
+def _python_release_checks() -> list[dict[str, str]]:
+	"""Warn when BossHunter runs on a pre-release Python (alpha/beta/candidate)."""
+	if sys.version_info.releaselevel == "final":
+		return []
+	return [
+		_check(
+			"python_release",
+			"Python 运行环境",
+			"warning",
+			f"当前为预发布版 Python {sys.version.split()[0]} {sys.version_info.releaselevel}",
+			"预发布版本的兼容性问题可能引发 HTTP 客户端初始化等本地异常；"
+			"建议使用稳定版 Python 3.11/3.12/3.13 并重建虚拟环境。",
+			"config",
+		)
+	]
 
 
 def collect_preflight_checks(mode: str, config: dict, options: dict | None = None) -> list[dict[str, str]]:
@@ -47,6 +67,7 @@ def collect_preflight_checks(mode: str, config: dict, options: dict | None = Non
 		# Pure collection must not perform an AI connectivity request. This keeps
 		# ``auto_score=false`` genuinely AI-free even when credentials are saved.
 		checks.append(_check("ai_connection", "AI 接口连接", "pass", "纯采集不需要 AI", "关闭“采集后自动评分”时不会调用 AI。"))
+		checks.extend(_python_release_checks())
 		try:
 			checks.extend(check_browser_connection(deepcopy(config), collection_options))
 		except Exception:
@@ -98,6 +119,7 @@ def collect_preflight_checks(mode: str, config: dict, options: dict | None = Non
 					f"执行顺序：{' → '.join(full_options.get('platform_order', []))}；只有支持投递的平台可进入全流程。",
 				)
 			)
+	checks.extend(_python_release_checks())
 	return checks
 
 
@@ -190,6 +212,20 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 				severity,
 				"无法连接 AI 接口",
 				"请检查 Base URL、网络或代理设置，然后重新检测。",
+				"config",
+			)
+		]
+	except TypeError:
+		# 客户端初始化阶段的崩溃（如预发布版 Python 上的 httpx 兼容问题）发生在
+		# 请求发出之前，与 API Key/Base URL 配置无关，不能笼统提示"检查 AI 设置"。
+		return [
+			_check(
+				"ai_connection",
+				"AI 接口连接",
+				severity,
+				"AI 请求尚未发出：本地 Python/HTTPX 运行环境异常",
+				f"当前 Python {sys.version.split()[0]} · HTTPX {httpx.__version__} · BossHunter {__version__}；"
+				"建议使用稳定版 Python 3.11/3.12/3.13 并重建虚拟环境。",
 				"config",
 			)
 		]
