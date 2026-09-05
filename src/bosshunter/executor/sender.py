@@ -19,8 +19,8 @@ from bosshunter.browser import (
     wait_for_load,
 )
 from bosshunter.db import (
-    get_db, get_jobs_ready_to_send, update_job_status, add_history, add_risk_event,
-    set_platform_safety_lock,
+    get_db, get_jobs_ready_to_send, update_job_status, update_job_last_error,
+    add_history, add_risk_event, set_platform_safety_lock,
 )
 from bosshunter.collection.capabilities import platform_supports
 from bosshunter.throttle import RequestThrottle, SendWindowChecker, ProgressiveBackoff, should_take_day_off
@@ -37,6 +37,16 @@ CHAT_BUTTON_SELECTOR = (
     '[ka*="gochat"], '
     '.op-btn-chat, '
     '.btn-startchat-wrap'
+)
+
+# 命中任一即视为岗位已关闭/下架/停止招聘/招满。用于岗位详情页失败时推断真实业务状态。
+JOB_CLOSED_MARKERS = (
+    "访问的页面不存在", "您访问的页面不存在", "Oops!",
+    "职位已关闭", "职位已经关闭", "该职位已关闭", "此职位已关闭", "岗位已关闭",
+    "该职位已下线", "该职位已下架", "职位已下线", "职位已下架",
+    "该职位已暂停招聘", "职位已暂停招聘", "职位暂停招聘", "停止招聘", "已停止招聘",
+    "暂停招聘", "招聘已暂停", "该职位已招满", "职位已招满", "已招满",
+    "该职位暂不招人", "暂不招人",
 )
 
 CHAT_BUTTON_SCRIPT_FOR_TESTS = """
@@ -709,6 +719,35 @@ JS_SEND_GREETING = """
 """
 
 
+def _detect_job_closed_on_page(target_id: str) -> dict | None:
+    """Attempt to confirm whether the opened job page reports the job as closed/down.
+
+    Used as a fallback when a step on the job-detail page fails (e.g. no chat button),
+    so we can surface the real business conclusion ("job is closed") instead of only the
+    technical step that failed. Returns a send-result dict when a closed marker is found.
+    """
+    markers = list(JOB_CLOSED_MARKERS)
+    probe = _parse_js_result(evaluate(target_id, f"""
+    (() => {{
+        const text = document.body ? document.body.innerText : '';
+        const title = document.title || '';
+        const markers = {json.dumps(markers, ensure_ascii=False)};
+        const hit = title.includes('访问的页面不存在') || markers.some((m) => text.includes(m));
+        if (!hit) return JSON.stringify({{closed: false}});
+        const snippet = markers.find((m) => text.includes(m)) || '职位已关闭';
+        return JSON.stringify({{closed: true, snippet}});
+    }})()
+    """))
+    if probe.get("closed"):
+        return {
+            "success": False,
+            "error": "job_page_unavailable",
+            "history_detail": "岗位已关闭或下架",
+            "skip_backoff": True,
+        }
+    return None
+
+
 def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tuple[dict, str | None]:
     stop_event = throttle_config.get("_workbench_stop_event")
     existing_target_ids = {
@@ -743,24 +782,24 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
             close_tab(target_id)
             return {"success": False, "error": "stopped", "history_detail": "用户已请求停止", "skip_backoff": True}, None
 
-    page_check_js = """
-    (() => {
+    page_check_js = f"""
+    (() => {{
         const text = document.body ? document.body.innerText : '';
         const title = document.title || '';
+        const closedMarkers = {json.dumps(list(JOB_CLOSED_MARKERS), ensure_ascii=False)};
         if (
             title.includes('访问的页面不存在') ||
-            text.includes('您访问的页面不存在') ||
-            text.includes('Oops!')
-        ) {
-            return JSON.stringify({
+            closedMarkers.some((marker) => text.includes(marker))
+        ) {{
+            return JSON.stringify({{
                 success: false,
                 error: 'job_page_unavailable',
-                history_detail: '岗位页面不存在或已下架',
+                history_detail: '岗位已关闭或下架',
                 skip_backoff: true
-            });
-        }
-        return JSON.stringify({success: true});
-    })()
+            }});
+        }}
+        return JSON.stringify({{success: true}});
+    }})()
     """
     page_check = _parse_js_result(evaluate(target_id, page_check_js))
     if not page_check.get("success"):
@@ -770,7 +809,10 @@ def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tupl
     chat_button_attempts = int(throttle_config.get("_chat_button_attempts", 30))
     result1a = _click_chat_button(target_id, stop_event, chat_button_attempts)
     if not result1a.get("success"):
+        closed_result = _detect_job_closed_on_page(target_id)
         close_tab(target_id)
+        if closed_result:
+            return closed_result, None
         return {"success": False, "error": "no_chat_button", "history_detail": "无法找到沟通按钮", "skip_backoff": True}, None
 
     if _sleep_or_stop(4, stop_event):
@@ -1106,6 +1148,7 @@ def send_greetings(config: dict, force: bool = False) -> int:
             greeting = job.get("greeting", "")
             if not greeting:
                 update_job_status(db, job["id"], "error")
+                update_job_last_error(db, job["id"], "该岗位没有已生成的招呼语，无法发送", "no_greeting")
                 send_report["attempted_count"] += 1
                 send_report["failed_count"] += 1
                 progress.update(task, advance=1)
@@ -1159,6 +1202,7 @@ def send_greetings(config: dict, force: bool = False) -> int:
             if result_data.get("success"):
                 throttle.mark()
                 update_job_status(db, job["id"], "sent")
+                update_job_last_error(db, job["id"], "")
                 add_history(db, job["id"], "sent", greeting[:50])
                 sent_count += 1
                 send_report["sent_count"] = sent_count
@@ -1170,8 +1214,10 @@ def send_greetings(config: dict, force: bool = False) -> int:
                     console.print("[yellow]为了账户安全，已达到平台页面访问上限或仍处于风险冷却，停止投递[/yellow]")
                     break
                 send_report["failed_count"] += 1
+                history_detail = result_data.get("history_detail", f"发送失败: {error}")
                 update_job_status(db, job["id"], "error")
-                add_history(db, job["id"], "error", result_data.get("history_detail", f"发送失败: {error}"))
+                update_job_last_error(db, job["id"], history_detail, error)
+                add_history(db, job["id"], "error", history_detail)
                 if result_data.get("skip_backoff"):
                     progress.update(task, advance=1)
                     continue
