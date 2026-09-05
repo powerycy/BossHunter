@@ -1,46 +1,49 @@
-# Only governance and high-risk runtime paths require owner approval.
-# Unlisted paths can be handled by module maintainers after PR + CI pass.
-# Replace individual owners with visible organization teams after the
-# corresponding maintainer teams exist and have Write access.
-
-# Governance, maintainer history, contributor ranking, and repository policy.
-/GOVERNANCE.md @powerycy
-/MAINTAINERS.md @powerycy
-/CONTRIBUTORS.md @powerycy
-/CONTRIBUTING.md @powerycy
+# README and the project contribution leaderboard remain under project-owner
+# governance. The owner is not a required or final reviewer for high-risk code.
 /README.md @powerycy
-/.github/CODEOWNERS @powerycy
-/.github/PUBLISH_CHECKLIST.md @powerycy
-/.github/workflows/ @powerycy
+/CONTRIBUTORS.md @powerycy
+
+# CODEOWNERS lists eligible reviewers. Governance requires two different
+# non-author maintainers for high-risk changes; enforce that count with branch
+# protection, a Ruleset, or an equivalent blocking check.
+# Replace individual owners with visible organization teams after those teams
+# exist and have Write access.
+
+# Current formal maintainer review pool.
+/GOVERNANCE.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/MAINTAINERS.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/CONTRIBUTING.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/.github/CODEOWNERS @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/.github/PUBLISH_CHECKLIST.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/.github/workflows/ @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
 
 # Core and safety: delivery, browser control, credentials, data, and releases.
-/src/bosshunter/executor/ @powerycy
-/src/bosshunter/browser/ @powerycy
-/src/bosshunter/throttle.py @powerycy
-/src/bosshunter/platform_safety.py @powerycy
-/src/bosshunter/collection/capabilities.py @powerycy
-/src/bosshunter/config.py @powerycy
-/src/bosshunter/db.py @powerycy
-/src/bosshunter/main.py @powerycy
-/src/bosshunter/pipeline.py @powerycy
-/src/bosshunter/cancellation.py @powerycy
-/src/bosshunter/collection_run_store.py @powerycy
-/src/bosshunter/scoring_run_store.py @powerycy
-/src/bosshunter/ai/credentials.py @powerycy
-/src/bosshunter/ai/scorer.py @powerycy
-/src/bosshunter/ai/greeter.py @powerycy
-/src/bosshunter/ai/resume.py @powerycy
-/src/bosshunter/web/server.py @powerycy
-/src/bosshunter/web/tasks.py @powerycy
-/src/bosshunter/web/preflight.py @powerycy
-/src/bosshunter/web/resume_upload.py @powerycy
-/src/bosshunter/web/config_schema.json @powerycy
-/src/bosshunter/ui/confirm.py @powerycy
-/config.example.yaml @powerycy
-/pyproject.toml @powerycy
-/src/bosshunter/web/frontend/package.json @powerycy
-/src/bosshunter/web/frontend/package-lock.json @powerycy
+/src/bosshunter/executor/ @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/browser/ @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/throttle.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/platform_safety.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/collection/capabilities.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/config.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/db.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/main.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/pipeline.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/cancellation.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/collection_run_store.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/scoring_run_store.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/ai/credentials.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/ai/scorer.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/ai/greeter.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/ai/resume.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/web/server.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/web/tasks.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/web/preflight.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/web/resume_upload.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/web/config_schema.json @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/ui/confirm.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/config.example.yaml @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/pyproject.toml @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/web/frontend/package.json @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/web/frontend/package-lock.json @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
 
-# Ordinary product/AI and platform-adapter paths intentionally have no required
-# owner. Module maintainers can approve and merge them after PR + CI; the
-# high-risk paths above continue to require the current project owner.
+# Ordinary paths intentionally have no required Code Owner. Any formal
+# maintainer may review them after PR + CI under the governance approval rule.
