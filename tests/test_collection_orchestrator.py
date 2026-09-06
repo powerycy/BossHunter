@@ -6,7 +6,11 @@ from unittest.mock import patch
 
 from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionResult
-from bosshunter.collection.orchestrator import CollectionOrchestrator, normalize_collection_options
+from bosshunter.collection.orchestrator import (
+    CollectionOrchestrator,
+    normalize_collection_options,
+    validate_collection_options,
+)
 from bosshunter.collection.registry import CollectorRegistry
 from bosshunter.db import get_db, insert_job
 
@@ -59,6 +63,17 @@ class _FakeCollector:
                 hooks.stop_event.set()
                 return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
         return PlatformCollectionResult(self.platform, "completed", "search_exhausted", "无更多结果")
+
+
+class _BlockedCollector:
+    def __init__(self, platform, events, reason_code):
+        self.platform = platform
+        self.events = events
+        self.reason_code = reason_code
+
+    def collect(self, _request, _hooks: CollectorHooks):
+        self.events.append(f"start:{self.platform}")
+        return PlatformCollectionResult(self.platform, "blocked", self.reason_code, "平台已阻断")
 
 
 class CollectionOrchestratorTests(TestCase):
@@ -152,6 +167,37 @@ class CollectionOrchestratorTests(TestCase):
         self.assertNotIn("start:zhilian", events)
         score_jobs.assert_not_called()
 
+    def test_login_required_stops_only_current_platform_and_continues_queue(self):
+        events = []
+        registry = CollectorRegistry({
+            "zhilian": lambda: _BlockedCollector("zhilian", events, "login_required"),
+            "boss": lambda: _FakeCollector("boss", events, [_candidate("boss", "boss-after-login")]),
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator(
+                {}, db_path=Path(tmp) / "collection.db", registry=registry
+            ).run(_options(order=["zhilian", "boss"]))
+
+        self.assertEqual(events, ["start:zhilian", "start:boss"])
+        self.assertEqual(result["status"], "completed_with_errors")
+        self.assertEqual(result["platforms"]["zhilian"]["reason_code"], "login_required")
+        self.assertEqual(result["platforms"]["boss"]["new"], 1)
+
+    def test_non_login_block_still_stops_the_remaining_queue(self):
+        events = []
+        registry = CollectorRegistry({
+            "zhilian": lambda: _BlockedCollector("zhilian", events, "rate_limit"),
+            "boss": lambda: _FakeCollector("boss", events, [_candidate("boss", "not-started")]),
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator(
+                {}, db_path=Path(tmp) / "collection.db", registry=registry
+            ).run(_options(order=["zhilian", "boss"]))
+
+        self.assertEqual(events, ["start:zhilian"])
+        self.assertEqual(result["status"], "completed_with_errors")
+        self.assertEqual(result["platforms"]["boss"]["status"], "queued")
+
     def test_legacy_search_values_override_empty_platform_defaults(self):
         result = normalize_collection_options({
             "search": {"keywords": ["后端"], "cities": ["上海"]},
@@ -160,6 +206,25 @@ class CollectionOrchestratorTests(TestCase):
         })
         self.assertEqual(result["platforms"]["boss"]["keywords"], ["后端"])
         self.assertEqual(result["platforms"]["boss"]["cities"], ["上海"])
+
+    def test_boss_filters_survive_normalization_and_invalid_values_are_removed(self):
+        result = normalize_collection_options({
+            "search": {
+                "keywords": ["后端"],
+                "cities": ["北京"],
+                "filters": {
+                    "job_type": ["全职"],
+                    "experience": ["1-3年", "任意经验"],
+                    "industry": ["100001", "bad&sortType=2"],
+                },
+            },
+        })
+
+        self.assertEqual(result["platforms"]["boss"]["filters"], {
+            "job_type": ["全职"],
+            "experience": ["1-3年"],
+            "industry": ["100001"],
+        })
 
     def test_zhilian_city_code_is_resolved_from_city_name(self):
         result = normalize_collection_options({}, {
@@ -198,3 +263,264 @@ class CollectionOrchestratorTests(TestCase):
             "platforms": {"zhilian": {"enabled": False, "search": {}}},
         })
         self.assertEqual(result["platform_order"], ["boss"])
+
+
+class ValidateCollectionOptionsTests(TestCase):
+    """validate_collection_options 错误路径覆盖。"""
+
+    def test_rejects_empty_platform_order(self):
+        with self.assertRaises(ValueError, msg="至少选择一个采集平台"):
+            normalize_collection_options({}, {"platform_order": [], "platforms": {}})
+
+    def test_rejects_duplicate_platforms(self):
+        with self.assertRaises(ValueError, msg="不能重复"):
+            normalize_collection_options({}, {
+                "platform_order": ["boss", "boss"],
+                "platforms": {"boss": {"keywords": ["AI"], "cities": ["北京"]}},
+            })
+
+    def test_rejects_unsupported_platform(self):
+        with self.assertRaises(ValueError, msg="只支持"):
+            normalize_collection_options({}, {
+                "platform_order": ["unknown"],
+                "platforms": {"unknown": {"keywords": ["AI"], "cities": ["北京"]}},
+            })
+
+    def test_rejects_missing_keywords(self):
+        with self.assertRaises(ValueError, msg="关键词"):
+            normalize_collection_options({}, {
+                "platform_order": ["boss"],
+                "platforms": {"boss": {"keywords": [], "cities": ["北京"]}},
+            })
+
+    def test_rejects_missing_cities(self):
+        with self.assertRaises(ValueError, msg="城市"):
+            normalize_collection_options({}, {
+                "platform_order": ["zhilian"],
+                "platforms": {"zhilian": {"keywords": ["AI"], "cities": []}},
+            })
+
+    def test_rejects_invalid_max_pages(self):
+        with self.assertRaises(ValueError, msg="最大页数"):
+            normalize_collection_options({}, {
+                "platform_order": ["boss"],
+                "platforms": {"boss": {"keywords": ["AI"], "cities": ["北京"], "max_pages": 0}},
+            })
+
+    def test_rejects_max_pages_over_10(self):
+        with self.assertRaises(ValueError, msg="范围"):
+            normalize_collection_options({}, {
+                "platform_order": ["boss"],
+                "platforms": {"boss": {"keywords": ["AI"], "cities": ["北京"], "max_pages": 11}},
+            })
+
+    def test_rejects_invalid_sort(self):
+        with self.assertRaises(ValueError, msg="排序"):
+            normalize_collection_options({}, {
+                "platform_order": ["boss"],
+                "platforms": {"boss": {"keywords": ["AI"], "cities": ["北京"], "sort": "invalid"}},
+            })
+
+    def test_rejects_non_bool_auto_score(self):
+        with self.assertRaises(ValueError, msg="auto_score"):
+            validate_collection_options({
+                "platform_order": ["boss"],
+                "auto_score": "yes",
+                "platforms": {"boss": {"keywords": ["AI"], "cities": ["北京"]}},
+            })
+
+
+class CityCodeResolutionTests(TestCase):
+    """51job / liepin 城市编码解析。"""
+
+    def test_51job_city_code_resolved(self):
+        result = normalize_collection_options({}, {
+            "platform_order": ["51job"],
+            "platforms": {"51job": {"keywords": ["AI"], "cities": ["北京"], "max_pages": 1}},
+        })
+        self.assertEqual(result["platforms"]["51job"]["city_codes"], {"北京": "010000"})
+
+    def test_51job_unsupported_city_raises(self):
+        with self.assertRaises(ValueError, msg="尚未支持"):
+            normalize_collection_options({}, {
+                "platform_order": ["51job"],
+                "platforms": {"51job": {"keywords": ["AI"], "cities": ["未知城市"], "max_pages": 1}},
+            })
+
+    def test_liepin_city_code_resolved(self):
+        result = normalize_collection_options({}, {
+            "platform_order": ["liepin"],
+            "platforms": {"liepin": {"keywords": ["AI"], "cities": ["北京"], "max_pages": 1}},
+        })
+        self.assertEqual(result["platforms"]["liepin"]["city_codes"]["北京"], "010")
+
+    def test_liepin_unsupported_city_raises(self):
+        with self.assertRaises(ValueError, msg="尚未支持"):
+            normalize_collection_options({}, {
+                "platform_order": ["liepin"],
+                "platforms": {"liepin": {"keywords": ["AI"], "cities": ["未知城市"], "max_pages": 1}},
+            })
+
+    def test_zhilian_unsupported_city_raises(self):
+        with self.assertRaises(ValueError, msg="暂未内置"):
+            normalize_collection_options({}, {
+                "platform_order": ["zhilian"],
+                "platforms": {"zhilian": {"keywords": ["AI"], "cities": ["未知城市"], "max_pages": 1}},
+            })
+
+
+class NormalizeCollectionOptionsTests(TestCase):
+    """normalize_collection_options 配置合并路径。"""
+
+    def test_config_default_order_with_enabled_platforms(self):
+        result = normalize_collection_options({
+            "search": {"keywords": ["后端"], "cities": ["北京"]},
+            "collection": {"default_order": ["boss", "zhilian", "51job"]},
+            "platforms": {
+                "zhilian": {"enabled": True, "search": {"keywords": ["AI"], "cities": ["北京"]}},
+                "51job": {"enabled": True, "search": {"keywords": ["AI"], "cities": ["北京"]}},
+            },
+        })
+        self.assertEqual(result["platform_order"], ["boss", "zhilian", "51job"])
+
+    def test_explicit_platform_order_filters_to_selected(self):
+        result = normalize_collection_options({
+            "search": {"keywords": ["后端"], "cities": ["北京"]},
+        }, {
+            "platform_order": ["boss", "zhilian"],
+            "platforms": {"boss": {"keywords": ["AI"], "cities": ["北京"]}},
+        })
+        self.assertEqual(result["platform_order"], ["boss"])
+
+    def test_platform_search_merges_with_config_defaults(self):
+        result = normalize_collection_options({
+            "platforms": {"boss": {"search": {"keywords": ["默认词"], "cities": ["北京"]}}},
+        }, {
+            "platform_order": ["boss"],
+            "platforms": {"boss": {"keywords": ["覆盖词"]}},
+        })
+        self.assertEqual(result["platforms"]["boss"]["keywords"], ["覆盖词"])
+        self.assertEqual(result["platforms"]["boss"]["cities"], ["北京"])
+
+    def test_boss_defaults_to_target_cities_when_missing(self):
+        result = normalize_collection_options({
+            "profile": {"target_cities": ["上海", "深圳"]},
+            "search": {"keywords": ["AI"]},
+        })
+        self.assertEqual(result["platforms"]["boss"]["cities"], ["上海", "深圳"])
+
+    def test_non_bool_max_pages_raises(self):
+        with self.assertRaises(ValueError, msg="整数"):
+            normalize_collection_options({}, {
+                "platform_order": ["boss"],
+                "platforms": {"boss": {"keywords": ["AI"], "cities": ["北京"], "max_pages": "abc"}},
+            })
+
+
+class SharedProcessorTests(TestCase):
+    """_SharedProcessor inspect/save 逻辑。"""
+
+    def test_inspect_deduplicates_existing_job(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = get_db(db_path)
+            insert_job(db, {**_candidate("boss", "dup").as_job_record()})
+            db.close()
+            registry = CollectorRegistry({"boss": lambda: _FakeCollector("boss", events, [_candidate("boss", "dup")])})
+            result = CollectionOrchestrator({}, db_path=db_path, registry=registry).run(_options())
+            self.assertEqual(result["platforms"]["boss"]["duplicate"], 1)
+            self.assertEqual(result["platforms"]["boss"]["new"], 0)
+
+    def test_inspect_filters_deal_breaker_in_title(self):
+        events = []
+        registry = CollectorRegistry({"boss": lambda: _FakeCollector("boss", events, [_candidate("boss", "x", "外包岗位")])})
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator(
+                {"profile": {"deal_breakers": ["外包"]}},
+                db_path=Path(tmp) / "test.db", registry=registry,
+            ).run(_options())
+        self.assertEqual(result["platforms"]["boss"]["filtered"], 1)
+        self.assertEqual(result["platforms"]["boss"]["new"], 0)
+
+    def test_inspect_filters_blocked_company(self):
+        events = []
+        c = _candidate("boss", "x")
+        c = JobCandidate(**{**c.__dict__, "company": "黑名单公司"})
+        registry = CollectorRegistry({"boss": lambda: _FakeCollector("boss", events, [c])})
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator(
+                {"profile": {"blocked_companies": ["黑名单公司"]}},
+                db_path=Path(tmp) / "test.db", registry=registry,
+            ).run(_options())
+        self.assertEqual(result["platforms"]["boss"]["filtered"], 1)
+
+    def test_save_filters_jd_deal_breaker(self):
+        events = []
+        c = _candidate("boss", "x", "正常岗位")
+        c = JobCandidate(**{**c.__dict__, "jd": "包含外包关键词的JD"})
+        registry = CollectorRegistry({"boss": lambda: _FakeCollector("boss", events, [c])})
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator(
+                {"profile": {"jd_deal_breakers": ["外包"]}},
+                db_path=Path(tmp) / "test.db", registry=registry,
+            ).run(_options())
+        self.assertEqual(result["platforms"]["boss"]["filtered"], 1)
+        self.assertEqual(result["platforms"]["boss"]["new"], 0)
+
+
+class OrchestrationFlowTests(TestCase):
+    """CollectionOrchestrator.run 编排流程。"""
+
+    def test_collection_error_becomes_blocked_result(self):
+        from bosshunter.collection.base import CollectionError
+
+        class _ErrorCollector:
+            platform = "boss"
+            def collect(self, _req, _hooks):
+                raise CollectionError("test_error", "test error")
+
+        registry = CollectorRegistry({"boss": lambda: _ErrorCollector()})
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator({}, db_path=Path(tmp) / "test.db", registry=registry).run(_options())
+        self.assertEqual(result["platforms"]["boss"]["status"], "blocked")
+        self.assertEqual(result["platforms"]["boss"]["reason_code"], "test_error")
+
+    def test_generic_exception_becomes_failed_result(self):
+        class _CrashCollector:
+            platform = "boss"
+            def collect(self, _req, _hooks):
+                raise RuntimeError("unexpected crash")
+
+        registry = CollectorRegistry({"boss": lambda: _CrashCollector()})
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator({}, db_path=Path(tmp) / "test.db", registry=registry).run(_options())
+        self.assertEqual(result["platforms"]["boss"]["status"], "failed")
+        self.assertEqual(result["platforms"]["boss"]["reason_code"], "network_error")
+
+    def test_empty_result_completes_normally(self):
+        registry = CollectorRegistry({"boss": lambda: _FakeCollector("boss", [], [])})
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator({}, db_path=Path(tmp) / "test.db", registry=registry).run(_options())
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["platforms"]["boss"]["new"], 0)
+
+    def test_progress_callback_is_invoked(self):
+        progress_calls = []
+        events = []
+        registry = CollectorRegistry({"boss": lambda: _FakeCollector("boss", events, [_candidate("boss", "new-1")])})
+        config = {"_workbench_collect_progress": lambda state: progress_calls.append(state)}
+        with tempfile.TemporaryDirectory() as tmp:
+            CollectionOrchestrator(config, db_path=Path(tmp) / "test.db", registry=registry).run(_options())
+        self.assertGreater(len(progress_calls), 0)
+
+    def test_auto_score_failure_does_not_crash(self):
+        events = []
+        registry = CollectorRegistry({"boss": lambda: _FakeCollector("boss", events, [_candidate("boss", "new-1")])})
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("bosshunter.ai.scorer.score_jobs", side_effect=RuntimeError("score crash")):
+                result = CollectionOrchestrator({}, db_path=Path(tmp) / "test.db", registry=registry).run(
+                    _options(auto_score=True)
+                )
+        self.assertEqual(result["status"], "completed_with_errors")
+        self.assertEqual(result["collected_job_ids"], ["new-1"])

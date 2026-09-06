@@ -324,8 +324,7 @@ const server = http.createServer(async (req, res) => {
       const targetId = resp.result.targetId;
       if (targetUrl !== 'about:blank') {
         try {
-          const sessionId = await ensureSession(targetId);
-          await waitForLoad(sessionId);
+          await ensureSession(targetId);
         } catch {}
       }
       sendJson(res, { targetId });

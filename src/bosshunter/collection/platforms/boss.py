@@ -9,19 +9,92 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from bosshunter.ai.prefilter import quick_score
 from bosshunter.browser import close_tab, evaluate, navigate, new_tab, scroll, wait_for_load
-from bosshunter.collection.base import CollectionError, CollectorHooks
+from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
 from bosshunter.config import CITY_CODES
-from bosshunter.db import add_risk_event
+from bosshunter.db import (
+    add_risk_event,
+    delete_page_progress,
+    get_collected_combos,
+    get_page_progress,
+    mark_combo_collected,
+    prune_collected_combos,
+    prune_page_progress,
+    upsert_page_progress,
+)
 from bosshunter.platform_safety import PlatformAccessGuard, PlatformSafetyStop
 from bosshunter.throttle import PageThrottle
 
 
 SEARCH_URL = "https://www.zhipin.com/web/geek/job?query={keyword}&city={city_code}"
+
+BOSS_FILTER_OPTIONS: dict[str, dict[str, str]] = {
+    "job_type": {"全职": "0", "兼职": "1", "实习": "2"},
+    "experience": {
+        "经验不限": "101", "应届生": "102", "1年以内": "103", "1-3年": "104",
+        "3-5年": "105", "5-10年": "106", "10年以上": "107", "在校生": "108",
+    },
+    "degree": {
+        "学历不限": "201", "大专": "202", "本科": "203", "硕士": "204",
+        "博士": "205", "高中": "206", "中专/中技": "208", "初中及以下": "209",
+    },
+    "scale": {
+        "0-20人": "301", "20-99人": "302", "100-499人": "303",
+        "500-999人": "304", "1000-9999人": "305", "10000人以上": "306",
+    },
+    "salary": {
+        "3K以下": "402", "3-5K": "403", "5-10K": "404",
+        "10-20K": "405", "20-50K": "406", "50K以上": "407",
+    },
+}
+BOSS_FILTER_PARAMS = {
+    "job_type": "jobType",
+    "experience": "experience",
+    "degree": "degree",
+    "scale": "scale",
+    "salary": "salary",
+    "industry": "industry",
+}
+_FILTER_SEPARATOR = re.compile(r"[,，、;；]")
+
+
+def _filter_values(value: Any) -> list[str]:
+    values = value if isinstance(value, list) else _FILTER_SEPARATOR.split(value) if isinstance(value, str) else []
+    result: list[str] = []
+    for item in values:
+        cleaned = str(item or "").strip()
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
+    return result
+
+
+def normalize_boss_search_filters(filters: Any) -> dict[str, list[str]]:
+    """Keep only documented BOSS filter labels and numeric industry codes."""
+    if not isinstance(filters, dict):
+        return {}
+    normalized: dict[str, list[str]] = {}
+    for key in BOSS_FILTER_PARAMS:
+        values = _filter_values(filters.get(key))
+        if key == "industry":
+            values = [value for value in values if re.fullmatch(r"\d{1,12}", value)]
+        else:
+            values = [value for value in values if value in BOSS_FILTER_OPTIONS[key]]
+        if values:
+            normalized[key] = values
+    return normalized
+
+
+def build_boss_filter_query(filters: Any) -> str:
+    """Build an encoded query fragment without allowing arbitrary parameters."""
+    query: dict[str, str] = {}
+    for key, values in normalize_boss_search_filters(filters).items():
+        encoded_values = values if key == "industry" else [BOSS_FILTER_OPTIONS[key][value] for value in values]
+        query[BOSS_FILTER_PARAMS[key]] = ",".join(encoded_values)
+    return urlencode(query)
 
 JS_EXTRACT_LIST = """
 (() => {
@@ -183,6 +256,22 @@ class BossCollector:
         self.config = config or {}
         self.safety_conn = safety_conn
 
+    def _resume_ttl_hours(self) -> int:
+        """断点续采有效期（默认 24h），与 51job/zhilian/liepin 同规则。"""
+        search_cfg: dict[str, Any] = {}
+        platforms = self.config.get("platforms", {})
+        if isinstance(platforms, dict) and isinstance(platforms.get("boss"), dict):
+            pf = platforms["boss"]
+            if isinstance(pf.get("search"), dict):
+                search_cfg = pf["search"]
+        elif isinstance(self.config.get("search"), dict):
+            search_cfg = self.config["search"]
+        raw = search_cfg.get("resume_ttl_hours", 24)
+        try:
+            return max(1, min(int(raw or 24), 720))
+        except (TypeError, ValueError):
+            return 24
+
     @staticmethod
     def resolve_city_code(city: str, request: PlatformCollectionRequest) -> str | None:
         return str(request.city_codes.get(city) or CITY_CODES.get(city) or "") or None
@@ -200,7 +289,7 @@ class BossCollector:
             delay_max=5.0 * delay_multiplier,
         )
         guard = PlatformAccessGuard(self.safety_conn, self.config, "collection", "boss") if self.safety_conn is not None else None
-        search_limit = _positive_int(collection_cfg.get("daily_search_page_limit", 30), 30)
+        search_limit = _positive_int(collection_cfg.get("daily_search_page_limit", 60), 60)
         detail_limit = _positive_int(collection_cfg.get("daily_detail_page_limit", 150), 150)
         failure_limit = _positive_int(collection_cfg.get("max_consecutive_page_failures", 3), 3)
         risk_pause_min = _positive_int(collection_cfg.get("risk_pause_min_minutes", 5), 5)
@@ -292,6 +381,17 @@ class BossCollector:
             return PlatformCollectionResult(
                 self.platform, "completed_with_shortage", "no_valid_city", "没有有效的 BOSS 搜索组合"
             )
+
+        # 词级断点续采：跳过最近 N 小时内已完成的 (city, keyword) 组合。
+        collected_combos: set[tuple[str, str]] = set()
+        if self.safety_conn is not None:
+            all_keywords = set(request.keywords)
+            prune_collected_combos(self.safety_conn, "boss", all_keywords)
+            prune_page_progress(self.safety_conn, "boss", all_keywords)
+            collected_combos = get_collected_combos(
+                self.safety_conn, "boss", within_hours=self._resume_ttl_hours()
+            )
+
         if guard is not None:
             try:
                 guard.ensure_unlocked()
@@ -302,11 +402,28 @@ class BossCollector:
             for city, city_code, keyword in combos:
                 if hooks.stop_event is not None and hooks.stop_event.is_set():
                     return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
-                for page in range(1, request.max_pages + 1):
+                # 词级断点跳过：TTL 内已完成的组合整词跳过
+                if (city, keyword) in collected_combos:
+                    hooks.on_event(phase="completed_keyword", keyword=keyword, city=city,
+                                   message=f"BOSS {keyword} 断点续采：{self._resume_ttl_hours()}h 内已完成，整词跳过")
+                    continue
+                # 页级断点：从上次采到页码的下一页继续
+                saved_page = get_page_progress(self.safety_conn, "boss", city, keyword) if self.safety_conn is not None else 0
+                start_page = saved_page + 1 if saved_page > 0 else 1
+                if start_page > request.max_pages:
+                    if self.safety_conn is not None:
+                        mark_combo_collected(self.safety_conn, "boss", city, keyword)
+                        delete_page_progress(self.safety_conn, "boss", city, keyword)
+                    hooks.on_event(phase="completed_keyword", keyword=keyword, city=city,
+                                   message=f"BOSS {keyword} 页级断点已超最大页（{saved_page}/{request.max_pages}），视为已采完，跳过")
+                    continue
+                for page in range(start_page, request.max_pages + 1):
                     if hooks.stop_event is not None and hooks.stop_event.is_set():
                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                     hooks.on_event(phase="loading_list", keyword=keyword, city=city, page=page)
                     search_url = SEARCH_URL.format(keyword=quote(keyword), city_code=city_code)
+                    filter_query = build_boss_filter_query(request.filters)
+                    if filter_query: search_url += f"&{filter_query}"
                     if request.sort == "newest": search_url += "&sortType=2"
                     if page > 1: search_url += f"&page={page}"
                     try:
@@ -387,8 +504,15 @@ class BossCollector:
                             continue
                         if not hooks.on_candidate(merged):
                             return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")
+                    # 页级断点：每采完一页立即记录页码
+                    if self.safety_conn is not None:
+                        upsert_page_progress(self.safety_conn, "boss", city, keyword, page)
                     if page < request.max_pages and _wait_or_stop(hooks.stop_event, 0.2 * delay_multiplier, self.sleep):
                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                # 词结束：标记词级断点 + 清页级断点
+                if self.safety_conn is not None:
+                    mark_combo_collected(self.safety_conn, "boss", city, keyword)
+                    delete_page_progress(self.safety_conn, "boss", city, keyword)
         finally:
             if worker_target:
                 self.browser.close_tab(worker_target)

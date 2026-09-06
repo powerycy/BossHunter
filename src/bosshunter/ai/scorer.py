@@ -1,26 +1,27 @@
 """AI Scorer - Match jobs against resume using Claude API."""
 
+import json
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-import json
 from pathlib import Path
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from bosshunter.ai.credentials import AIRequestError, call_anthropic_text, get_ai_api_key
+from bosshunter.ai.prefilter import quick_score
 from bosshunter.cancellation import OperationCancelled, run_cancellable
 from bosshunter.collection.text import clean_job_description
 from bosshunter.db import (
     add_history,
     get_db,
     get_jobs_by_status,
+    persist_job_score_and_trace,
     reset_ai_filtered_jobs,
+    update_job_quick_score,
     update_job_score,
     update_job_status,
-    update_job_quick_score,
 )
-from bosshunter.ai.prefilter import quick_score
 from bosshunter.scoring_selection import select_scoring_jobs, validate_options
 
 console = Console()
@@ -97,11 +98,23 @@ COMPONENT_LIMITS = {
     "tools_industry": 10,
     "practical_fit": 10,
 }
+# 部分模型（实测 minimaxi M3）会把 transferable_evidence 简写为 transferable，
+# 校验前按别名归一，避免有效评分被误判为解析失败（issue #107）。
+FIELD_ALIASES = {
+    "transferable": "transferable_evidence",
+}
 CAP_LIMITS = {
     "technical_required": (55, "硬技术缺口封顶55"),
     "sales_acquisition_core": (65, "核心销售获客封顶65"),
     "weak_core_transfer": (70, "核心职责迁移较弱封顶70"),
 }
+TRACE_SCHEMA_VERSION = 1
+ROLE_SUMMARY_LIMIT = 160
+COMPONENT_EVIDENCE_LIMIT = 240
+SUMMARY_REASON_LIMIT = 240
+MISSING_LIMIT = 160
+HARD_GAP_LIMIT = 120
+MAX_HARD_GAPS = 10
 
 
 @dataclass(frozen=True)
@@ -114,6 +127,10 @@ class ScoreResult:
     summary_reason: str
     missing: str
     structured: bool
+    role_summary: str
+    component_evidence: dict[str, str]
+    hard_gaps: tuple[str, ...]
+    reviewed: bool
 
 
 @dataclass(frozen=True)
@@ -134,7 +151,7 @@ def _load_resume(config: dict) -> str:
 def _call_claude(prompt: str, config: dict, max_tokens: int | None = None) -> str | None:
     """Call Claude API and return response text."""
     if not get_ai_api_key(config):
-        console.print("[red]未设置当前 AI 服务所需的 API Key 环境变量或 config.yaml ai.api_key[/red]")
+        console.print("[red]未设置当前 AI 服务所需的 API Key 环境变量或本地凭据[/red]")
         return None
     ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
     token_limit = max_tokens if max_tokens is not None else ai_cfg.get("scoring_max_tokens", 8192)
@@ -221,6 +238,27 @@ def _parse_score_response(text: str) -> dict | None:
     return None
 
 
+def _normalize_short_text(value: object, limit: int) -> str:
+    """Keep model-derived text short, single-line, and safe to persist."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:limit].rstrip()
+
+
+def _normalize_short_strings(value: object, *, item_limit: int, maximum: int) -> tuple[str, ...]:
+    """Normalize model-derived string lists without coercing unknown structures."""
+    if not isinstance(value, list):
+        return ()
+    normalized: list[str] = []
+    for item in value:
+        text = _normalize_short_text(item, item_limit)
+        if text and text not in normalized:
+            normalized.append(text)
+        if len(normalized) >= maximum:
+            break
+    return tuple(normalized)
+
+
 def _format_structured_reason(
     components: dict[str, int],
     caps: tuple[str, ...],
@@ -252,6 +290,7 @@ def _format_structured_reason(
 
 def _structured_score_result(result: dict, *, reviewed: bool = False) -> ScoreResult | None:
     components: dict[str, int] = {}
+    component_evidence: dict[str, str] = {}
     for key, limit in COMPONENT_LIMITS.items():
         value = result.get(key)
         if not isinstance(value, dict) or "score" not in value:
@@ -266,6 +305,7 @@ def _structured_score_result(result: dict, *, reviewed: bool = False) -> ScoreRe
         if score != raw_value or not 0 <= score <= limit:
             return None
         components[key] = score
+        component_evidence[key] = _normalize_short_text(value.get("evidence"), COMPONENT_EVIDENCE_LIMIT)
 
     raw_caps = result.get("caps", [])
     if not isinstance(raw_caps, list):
@@ -275,6 +315,12 @@ def _structured_score_result(result: dict, *, reviewed: bool = False) -> ScoreRe
     if not summary_reason:
         return None
     missing = str(result.get("missing") or "").strip()
+    role_summary = _normalize_short_text(result.get("role_summary"), ROLE_SUMMARY_LIMIT)
+    hard_gaps = _normalize_short_strings(
+        result.get("hard_gaps"),
+        item_limit=HARD_GAP_LIMIT,
+        maximum=MAX_HARD_GAPS,
+    )
     score, raw_score, reason = _format_structured_reason(
         components,
         caps,
@@ -291,7 +337,19 @@ def _structured_score_result(result: dict, *, reviewed: bool = False) -> ScoreRe
         summary_reason=summary_reason,
         missing=missing,
         structured=True,
+        role_summary=role_summary,
+        component_evidence=component_evidence,
+        hard_gaps=hard_gaps,
+        reviewed=reviewed,
     )
+
+
+def _apply_field_aliases(result: dict) -> dict:
+    """Normalize common model-side field shortenings (e.g. minimaxi M3's `transferable`)."""
+    for alias, canonical in FIELD_ALIASES.items():
+        if alias in result and canonical not in result:
+            result[canonical] = result[alias]
+    return result
 
 
 def _validated_score_result(text: str) -> ScoreResult | None:
@@ -299,9 +357,24 @@ def _validated_score_result(text: str) -> ScoreResult | None:
     result = _parse_score_response(text)
     if not isinstance(result, dict):
         return None
+    _apply_field_aliases(result)
     if all(key in result for key in COMPONENT_LIMITS):
         return _structured_score_result(result)
     return None
+
+
+def _score_validation_failure_reason(text: str | None) -> str:
+    """Explain why a scoring response failed validation, for failure records."""
+    if not text or not str(text).strip():
+        return "AI 未返回评分内容"
+    result = _parse_score_response(text)
+    if not isinstance(result, dict):
+        return "AI 返回内容无法解析为 JSON"
+    _apply_field_aliases(result)
+    missing = [key for key in COMPONENT_LIMITS if key not in result]
+    if missing:
+        return "AI 评分 JSON 缺少字段: " + ", ".join(missing)
+    return "AI 评分 JSON 字段值无效（分数或理由不符合格式要求）"
 
 
 def _merge_review_results(first: ScoreResult, review: ScoreResult) -> ScoreResult:
@@ -336,7 +409,114 @@ def _merge_review_results(first: ScoreResult, review: ScoreResult) -> ScoreResul
         summary_reason=review.summary_reason,
         missing=missing,
         structured=True,
+        role_summary=review.role_summary or first.role_summary,
+        component_evidence={
+            key: review.component_evidence.get(key) or first.component_evidence.get(key, "")
+            for key in COMPONENT_LIMITS
+        },
+        hard_gaps=tuple(dict.fromkeys((*first.hard_gaps, *review.hard_gaps))),
+        reviewed=True,
     )
+
+
+def build_score_trace(result: ScoreResult) -> dict:
+    """Build the only persisted V1 explanation snapshot from a validated score result."""
+    return {
+        "schema_version": TRACE_SCHEMA_VERSION,
+        "role_summary": _normalize_short_text(result.role_summary, ROLE_SUMMARY_LIMIT),
+        "components": {
+            key: {
+                "score": result.components[key],
+                "max_score": limit,
+                "evidence": _normalize_short_text(
+                    result.component_evidence.get(key, ""), COMPONENT_EVIDENCE_LIMIT
+                ),
+            }
+            for key, limit in COMPONENT_LIMITS.items()
+        },
+        "raw_score": result.raw_score,
+        "final_score": result.score,
+        "caps": [cap for cap in result.caps if cap in CAP_LIMITS],
+        "hard_gaps": list(
+            _normalize_short_strings(
+                list(result.hard_gaps),
+                item_limit=HARD_GAP_LIMIT,
+                maximum=MAX_HARD_GAPS,
+            )
+        ),
+        "summary_reason": _normalize_short_text(result.summary_reason, SUMMARY_REASON_LIMIT),
+        "missing": _normalize_short_text(result.missing, MISSING_LIMIT),
+        "review_status": "reviewed" if result.reviewed else "initial",
+    }
+
+
+def sanitize_score_trace(value: object) -> dict | None:
+    """Return only the V1 API contract fields, or reject malformed persisted JSON."""
+    schema_version = value.get("schema_version") if isinstance(value, dict) else None
+    if (
+        not isinstance(value, dict)
+        or isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != TRACE_SCHEMA_VERSION
+    ):
+        return None
+    if value.get("review_status") not in {"initial", "reviewed"}:
+        return None
+
+    components_value = value.get("components")
+    if not isinstance(components_value, dict):
+        return None
+    components: dict[str, dict[str, int | str]] = {}
+    for key, limit in COMPONENT_LIMITS.items():
+        component = components_value.get(key)
+        if not isinstance(component, dict):
+            return None
+        score = component.get("score")
+        if isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= limit:
+            return None
+        if component.get("max_score") != limit or not isinstance(component.get("evidence"), str):
+            return None
+        components[key] = {
+            "score": score,
+            "max_score": limit,
+            "evidence": _normalize_short_text(component["evidence"], COMPONENT_EVIDENCE_LIMIT),
+        }
+
+    raw_score = value.get("raw_score")
+    final_score = value.get("final_score")
+    if (
+        isinstance(raw_score, bool)
+        or isinstance(final_score, bool)
+        or not isinstance(raw_score, int)
+        or not isinstance(final_score, int)
+        or not 0 <= final_score <= raw_score <= sum(COMPONENT_LIMITS.values())
+    ):
+        return None
+    required_text = {
+        "role_summary": ROLE_SUMMARY_LIMIT,
+        "summary_reason": SUMMARY_REASON_LIMIT,
+        "missing": MISSING_LIMIT,
+    }
+    if any(not isinstance(value.get(key), str) for key in required_text):
+        return None
+    raw_caps = value.get("caps")
+    raw_hard_gaps = value.get("hard_gaps")
+    if not isinstance(raw_caps, list) or not isinstance(raw_hard_gaps, list):
+        return None
+    caps = [cap for cap in raw_caps if isinstance(cap, str) and cap in CAP_LIMITS]
+    hard_gaps = _normalize_short_strings(raw_hard_gaps, item_limit=HARD_GAP_LIMIT, maximum=MAX_HARD_GAPS)
+    return {
+        "schema_version": TRACE_SCHEMA_VERSION,
+        "role_summary": _normalize_short_text(value["role_summary"], ROLE_SUMMARY_LIMIT),
+        "components": components,
+        "raw_score": raw_score,
+        "final_score": final_score,
+        "caps": list(dict.fromkeys(caps)),
+        "hard_gaps": list(hard_gaps),
+        "summary_reason": _normalize_short_text(value["summary_reason"], SUMMARY_REASON_LIMIT),
+        "missing": _normalize_short_text(value["missing"], MISSING_LIMIT),
+        "review_status": value["review_status"],
+    }
 
 
 def _report_progress(
@@ -364,6 +544,7 @@ def _report_checkpoint(
     *,
     status: str,
     pause_reason: str = "",
+    error: str | None = None,
 ) -> None:
     callback = config.get("_workbench_score_checkpoint")
     if callable(callback):
@@ -371,6 +552,8 @@ def _report_checkpoint(
             "remaining_job_ids": list(remaining_job_ids),
             "status": status,
             "pause_reason": pause_reason,
+            # 只有 AI 失败导致的暂停才带 error；用户手动暂停不应记为错误（issue #100）。
+            "error": error or "",
         })
 
 
@@ -403,27 +586,44 @@ def _request_score(
             try:
                 response = _call_claude(_build_scoring_prompt(job, resume, config), config, retry_tokens)
             except AIRequestError as retry_exc:
-                if retry_exc.kind in {"output_truncated", "output_limit", "context_limit"}:
+                if retry_exc.kind == "empty_response":
+                    # 空响应用保持"空结果"语义：落入下方按配置重试，仍空则岗位级失败（#101 回归）。
+                    response = None
+                elif retry_exc.kind in {"output_truncated", "output_limit", "context_limit"}:
                     return ScoreOutcome(failure_detail="调整输出 Token 后仍未获得完整评分")
-                return ScoreOutcome(pause_reason=retry_exc.user_message)
+                else:
+                    # 带上"因截断进入重试"的上下文，否则只看得到重试时的错误（issue #101）。
+                    return ScoreOutcome(pause_reason=f"增大输出 Token 重试后失败：{retry_exc}")
         elif exc.kind == "output_limit":
             _notify(config, f"{job['company']}｜{job['title']} 正在降低输出 Token 上限后重试评分。")
             try:
                 response = _call_claude(_build_scoring_prompt(job, resume, config), config, 128)
             except AIRequestError as retry_exc:
-                if retry_exc.kind == "output_limit":
+                if retry_exc.kind == "empty_response":
+                    response = None
+                elif retry_exc.kind == "output_limit":
                     return ScoreOutcome(failure_detail="当前模型不接受调整后的输出 Token 设置")
-                return ScoreOutcome(pause_reason=retry_exc.user_message)
+                else:
+                    return ScoreOutcome(pause_reason=f"降低输出 Token 重试后失败：{retry_exc}")
         elif exc.kind == "context_limit":
             _notify(config, f"{job['company']}｜{job['title']} 内容较长，正在压缩后重试评分。")
             try:
                 response = _call_claude(_build_scoring_prompt(job, resume, config, compact=True), config, 128)
             except AIRequestError as retry_exc:
-                if retry_exc.kind == "context_limit":
+                if retry_exc.kind == "empty_response":
+                    response = None
+                elif retry_exc.kind == "context_limit":
                     return ScoreOutcome(failure_detail="压缩请求后仍超过模型上下文限制")
-                return ScoreOutcome(pause_reason=retry_exc.user_message)
+                else:
+                    return ScoreOutcome(pause_reason=f"压缩请求重试后失败：{retry_exc}")
+        elif exc.kind == "empty_response":
+            # 空响应用保持"空结果"语义：按 max_attempts 走下方重试，仍为空则只记当前岗位失败，
+            # 不中断整批（#101 回归：整批暂停仅留给鉴权/额度/限流/网络等服务级故障）。
+            _notify(config, f"{job['company']}｜{job['title']} 的 AI 回答没有文本内容，正在重试。")
+            response = None
         else:
-            return ScoreOutcome(pause_reason=exc.user_message)
+            # str(exc) 现在带 kind/status_code，UI 才能区分限流/鉴权/额度等失败原因（issue #101）。
+            return ScoreOutcome(pause_reason=str(exc))
 
     result = _validated_score_result(response) if response else None
     for attempt in range(2, max_attempts + 1):
@@ -437,12 +637,12 @@ def _request_score(
             response = _call_claude(_build_scoring_prompt(job, resume, config), config)
         except AIRequestError as retry_exc:
             if retry_exc.kind in {"token_quota", "rate_limit", "auth", "network", "request_failed"}:
-                return ScoreOutcome(pause_reason=retry_exc.user_message)
+                return ScoreOutcome(pause_reason=str(retry_exc))
             response = None
         result = _validated_score_result(response) if response else None
 
     if result is None:
-        return ScoreOutcome(failure_detail="AI 未返回完整、可解析的评分 JSON")
+        return ScoreOutcome(failure_detail=_score_validation_failure_reason(response))
     return ScoreOutcome(result=result)
 
 
@@ -467,7 +667,7 @@ def _score_job_with_ai(
         response = _call_claude(_build_review_prompt(job, resume, first, config), config)
     except AIRequestError as exc:
         if exc.kind in {"token_quota", "rate_limit", "auth", "network", "request_failed"}:
-            return ScoreOutcome(result=first, pause_reason=exc.user_message)
+            return ScoreOutcome(result=first, pause_reason=str(exc))
         _notify(config, f"{job['company']}｜{job['title']} 二次复核未完成，保留第一次评分。")
         return outcome
 
@@ -604,13 +804,32 @@ def score_jobs(
                     result = outcome.result
                     completed_job = False
                     if result is not None:
-                        update_job_score(db, job["id"], result.score, result.reason)
-                        if result.score >= threshold:
-                            update_job_status(db, job["id"], "ready")
-                            scored += 1
+                        job_missing = False
+                        if result.structured:
+                            try:
+                                persist_job_score_and_trace(
+                                    db,
+                                    job["id"],
+                                    result.score,
+                                    result.reason,
+                                    build_score_trace(result),
+                                )
+                            except ValueError:
+                                job_missing = True
                         else:
-                            update_job_status(db, job["id"], "filtered")
-                            filtered += 1
+                            update_job_score(db, job["id"], result.score, result.reason)
+                        if job_missing:
+                            _notify(
+                                config,
+                                f"已跳过 {job['company']}｜{job['title']}：岗位在评分期间被删除，评分结果未保存。",
+                            )
+                        else:
+                            if result.score >= threshold:
+                                update_job_status(db, job["id"], "ready")
+                                scored += 1
+                            else:
+                                update_job_status(db, job["id"], "filtered")
+                                filtered += 1
                         completed_job = True
                     elif outcome.failure_detail:
                         failed += 1
@@ -659,6 +878,8 @@ def score_jobs(
                 remaining_job_ids,
                 status="paused",
                 pause_reason=pause_reason or "用户暂停或任务中断",
+                # pause_reason 非空即 AI 失败暂停（用户停止走 stop_event，reason 为空）。
+                error=pause_reason or None,
             )
         else:
             _report_checkpoint(

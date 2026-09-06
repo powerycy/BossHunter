@@ -57,10 +57,10 @@ class VersionMetadataTests(unittest.TestCase):
             / "Sidebar.tsx"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('version = "2.3.1"', pyproject)
-        self.assertEqual(bosshunter.__version__, "2.3.1")
-        self.assertEqual(json.loads(health())["version"], "2.3.1")
-        self.assertIn("v2.3.1 · 本地控制台", sidebar_source)
+        self.assertIn('version = "2.3.2"', pyproject)
+        self.assertEqual(bosshunter.__version__, "2.3.2")
+        self.assertEqual(json.loads(health())["version"], "2.3.2")
+        self.assertIn("v2.3.2 · 本地控制台", sidebar_source)
         self.assertNotIn("v1.1.0", sidebar_source)
 
 
@@ -398,7 +398,8 @@ class DashboardPageTests(unittest.TestCase):
     def test_dashboard_renders_monitor_execution_history(self):
         self.assertIn("MonitorExecutionView", self.source)
         self.assertIn("history", self.source)
-        self.assertIn("<MonitorExecutionView history={history}", self.source)
+        self.assertIn("<MonitorExecutionView", self.source)
+        self.assertIn("history={history}", self.source)
 
     def test_dashboard_exposes_manual_refresh_button(self):
         self.assertIn("RefreshCw", self.source)
@@ -406,6 +407,19 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("refreshing ? '刷新中' : '刷新'", self.source)
         self.assertIn("最后刷新：", self.source)
         self.assertIn("refreshing && 'animate-spin'", self.source)
+
+    def test_dashboard_shows_detailed_greeting_queue_progress(self):
+        self.assertIn("if (log.includes('招呼语进度')) return log", self.source)
+        self.assertIn("whitespace-pre-line text-lg", self.source)
+
+    def test_dashboard_falls_back_to_concrete_task_status(self):
+        self.assertNotIn("return '等待后端返回阶段'", self.source)
+        self.assertIn("`${task.label}正在启动`", self.source)
+        self.assertIn("`${task.label}正在停止`", self.source)
+        self.assertIn("`${task.label}已完成`", self.source)
+        self.assertIn("`${task.label}已停止`", self.source)
+        self.assertIn("`${task.label}运行失败`", self.source)
+        self.assertIn("currentTaskStage(visibleTask)", self.source)
 
     def test_dashboard_can_stop_after_start_response_arrives(self):
         active_branch = self.source.index("if (activeTask?.mode === mode)")
@@ -428,6 +442,9 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("refreshingRef.current", hook_source)
         self.assertIn("setLastRefreshedAt", hook_source)
         self.assertIn("setWorkbench(prev => ({ ...prev, task, last_task: task }))", hook_source)
+        self.assertIn("scope === 'monitor' ? 2000 : 5000", hook_source)
+        self.assertIn("visibilitychange", hook_source)
+        self.assertIn("window.addEventListener('focus'", hook_source)
 
     def test_dashboard_filters_today_jobs_and_clears_hidden_selection(self):
         self.assertIn("filteredTodayJobs", self.source)
@@ -573,6 +590,63 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("/dismiss", self.source)
         self.assertIn("reply_dismissed", self.source)
         self.assertIn("放弃", self.source)
+
+    def test_monitor_cards_link_to_the_corresponding_chat_conversation(self):
+        self.assertIn("openMonitorConversation", self.source)
+        self.assertIn("/open-chat", self.source)
+        self.assertIn("打开聊天对话", self.source)
+        self.assertIn("已在 BOSS 中定位到对应聊天对话。", self.source)
+        self.assertNotIn("https://www.zhipin.com/web/geek/chat?jobId=${encodeURIComponent(item.job_id)}", self.source)
+
+    def test_monitor_cards_render_scrollable_hr_ai_conversation_history(self):
+        self.assertIn("monitorConversationMessages(item, history)", self.source)
+        self.assertIn("const resumeRequestParsed", self.source)
+        self.assertIn("candidate.action === 'needs_resume'", self.source)
+        self.assertIn("max-h-[260px]", self.source)
+        self.assertIn("overflow-y-auto", self.source)
+        self.assertNotIn("可上下滚动", self.source)
+        self.assertNotIn("{fromHr ? 'HR' : 'AI 已回答'}", self.source)
+        self.assertIn("{fromHr ? 'HR' : 'AI'}", self.source)
+        self.assertIn("grid-cols-[28px_minmax(0,1fr)]", self.source)
+        self.assertNotIn("{message.time || item.created_at}", self.source)
+        self.assertNotIn("监测记录时间", self.source)
+        self.assertIn("AI 建议回复（尚未回答）", self.source)
+        self.assertIn("已回复：定制简历已发送，本轮聊天记录保留在上方。", self.source)
+
+    def test_monitor_replied_tab_keeps_each_outbound_round(self):
+        self.assertIn("const repliedRecords = history.filter(isOutboundReplyRecord)", self.source)
+        self.assertIn("暂无近 7 天已回复对话。", self.source)
+        self.assertIn("parseHistoryDetail(item).schema.startsWith('replied.')", self.source)
+        self.assertIn("item.action === 'auto_replied'", self.source)
+        self.assertIn("item.action === 'resume_sent'", self.source)
+        self.assertIn("item.action === 'needs_resume' && !isResumeRequestResolved(item, history)", self.source)
+
+    def test_monitor_shows_detected_hr_messages_while_full_chat_is_loading(self):
+        self.assertIn("item.action === 'hr_reply_detected'", self.source)
+        self.assertIn("isDetectedReplyResolved", self.source)
+        self.assertIn("detectedReplies", self.source)
+        self.assertIn("detectedReplyPreview", self.source)
+        self.assertIn("已检测到 HR 新消息，等待继续读取完整对话并生成处理结果。", self.source)
+        self.assertIn("prepareDetectedReply", self.source)
+        self.assertIn("/prepare-reply", self.source)
+        self.assertIn("读取并生成建议", self.source)
+        self.assertNotIn("disabled={!canReply}", self.source)
+
+    def test_monitor_resolution_parser_shows_manual_reply_and_hr_question(self):
+        history_detail_source = (
+            ROOT
+            / "src"
+            / "bosshunter"
+            / "web"
+            / "frontend"
+            / "src"
+            / "lib"
+            / "historyDetail.ts"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("item.detail_payload.manual_reply", history_detail_source)
+        self.assertIn("item.detail_payload.pending_hr_question", history_detail_source)
+        self.assertIn("item.detail_payload.pending_history_id", history_detail_source)
 
     def test_monitor_surfaces_resume_generation_failures_as_pending_items(self):
         # Arrange: DashboardPage source is loaded in setUp.
@@ -758,6 +832,13 @@ class ConfigPageTests(unittest.TestCase):
             "浏览最长时长 (秒)",
         ):
             self.assertNotIn(f'label="{retired_label}"', self.source)
+
+    def test_boss_page_limit_estimate_is_directly_below_max_pages(self):
+        max_pages_field = self.source.index('<Field label="最大页数">')
+        estimate = self.source.index('理论最多 {bossTheoreticalPages} 页', max_pages_field)
+        field_end = self.source.index('</Field>', max_pages_field)
+
+        self.assertLess(estimate, field_end)
 
 
 class ConfigSchemaTests(unittest.TestCase):

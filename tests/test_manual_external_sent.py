@@ -78,3 +78,29 @@ def test_manual_sent_requires_explicit_confirmation():
                 mark_external_jobs_sent(db, ["external"], confirmed=False)
         finally:
             db.close()
+
+
+def test_manual_sent_falls_back_to_platform_code_when_label_missing(monkeypatch):
+    import bosshunter.db as db_module
+
+    monkeypatch.setattr(
+        db_module,
+        "EXTERNAL_MANUAL_SEND_PLATFORMS",
+        db_module.EXTERNAL_MANUAL_SEND_PLATFORMS | {"boss"},
+    )
+    with tempfile.TemporaryDirectory() as temporary:
+        db = get_db(Path(temporary) / "jobs.db")
+        try:
+            insert_job(db, _job("boss-extra", "boss"))
+            result = mark_external_jobs_sent(db, ["boss-extra"], confirmed=True)
+            history = db.execute(
+                "SELECT action, detail FROM history WHERE job_id = ? ORDER BY id",
+                ("boss-extra",),
+            ).fetchall()
+        finally:
+            db.close()
+
+    assert result["affected_count"] == 1
+    assert [(row["action"], row["detail"]) for row in history] == [
+        ("manual_sent", "用户在boss完成投递后手动标记"),
+    ]

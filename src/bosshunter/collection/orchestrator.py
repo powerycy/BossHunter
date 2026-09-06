@@ -15,8 +15,9 @@ from bosshunter.collection.models import (
     PlatformCollectionRequest,
     PlatformCollectionResult,
 )
-from bosshunter.collection.platforms.boss import BossCollector
+from bosshunter.collection.platforms.boss import BossCollector, normalize_boss_search_filters
 from bosshunter.collection.platforms.job51 import Job51Collector, get_51job_city_code
+from bosshunter.collection.platforms.liepin import LiepinCollector, get_liepin_city_code
 from bosshunter.collection.platforms.zhilian import ZhilianCollector, get_zhilian_city_code
 from bosshunter.collection.registry import CollectorRegistry
 from bosshunter.collection_run_store import create_collection_run, update_collection_run
@@ -24,11 +25,12 @@ from bosshunter.db import get_db, insert_job_if_new, job_identity_exists
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 
 
-SUPPORTED_PLATFORMS = {"boss", "zhilian", "51job"}
+SUPPORTED_PLATFORMS = {"boss", "zhilian", "51job", "liepin"}
 SORT_OPTIONS = {
     "boss": {"default", "newest"},
     "zhilian": {"default", "newest"},
     "51job": {"default"},
+    "liepin": {"default", "newest"},
 }
 
 
@@ -70,9 +72,10 @@ def normalize_collection_options(config: dict[str, Any], raw_options: dict[str, 
         boss_search = dict(legacy_search)
     zhilian_search = configured_platforms.get("zhilian", {}).get("search", {}) if isinstance(configured_platforms.get("zhilian"), dict) else {}
     job51_search = configured_platforms.get("51job", {}).get("search", {}) if isinstance(configured_platforms.get("51job"), dict) else {}
+    liepin_search = configured_platforms.get("liepin", {}).get("search", {}) if isinstance(configured_platforms.get("liepin"), dict) else {}
 
     platforms: dict[str, Any] = {}
-    for platform, fallback in (("boss", boss_search), ("zhilian", zhilian_search), ("51job", job51_search)):
+    for platform, fallback in (("boss", boss_search), ("zhilian", zhilian_search), ("51job", job51_search), ("liepin", liepin_search)):
         value = raw_platforms.get(platform) if isinstance(raw_platforms.get(platform), dict) else {}
         search = value.get("search") if isinstance(value.get("search"), dict) else value
         if not isinstance(search, dict):
@@ -91,6 +94,7 @@ def normalize_collection_options(config: dict[str, Any], raw_options: dict[str, 
             } if isinstance(base.get("city_codes"), dict) else {},
             "max_pages": base.get("max_pages", 3 if platform == "boss" else 1),
             "sort": str(base.get("sort") or ("newest" if platform == "boss" else "default")),
+            "filters": normalize_boss_search_filters(base.get("filters")) if platform == "boss" else {},
         }
 
     order = supplied.get("platform_order")
@@ -129,7 +133,7 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
     if len(order) != len(set(order)):
         raise ValueError("采集平台顺序不能重复")
     if any(platform not in SUPPORTED_PLATFORMS for platform in order):
-        raise ValueError("采集平台只支持 boss、zhilian 或 51job")
+        raise ValueError("采集平台只支持 boss、zhilian、51job 或 liepin")
     if not isinstance(platforms, dict) or set(platforms) != set(order):
         raise ValueError("平台顺序与平台配置不一致")
     if not isinstance(options.get("auto_score", False), bool):
@@ -159,14 +163,27 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
                 names = "、".join(missing_cities)
                 raise ValueError(f"智联暂未内置城市编码：{names}；请换用采集窗口提供的城市名称，不能填写 BOSS 编码")
         if platform == "51job":
+            unsupported_cities: list[str] = []
             for city in cities:
                 resolved = get_51job_city_code(city)
                 if resolved:
                     city_codes[city] = resolved
-            missing_cities = [city for city in cities if not city_codes.get(city)]
-            if missing_cities:
-                names = "、".join(missing_cities)
+                else:
+                    unsupported_cities.append(city)
+            if unsupported_cities:
+                names = "、".join(unsupported_cities)
                 raise ValueError(f"51job 当前只开放已验证城市：{names} 尚未支持；不会猜测城市编码")
+        if platform == "liepin":
+            unsupported_cities = []
+            for city in cities:
+                resolved = get_liepin_city_code(city)
+                if resolved:
+                    city_codes[city] = resolved
+                else:
+                    unsupported_cities.append(city)
+            if unsupported_cities:
+                names = "、".join(unsupported_cities)
+                raise ValueError(f"猎聘当前只开放已验证城市：{names} 尚未支持；不会猜测城市编码")
         try:
             max_pages = int(value.get("max_pages", 3))
         except (TypeError, ValueError) as exc:
@@ -182,6 +199,7 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
             "city_codes": city_codes,
             "max_pages": max_pages,
             "sort": sort,
+            "filters": normalize_boss_search_filters(value.get("filters")) if platform == "boss" else {},
         }
     return normalized
 
@@ -288,6 +306,7 @@ class CollectionOrchestrator:
             "boss": BossCollector,
             "zhilian": ZhilianCollector,
             "51job": Job51Collector,
+            "liepin": LiepinCollector,
         })
         self.run_id = run_id or str(uuid4())
         self.task_id = task_id
@@ -337,6 +356,11 @@ class CollectionOrchestrator:
                     collector = (
                         BossCollector(config=self.config, safety_conn=conn)
                         if platform == "boss" and self._uses_default_registry
+                        else Job51Collector(config=self.config, safety_conn=conn)
+                        if platform == "51job" and self._uses_default_registry
+
+                        else ZhilianCollector(config=self.config, safety_conn=conn)
+                        if platform == "zhilian" and self._uses_default_registry
                         else self.registry.get(platform)
                     )
                     result = collector.collect(request, hooks)
@@ -365,12 +389,12 @@ class CollectionOrchestrator:
                 })
                 all_new_ids.extend(result.new_job_ids)
                 self._persist(states, all_new_ids, platform, stop_reason=result.reason_code, error=result.error)
-                # A verification, rate-limit, or unknown blocking page is an
-                # account-level signal. Stop the entire serial queue instead
-                # of immediately moving the same browser session to another
-                # recruitment platform.
+                # A login wall belongs to the current recruitment platform:
+                # keep its blocked result but let independent later platforms
+                # continue. Other unknown/risk blocks remain queue-wide until
+                # they have an equally explicit platform-local classification.
                 if (
-                    result.status == "blocked"
+                    (result.status == "blocked" and result.reason_code != "login_required")
                     or result.reason_code in {"user_stopped", "browser_disconnected"}
                     or (self.stop_event and self.stop_event.is_set())
                 ):
