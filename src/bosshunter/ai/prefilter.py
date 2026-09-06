@@ -40,9 +40,23 @@ def quick_score(job: dict, config: dict) -> tuple[int, str]:
         return 0, "实习/管培岗位"
 
     salary_min = _as_number(profile.get("salary_min", 0))
-    salary_max = _parse_salary_max_k(job.get("salary") or "")
-    if salary_min > 0 and salary_max is not None and salary_max < salary_min:
-        return 0, f"薪资低于硬性要求: {_format_k(salary_max)}K < {_format_k(salary_min)}K"
+    salary_max = _as_number(profile.get("salary_max", 0))
+    parsed_salary = _parse_salary_range_k(job.get("salary") or "")
+    if parsed_salary is None:
+        if _as_bool(profile.get("filter_unparsed_salary", True)):
+            return 0, "薪资面议/无法解析，已过滤"
+        return 100, "薪资面议/无法解析（已关闭过滤，交由 AI 判断）"
+
+    job_salary_min, job_salary_max = parsed_salary
+    if salary_min > 0 and job_salary_max < salary_min:
+        return 0, f"薪资低于硬性要求: {_format_k(job_salary_max)}K < {_format_k(salary_min)}K"
+
+    salary_ceil_ratio = max(_as_number(profile.get("salary_ceil_ratio", 1.5)), 1.0)
+    if salary_max > 0 and job_salary_min > salary_max * salary_ceil_ratio:
+        return 0, (
+            f"薪资远超期望上限: 报价下限 {_format_k(job_salary_min)}K > "
+            f"{_format_k(salary_max)}K × {salary_ceil_ratio:g}"
+        )
 
     return 100, "预筛通过"
 
@@ -52,14 +66,17 @@ def _contains_internship_signal(job: dict) -> bool:
     return any(keyword.lower() in title for keyword in _INTERNSHIP_KEYWORDS)
 
 
-def _parse_salary_max_k(salary: str) -> float | None:
+def _parse_salary_range_k(salary: str) -> tuple[float, float] | None:
     range_match = re.search(r"(\d+(?:\.\d+)?)\s*[kK]?\s*-\s*(\d+(?:\.\d+)?)\s*[kK]", salary)
     if range_match:
-        return max(float(range_match.group(1)), float(range_match.group(2)))
+        low = float(range_match.group(1))
+        high = float(range_match.group(2))
+        return low, max(low, high)
 
     single_match = re.search(r"(\d+(?:\.\d+)?)\s*[kK]", salary)
     if single_match:
-        return float(single_match.group(1))
+        value = float(single_match.group(1))
+        return value, value
 
     return None
 
@@ -69,6 +86,16 @@ def _as_number(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "是"}
+    return True
 
 
 def _format_k(value: float) -> str:

@@ -516,7 +516,23 @@ const server = http.createServer(async (req, res) => {
     } else if (pathname === '/screenshot') {
       const sessionId = await ensureSession(q.target);
       const format = q.format || 'png';
-      const resp = await sendCDP('Page.captureScreenshot', { format, quality: format === 'jpeg' ? 80 : undefined }, sessionId);
+      const captureParams = { format, quality: format === 'jpeg' ? 80 : undefined };
+      if (q.selector) {
+        const expression = `(() => {
+          const element = document.querySelector(${JSON.stringify(q.selector)});
+          if (!element) return null;
+          const rect = element.getBoundingClientRect();
+          return { x: rect.left + window.scrollX, y: rect.top + window.scrollY, width: rect.width, height: rect.height };
+        })()`;
+        const geometry = await sendCDP('Runtime.evaluate', { expression, returnByValue: true }, sessionId);
+        const clip = geometry.result?.result?.value;
+        if (!clip || clip.width <= 0 || clip.height <= 0) {
+          return sendJson(res, { error: 'Screenshot selector not found' }, 404);
+        }
+        captureParams.clip = { ...clip, scale: 1 };
+        captureParams.captureBeyondViewport = true;
+      }
+      const resp = await sendCDP('Page.captureScreenshot', captureParams, sessionId);
       if (q.file) {
         fs.writeFileSync(q.file, Buffer.from(resp.result.data, 'base64'));
         sendJson(res, { saved: q.file });

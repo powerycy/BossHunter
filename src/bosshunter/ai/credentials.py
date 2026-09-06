@@ -13,6 +13,11 @@ _MODEL_RESOLVE_CACHE: dict[tuple[str, str, str], str] = {}
 _THINKING_MODES = {"auto", "disabled", "enabled", "off"}
 
 
+def _ambient_proxy_vars() -> bool:
+    """Return true when process-level proxy settings could affect AI calls."""
+    return any(os.environ.get(name) for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"))
+
+
 class AIRequestError(RuntimeError):
     """Normalized AI request failure without exposing credentials or raw payloads."""
 
@@ -152,6 +157,8 @@ def normalize_ai_error(exc: Exception, response: object | None = None) -> AIRequ
         return AIRequestError("context_limit", "请求内容超过当前模型的上下文限制", status_code)
     if any(marker in raw for marker in output_limit_markers):
         return AIRequestError("output_limit", "当前模型不接受设置的输出 Token 上限", status_code)
+    if isinstance(exc, httpx.InvalidURL):
+        return AIRequestError("invalid_url", "AI 接口地址无效", status_code)
     if isinstance(exc, httpx.RequestError):
         return AIRequestError("network", "AI 服务连接失败或超时", status_code)
     return AIRequestError("request_failed", "AI 服务请求失败", status_code)
@@ -416,6 +423,9 @@ def build_anthropic_client_kwargs(config: dict) -> dict:
     if base_url:
         kwargs["base_url"] = base_url
 
+    if _ambient_proxy_vars():
+        kwargs["http_client"] = httpx.Client(trust_env=False)
+
     return kwargs
 
 
@@ -443,7 +453,12 @@ def resolve_anthropic_model(model: str, config: dict) -> str:
         headers["x-api-key"] = api_key
 
     try:
-        response = httpx.get(f"{base_url.rstrip('/')}/v1/models", headers=headers, timeout=10)
+        response = httpx.get(
+            f"{base_url.rstrip('/')}/v1/models",
+            headers=headers,
+            timeout=10,
+            trust_env=False,
+        )
         response.raise_for_status()
         model_ids = [item.get("id", "") for item in response.json().get("data", [])]
     except Exception:
@@ -536,6 +551,8 @@ def call_openai_compatible_text(
     api_key = get_ai_api_key(config)
     base_url = get_ai_base_url(config)
     model = get_openai_compatible_model(config)
+    if _should_resolve_openai_model(model, config):
+        model = resolve_openai_model(model, config)
     if not api_key or not base_url:
         return None
 
@@ -562,6 +579,7 @@ def call_openai_compatible_text(
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json=payload,
                 timeout=request_timeout,
+                trust_env=False,
             )
             response.raise_for_status()
         except Exception as exc:
@@ -604,6 +622,51 @@ def get_openai_compatible_model(config: dict) -> str:
     ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
     model = str(ai_cfg.get("model") or "").strip()
     return model.lower() if get_ai_service(config) == "deepseek" else model
+
+
+def _should_resolve_openai_model(model: str, config: dict) -> bool:
+    ai_cfg = config.get("ai", {}) if isinstance(config, dict) else {}
+    if ai_cfg.get("resolve_model_aliases") is False:
+        return False
+    service = get_ai_service(config)
+    return service == "deepseek" and bool(re.match(r"^v\d", model.strip().lower()))
+
+
+def resolve_openai_model(model: str, config: dict) -> str:
+    """Resolve an OpenAI-compatible shorthand against the provider's model list."""
+    base_url = get_ai_base_url(config)
+    api_key = get_ai_api_key(config)
+    if not model or not base_url or not api_key:
+        return model
+
+    base = base_url.rstrip("/")
+    cache_key = (base, model, _credential_fingerprint(api_key))
+    if cache_key in _MODEL_RESOLVE_CACHE:
+        return _MODEL_RESOLVE_CACHE[cache_key]
+
+    urls = [f"{base}/models"]
+    if not base.endswith("/v1"):
+        urls.append(f"{base}/v1/models")
+
+    resolved = model
+    headers = {"Authorization": f"Bearer {api_key}"}
+    for url in urls:
+        try:
+            response = httpx.get(url, headers=headers, timeout=10, trust_env=False)
+            response.raise_for_status()
+            payload = response.json()
+            model_ids = [
+                str(item.get("id") or "")
+                for item in payload.get("data", [])
+                if isinstance(item, dict)
+            ]
+        except Exception:
+            continue
+        resolved = _match_model_name(model, model_ids) or model
+        break
+
+    _MODEL_RESOLVE_CACHE[cache_key] = resolved
+    return resolved
 
 
 def _match_model_name(requested: str, available: list[str]) -> str | None:

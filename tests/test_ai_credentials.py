@@ -138,6 +138,7 @@ class AnthropicCredentialTests(unittest.TestCase):
         self.assertEqual(models_get.call_args.args[0], "https://config-gateway.example.com/v1/models")
         self.assertEqual(models_get.call_args.kwargs["headers"]["x-api-key"], "from-config")
         self.assertNotIn("Authorization", models_get.call_args.kwargs["headers"])
+        self.assertFalse(models_get.call_args.kwargs["trust_env"])
 
     def test_build_anthropic_client_kwargs_includes_auth_token_when_configured(self):
         with patch.dict(
@@ -166,6 +167,23 @@ class AnthropicCredentialTests(unittest.TestCase):
 
         self.assertNotIn("api_key", result)
         self.assertEqual(result["auth_token"], "from-config-token")
+
+    def test_anthropic_client_disables_ambient_proxy_settings(self):
+        fake_client = SimpleNamespace(trust_env=False, close=lambda: None)
+        with (
+            patch.dict("os.environ", {"HTTP_PROXY": "http://127.0.0.1:7897"}, clear=True),
+            patch("bosshunter.ai.credentials.httpx.Client", return_value=fake_client) as client_ctor,
+        ):
+            result = credentials.build_anthropic_client_kwargs({"ai": {"api_key": "from-config"}})
+
+        client = result.get("http_client")
+        try:
+            self.assertIn("http_client", result)
+            self.assertFalse(client.trust_env)
+            client_ctor.assert_called_once_with(trust_env=False)
+        finally:
+            if client is not None:
+                client.close()
 
     def test_compatible_api_model_cache_key_does_not_store_raw_credentials(self):
         with (
@@ -470,6 +488,41 @@ class AnthropicCredentialTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[0], "https://api.deepseek.com/chat/completions")
         self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer deepseek-secret")
         self.assertEqual(post.call_args.kwargs["json"]["model"], "provider-current-model")
+        self.assertFalse(post.call_args.kwargs["trust_env"])
+
+    def test_deepseek_shorthand_model_is_resolved_before_chat_request(self):
+        class ModelsResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": [{"id": "deepseek-v4-flash"}, {"id": "deepseek-v4-pro"}]}
+
+        class CompletionResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": [{"message": {"content": " ok "}}]}
+
+        config = {
+            "ai": {
+                "service": "deepseek",
+                "provider": "openai_compatible",
+                "model": "v4-flash",
+            }
+        }
+        with (
+            patch.dict("os.environ", {"DEEPSEEK_API_KEY": "deepseek-secret"}, clear=True),
+            patch("bosshunter.ai.credentials.httpx.get", return_value=ModelsResponse()) as models_get,
+            patch("bosshunter.ai.credentials.httpx.post", return_value=CompletionResponse()) as post,
+        ):
+            result = credentials.call_openai_compatible_text("prompt", config, 123)
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(models_get.call_args.args[0], "https://api.deepseek.com/models")
+        self.assertFalse(models_get.call_args.kwargs["trust_env"])
+        self.assertEqual(post.call_args.kwargs["json"]["model"], "deepseek-v4-flash")
 
     def test_deepseek_model_name_is_lowercased_only_in_the_outbound_request(self):
         class CompletionResponse:
