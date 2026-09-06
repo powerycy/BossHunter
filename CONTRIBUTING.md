@@ -41,7 +41,7 @@
 7. 等待至少 1 名非作者正式维护者批准；高风险 PR 需要 2 名不同的非作者正式维护者批准，其中 1 人明确完成安全检查
 8. 通过相关测试和仓库检查、处理阻塞意见后，由正式维护者合并；无人响应时由维护者内部协调，不等待项目负责人技术终审
 
-项目负责人 `@powerycy` 不参与代码审核或技术合并。README 由正式维护者审核。PR 项目贡献记录见 [CONTRIBUTORS.md](CONTRIBUTORS.md)，维护贡献记录及由项目负责人单方面决定的评分见 [MAINTENANCE_CONTRIBUTIONS.md](MAINTENANCE_CONTRIBUTIONS.md)；贡献记录应与技术改动分开提交。
+项目负责人 `@powerycy` 是正式技术维护者，可参与代码审核和技术合并，其有效批准按一人计入；本人提交或参与编写的技术改动不得自审计票，高风险 PR 仍须两名不同的非作者维护者批准。README 由包括项目负责人在内的正式维护者审核。PR 项目贡献记录见 [CONTRIBUTORS.md](CONTRIBUTORS.md)，维护贡献记录及由项目负责人单方面决定的评分见 [MAINTENANCE_CONTRIBUTIONS.md](MAINTENANCE_CONTRIBUTIONS.md)；贡献记录应与技术改动分开提交。
 
 ### 代码风格
 
