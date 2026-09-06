@@ -56,20 +56,19 @@
 
 三个平台严格串行采集。检测到验证码、频率限制、登录墙或未知页面结构时会安全停止，不尝试绕过。
 
-## 使用流程
+## 项目结构图
 
-```mermaid
-flowchart LR
-    A["岗位采集"] --> B["AI 评分与筛选"]
-    B --> C["人工确认投递清单"]
-    C --> D["生成个性化招呼语"]
-    D --> E{"岗位来源"}
-    E -->|"BOSS 直聘"| F["按安全策略低频发送"]
-    F --> G["监听 HR 回复"]
-    G --> H["建议回复 / 定制简历"]
-    E -->|"智联 / 51job"| I["打开原平台手动投递"]
-    I --> J["回到岗位池标记已发送"]
-```
+<a href="https://shengjidaguai-china.github.io/BossHunter/architecture/">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/bosshunter.dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/architecture/bosshunter.light.png">
+    <img alt="BossHunter 项目结构图：工作台、任务编排、AI、多平台采集、人工确认与浏览器执行。点击打开交互版。" src="docs/architecture/bosshunter.light.png" width="100%">
+  </picture>
+</a>
+
+**[点击打开交互结构图 ↗](https://shengjidaguai-china.github.io/BossHunter/architecture/)** · [可编辑源文件](docs/architecture/bosshunter.architecture.json)
+
+交互版支持缩放、节点搜索、关系追踪、深浅主题切换和图片导出。由 [Archify](https://github.com/yuppiez99999/archify-) 生成。
 
 ## 快速开始
 
