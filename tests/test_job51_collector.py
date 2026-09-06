@@ -214,7 +214,7 @@ class Job51CitySnapshotTests(TestCase):
     def test_fail_closed_for_unknown_city(self):
         self.assertEqual(get_51job_city_code("北京市"), "010000")
         self.assertEqual(get_51job_city_code("上海市"), "020000")
-        self.assertIsNone(get_51job_city_code("广州"))
+        self.assertIsNone(get_51job_city_code("不存在的城市"))
 
     def test_option_defaults_are_fail_closed(self):
         options = normalize_collection_options({}, {

@@ -40,15 +40,15 @@ class Job51CityValidationTests(unittest.TestCase):
 
     def test_unknown_city_raises_value_error(self):
         with self.assertRaises(ValueError) as ctx:
-            normalize_collection_options({}, _options_for_51job(["广州"]))
+            normalize_collection_options({}, _options_for_51job(["不存在市"]))
         self.assertIn("尚未支持", str(ctx.exception))
         self.assertIn("不会猜测城市编码", str(ctx.exception))
 
     def test_mixed_cities_all_rejected_when_any_unknown(self):
         # 已知城市不应被悄悄放行：只要有一个未知城市，整批被拒。
         with self.assertRaises(ValueError) as ctx:
-            normalize_collection_options({}, _options_for_51job(["上海", "广州"]))
-        self.assertIn("广州", str(ctx.exception))
+            normalize_collection_options({}, _options_for_51job(["上海", "不存在市"]))
+        self.assertIn("不存在市", str(ctx.exception))
         self.assertIn("尚未支持", str(ctx.exception))
 
     def test_external_city_code_override_still_requires_verified_city(self):
@@ -56,13 +56,13 @@ class Job51CityValidationTests(unittest.TestCase):
         # 核验，不能通过外部编码绕过快照校验。
         with self.assertRaises(ValueError):
             normalize_collection_options(
-                {}, _options_for_51job(["广州"], city_codes={"广州": "999999"})
+                {}, _options_for_51job(["不存在市"], city_codes={"不存在市": "999999"})
             )
 
     def test_only_verified_cities_appear_in_normalized_codes(self):
         # 已知 + 未知混合时，归一化结果不应包含任何未核验城市。
         with self.assertRaises(ValueError):
-            normalize_collection_options({}, _options_for_51job(["上海", "广州"]))
+            normalize_collection_options({}, _options_for_51job(["上海", "不存在市"]))
         # 成功路径下，city_codes 只含快照已核验城市。
         result = normalize_collection_options({}, _options_for_51job(["上海"]))
         self.assertEqual(set(result["platforms"]["51job"]["city_codes"].keys()), {"上海"})
