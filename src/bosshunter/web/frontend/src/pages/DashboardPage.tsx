@@ -340,6 +340,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const [preflightMode, setPreflightMode] = useState<WorkbenchMode>('full')
   const [selectedJob, setSelectedJob] = useState<Job | null>(null)
   const [modePending, setModePending] = useState<WorkbenchMode | null>(null)
+  const [sendingGreetingIds, setSendingGreetingIds] = useState<Set<string>>(new Set())
   const [confirmedDeliveryIds, setConfirmedDeliveryIds] = useState<Set<string>>(new Set())
   const [todayFilters, setTodayFilters] = useState<JobFilters>({ ...EMPTY_JOB_FILTERS })
   const [statsScope, setStatsScope] = useState<StatsScope>('today')
@@ -544,8 +545,10 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   }
 
   const sendReadyGreetings = async (ids: string[]) => {
-    if (!ids.length) return
+    if (!ids.length || ids.some(id => sendingGreetingIds.has(id))) return
     const count = ids.length
+    setSendingGreetingIds(prev => new Set([...prev, ...ids]))
+    setNotice(`正在将 ${count} 个岗位加入发送队列...`)
     try {
       const res = await fetch('/api/workbench/deliver', {
         method: 'POST',
@@ -567,6 +570,8 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       )
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '发送失败')
+    } finally {
+      setSendingGreetingIds(prev => new Set([...prev].filter(id => !ids.includes(id))))
     }
   }
 
@@ -857,7 +862,9 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               <p className="mt-1 text-xs text-danger/80">这些岗位已生成招呼语，但没有成功发送。你可以重试，或放弃已失效岗位。</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => confirmDeliver(workbench.send_errors.map(job => job.id))}>重新发送全部 {workbench.send_errors.length} 个</Button>
+              <Button size="sm" disabled={workbench.send_errors.some(job => sendingGreetingIds.has(job.id))} onClick={() => sendReadyGreetings(workbench.send_errors.map(job => job.id))}>
+                {workbench.send_errors.some(job => sendingGreetingIds.has(job.id)) ? '正在重新发送...' : `重新发送全部 ${workbench.send_errors.length} 个`}
+              </Button>
               <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(workbench.send_errors.map(job => job.id))}>放弃全部</Button>
             </div>
           </div>
@@ -873,7 +880,9 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 </div>
                 <p className="mt-3 line-clamp-2 text-sm leading-6 text-muted">{job.greeting || '招呼语已生成，等待重新发送。'}</p>
                 <div className="mt-3 flex gap-2">
-                  <Button size="sm" onClick={() => sendReadyGreetings([job.id])}>重新发送</Button>
+                  <Button size="sm" disabled={sendingGreetingIds.has(job.id)} onClick={() => sendReadyGreetings([job.id])}>
+                    {sendingGreetingIds.has(job.id) ? '正在重新发送...' : '重新发送'}
+                  </Button>
                   <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs([job.id])}>放弃</Button>
                   <Button variant="secondary" size="sm" onClick={() => openJobDetail(job)}><Eye className="mr-2 h-4 w-4" />查看详情</Button>
                   <Button variant="secondary" size="sm" disabled={!job.url} onClick={() => window.open(job.url, '_blank', 'noopener,noreferrer')}><ExternalLink className="mr-2 h-4 w-4" />跳转岗位链接</Button>
