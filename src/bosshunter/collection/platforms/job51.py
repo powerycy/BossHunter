@@ -29,6 +29,7 @@ import json
 import random
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -131,28 +132,38 @@ _GENERIC_ROLE_WORDS = [
 _INTERNSHIP_TITLE_TERMS = ("实习", "intern", "internship", "管培")
 
 
-# 城市快照沿用官方已核验编码（北京/上海）；其余城市由 get_51job_city_code 拒绝，
-# 不猜测编码。此处保留与官方相同的快照与解析函数（orchestrator 校验与 server 依赖）。
-CITY_SNAPSHOT = (
+# 城市快照从 JSON 数据文件加载（160 城市已核验编码）。
+CITY_SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "data" / "51job_cities.json"
+
+
+def load_51job_city_snapshot() -> dict[str, Any]:
+    try:
+        payload = json.loads(CITY_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        payload = {}
+    cities = payload.get("cities") if isinstance(payload, dict) and isinstance(payload.get("cities"), list) else []
+    if not cities:
+        cities = [dict(item) for item in CITY_SNAPSHOT_FALLBACK]
+    return {
+        "schema": "bosshunter.51job_cities.v1",
+        "source": str(payload.get("source") or "verified_snapshot") if isinstance(payload, dict) else "verified_snapshot",
+        "fetched_at": payload.get("fetched_at") if isinstance(payload, dict) else None,
+        "note": payload.get("note", "51job 城市编码") if isinstance(payload, dict) else "51job 城市编码",
+        "cities": cities,
+    }
+
+
+CITY_SNAPSHOT_FALLBACK = (
     {"name": "北京", "code": "010000"},
     {"name": "上海", "code": "020000"},
 )
 
 
-def load_51job_city_snapshot() -> dict[str, Any]:
-    return {
-        "schema": "bosshunter.51job_cities.v1",
-        "source": "verified_snapshot",
-        "note": "当前内置已核验的北京、上海城市编码；其他城市需核验后再加入。",
-        "cities": [dict(item) for item in CITY_SNAPSHOT],
-    }
-
-
 def get_51job_city_code(city: str) -> str | None:
     normalized = str(city or "").strip().removesuffix("市")
-    for item in CITY_SNAPSHOT:
-        if item["name"].removesuffix("市") == normalized:
-            return item["code"]
+    for item in load_51job_city_snapshot()["cities"]:
+        if str(item.get("name", "")).removesuffix("市") == normalized:
+            return item.get("code")
     return None
 
 

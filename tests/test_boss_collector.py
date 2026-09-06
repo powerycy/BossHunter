@@ -558,3 +558,147 @@ class BossResumeCheckpointTests(TestCase):
         get_progress.assert_not_called()
         upsert.assert_not_called()
         mark.assert_not_called()
+
+
+class BossEdgeCaseTests(TestCase):
+    """boss.py 边界与异常路径。"""
+
+    def test_normalize_filters_non_dict_returns_empty(self):
+        from bosshunter.collection.platforms.boss import normalize_boss_search_filters
+        self.assertEqual(normalize_boss_search_filters(None), {})
+        self.assertEqual(normalize_boss_search_filters("not a dict"), {})
+        self.assertEqual(normalize_boss_search_filters([1, 2]), {})
+
+    def test_wait_or_stop_with_stop_event_set(self):
+        from threading import Event
+        from bosshunter.collection.platforms.boss import _wait_or_stop
+        stop = Event()
+        stop.set()
+        self.assertTrue(_wait_or_stop(stop, 10))
+
+    def test_wait_or_stop_sleeps_without_event(self):
+        from bosshunter.collection.platforms.boss import _wait_or_stop
+        slept = []
+        result = _wait_or_stop(None, 0.5, sleep=slept.append)
+        self.assertFalse(result)
+        self.assertEqual(slept, [0.5])
+
+    def test_positive_int_invalid_returns_default(self):
+        from bosshunter.collection.platforms.boss import _positive_int
+        self.assertEqual(_positive_int("abc", 60), 60)
+        self.assertEqual(_positive_int(None, 150), 150)
+        self.assertEqual(_positive_int(0, 60), 1)
+        self.assertEqual(_positive_int(-5, 60), 1)
+        self.assertEqual(_positive_int(10, 60), 10)
+
+    def test_bounded_float_invalid_returns_default(self):
+        from bosshunter.collection.platforms.boss import _bounded_float
+        self.assertEqual(_bounded_float("abc", 1.5, 1.0, 5.0), 1.5)
+        self.assertEqual(_bounded_float(None, 1.5, 1.0, 5.0), 1.5)
+        self.assertEqual(_bounded_float(0.5, 1.5, 1.0, 5.0), 1.0)
+        self.assertEqual(_bounded_float(10.0, 1.5, 1.0, 5.0), 5.0)
+        self.assertEqual(_bounded_float(2.0, 1.5, 1.0, 5.0), 2.0)
+
+    def test_list_candidate_non_dict_returns_none(self):
+        self.assertIsNone(BossCollector._list_candidate("not dict", "北京", "101010100", "AI"))
+        self.assertIsNone(BossCollector._list_candidate(None, "北京", "101010100", "AI"))
+
+    def _make_failing_browser(self):
+        return BossBrowser(
+            new_tab=lambda url, **_kw: None,
+            close_tab=lambda _t: True,
+            evaluate=lambda _t, _s: "{}",
+            navigate=lambda _t, _u: False,
+            scroll=lambda *_a, **_kw: True,
+            wait_for_load=lambda *_a, **_kw: True,
+        )
+
+    def test_consecutive_new_tab_failures_stop_collection(self):
+        hooks = CollectorHooks(
+            stop_event=None,
+            on_list_candidate=lambda _c: True,
+            on_candidate=lambda _c: True,
+            on_parse_failed=lambda _r: None,
+            on_event=lambda **_kw: None,
+        )
+        result = BossCollector(
+            browser=self._make_failing_browser(),
+            throttle_factory=lambda **_kw: MagicMock(),
+            randint=lambda _a, _b: 5,
+            config={"collection": {"max_consecutive_page_failures": 1}},
+        ).collect(
+            PlatformCollectionRequest("boss", ["AI"], ["北京"], {"北京": "101010100"}, max_pages=1),
+            hooks,
+        )
+        self.assertEqual(result.status, "completed_with_shortage")
+        self.assertEqual(result.reason_code, "consecutive_page_failures")
+
+    def test_invalid_list_json_counts_as_page_failure(self):
+        calls = {"n": 0}
+
+        def evaluate(_target, script):
+            if script == JS_DETECT_COLLECTION_RISK:
+                return json.dumps({"risk": None})
+            if script == JS_EXTRACT_LIST:
+                calls["n"] += 1
+                return "not-json{{{"
+            return "{}"
+
+        browser = BossBrowser(
+            new_tab=lambda url, **_kw: "tab-1",
+            close_tab=lambda _t: True,
+            evaluate=evaluate,
+            navigate=lambda _t, _u: True,
+            scroll=lambda *_a, **_kw: True,
+            wait_for_load=lambda *_a, **_kw: True,
+        )
+        parse_failures = []
+        hooks = CollectorHooks(
+            stop_event=None,
+            on_list_candidate=lambda _c: True,
+            on_candidate=lambda _c: True,
+            on_parse_failed=parse_failures.append,
+            on_event=lambda **_kw: None,
+        )
+        result = BossCollector(
+            browser=browser,
+            throttle_factory=lambda **_kw: MagicMock(),
+            randint=lambda _a, _b: 5,
+            config={"collection": {"max_consecutive_page_failures": 2}},
+        ).collect(
+            PlatformCollectionRequest("boss", ["AI"], ["北京"], {"北京": "101010100"}, max_pages=2),
+            hooks,
+        )
+        self.assertEqual(result.status, "completed_with_shortage")
+        self.assertEqual(result.reason_code, "consecutive_page_failures")
+        self.assertTrue(parse_failures)
+
+    def test_stop_event_stops_collection(self):
+        from threading import Event
+        stop = Event()
+        stop.set()
+        browser = BossBrowser(
+            new_tab=lambda url, **_kw: "tab-1",
+            close_tab=lambda _t: True,
+            evaluate=lambda _t, _s: json.dumps({"risk": None}),
+            navigate=lambda _t, _u: True,
+            scroll=lambda *_a, **_kw: True,
+            wait_for_load=lambda *_a, **_kw: True,
+        )
+        hooks = CollectorHooks(
+            stop_event=stop,
+            on_list_candidate=lambda _c: True,
+            on_candidate=lambda _c: True,
+            on_parse_failed=lambda _r: None,
+            on_event=lambda **_kw: None,
+        )
+        result = BossCollector(
+            browser=browser,
+            throttle_factory=lambda **_kw: MagicMock(),
+            randint=lambda _a, _b: 5,
+        ).collect(
+            PlatformCollectionRequest("boss", ["AI"], ["北京"], {"北京": "101010100"}, max_pages=1),
+            hooks,
+        )
+        self.assertEqual(result.status, "stopped")
+        self.assertEqual(result.reason_code, "user_stopped")

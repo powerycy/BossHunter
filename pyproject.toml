@@ -37,6 +37,12 @@ artifacts = [
     "src/bosshunter/data/*.json",
 ]
 
+# The frontend build output is no longer tracked in VCS (built on demand),
+# so it must be force-included to ship inside the wheel. Run
+# `npm ci && npm run build` in src/bosshunter/web/frontend before building.
+[tool.hatch.build.targets.wheel.force-include]
+"src/bosshunter/web/frontend/dist" = "bosshunter/web/frontend/dist"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
