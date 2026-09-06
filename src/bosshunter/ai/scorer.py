@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from bosshunter.ai.credentials import AIRequestError, call_anthropic_text, get_ai_api_key
+from bosshunter.ai.prefilter import quick_score
 from bosshunter.cancellation import OperationCancelled, run_cancellable
 from bosshunter.collection.text import clean_job_description
 from bosshunter.db import (
@@ -17,11 +18,10 @@ from bosshunter.db import (
     get_jobs_by_status,
     persist_job_score_and_trace,
     reset_ai_filtered_jobs,
+    update_job_quick_score,
     update_job_score,
     update_job_status,
-    update_job_quick_score,
 )
-from bosshunter.ai.prefilter import quick_score
 from bosshunter.scoring_selection import select_scoring_jobs, validate_options
 
 console = Console()
@@ -804,22 +804,32 @@ def score_jobs(
                     result = outcome.result
                     completed_job = False
                     if result is not None:
+                        job_missing = False
                         if result.structured:
-                            persist_job_score_and_trace(
-                                db,
-                                job["id"],
-                                result.score,
-                                result.reason,
-                                build_score_trace(result),
-                            )
+                            try:
+                                persist_job_score_and_trace(
+                                    db,
+                                    job["id"],
+                                    result.score,
+                                    result.reason,
+                                    build_score_trace(result),
+                                )
+                            except ValueError:
+                                job_missing = True
                         else:
                             update_job_score(db, job["id"], result.score, result.reason)
-                        if result.score >= threshold:
-                            update_job_status(db, job["id"], "ready")
-                            scored += 1
+                        if job_missing:
+                            _notify(
+                                config,
+                                f"已跳过 {job['company']}｜{job['title']}：岗位在评分期间被删除，评分结果未保存。",
+                            )
                         else:
-                            update_job_status(db, job["id"], "filtered")
-                            filtered += 1
+                            if result.score >= threshold:
+                                update_job_status(db, job["id"], "ready")
+                                scored += 1
+                            else:
+                                update_job_status(db, job["id"], "filtered")
+                                filtered += 1
                         completed_job = True
                     elif outcome.failure_detail:
                         failed += 1
