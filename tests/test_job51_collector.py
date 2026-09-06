@@ -201,12 +201,12 @@ class Job51CitySnapshotTests(TestCase):
     def test_city_snapshot_loads(self):
         snap = load_51job_city_snapshot()
         self.assertEqual(snap["schema"], "bosshunter.51job_cities.v1")
-        self.assertGreaterEqual(len(snap["cities"]), 2)
+        self.assertGreaterEqual(len(snap["cities"]), 30)
 
     def test_fail_closed_for_unknown_city(self):
         self.assertEqual(get_51job_city_code("北京市"), "010000")
         self.assertEqual(get_51job_city_code("上海市"), "020000")
-        self.assertIsNone(get_51job_city_code("广州"))
+        self.assertIsNone(get_51job_city_code("昆明"))  # 昆明未收录，应返回 None
 
     def test_option_defaults_are_fail_closed(self):
         options = normalize_collection_options({}, {

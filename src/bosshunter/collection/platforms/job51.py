@@ -131,11 +131,40 @@ _GENERIC_ROLE_WORDS = [
 _INTERNSHIP_TITLE_TERMS = ("实习", "intern", "internship", "管培")
 
 
-# 城市快照沿用官方已核验编码（北京/上海）；其余城市由 get_51job_city_code 拒绝，
+# 城市快照沿用官方已核验编码（直辖市/新一线/主要二线城市）；其余城市由 get_51job_city_code 拒绝，
 # 不猜测编码。此处保留与官方相同的快照与解析函数（orchestrator 校验与 server 依赖）。
 CITY_SNAPSHOT = (
     {"name": "北京", "code": "010000"},
     {"name": "上海", "code": "020000"},
+    {"name": "广州", "code": "030200"},
+    {"name": "深圳", "code": "040000"},
+    {"name": "杭州", "code": "080200"},
+    {"name": "成都", "code": "090200"},
+    {"name": "重庆", "code": "060000"},
+    {"name": "武汉", "code": "070200"},
+    {"name": "西安", "code": "200200"},
+    {"name": "苏州", "code": "040700"},
+    {"name": "南京", "code": "040400"},
+    {"name": "长沙", "code": "180200"},
+    {"name": "天津", "code": "050000"},
+    {"name": "郑州", "code": "170200"},
+    {"name": "青岛", "code": "120300"},
+    {"name": "宁波", "code": "080300"},
+    {"name": "合肥", "code": "150200"},
+    {"name": "厦门", "code": "110200"},
+    {"name": "福州", "code": "110300"},
+    {"name": "济南", "code": "120200"},
+    {"name": "大连", "code": "230300"},
+    {"name": "沈阳", "code": "230200"},
+    {"name": "无锡", "code": "040500"},
+    {"name": "东莞", "code": "030800"},
+    {"name": "佛山", "code": "030600"},
+    {"name": "珠海", "code": "030500"},
+    {"name": "温州", "code": "080700"},
+    {"name": "嘉兴", "code": "080600"},
+    {"name": "绍兴", "code": "080500"},
+    {"name": "金华", "code": "080800"},
+    {"name": "常州", "code": "040600"},
 )
 
 
@@ -143,7 +172,7 @@ def load_51job_city_snapshot() -> dict[str, Any]:
     return {
         "schema": "bosshunter.51job_cities.v1",
         "source": "verified_snapshot",
-        "note": "当前内置已核验的北京、上海城市编码；其他城市需核验后再加入。",
+        "note": "当前内置已核验的直辖市、新一线及主要二线城市编码；其他城市需核验后再加入。",
         "cities": [dict(item) for item in CITY_SNAPSHOT],
     }
 
