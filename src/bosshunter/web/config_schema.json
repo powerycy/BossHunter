@@ -12,6 +12,8 @@
         {"key": "target_cities", "label": "目标城市", "type": "multi-select", "options_from": "cities", "description": "支持多城市"},
         {"key": "salary_min", "label": "最低薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
         {"key": "salary_max", "label": "最高薪资 (K)", "type": "number", "min": 0, "max": 200, "default": 0},
+        {"key": "salary_ceil_ratio", "label": "薪资上限放宽倍数", "type": "number", "min": 1, "max": 5, "step": 0.1, "default": 1.5, "description": "按岗位薪资区间下限判断是否远超期望上限"},
+        {"key": "filter_unparsed_salary", "label": "过滤面议/无法解析薪资", "type": "switch", "default": true, "description": "开启后，薪资面议或无法解析的岗位会在 AI 评分前跳过"},
         {"key": "deal_breakers", "label": "职位名排除词", "type": "tags", "description": "职位名含这些词时自动跳过"},
         {"key": "jd_deal_breakers", "label": "JD 排除词", "type": "tags", "description": "完整 JD 含这些词时自动跳过"},
         {"key": "blocked_companies", "label": "屏蔽公司", "type": "tags", "description": "公司名含这些词时自动跳过"},

@@ -26,6 +26,7 @@ import {
   MessageCircle,
   Play,
   RefreshCw,
+  ShieldCheck,
   Send,
   Square,
   Trash2,
@@ -340,12 +341,12 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const [selectedJob, setSelectedJob] = useState<Job | null>(null)
   const [modePending, setModePending] = useState<WorkbenchMode | null>(null)
   const [sendingGreetingIds, setSendingGreetingIds] = useState<Set<string>>(new Set())
-  const [deliveryNotice, setDeliveryNotice] = useState('')
   const [confirmedDeliveryIds, setConfirmedDeliveryIds] = useState<Set<string>>(new Set())
   const [todayFilters, setTodayFilters] = useState<JobFilters>({ ...EMPTY_JOB_FILTERS })
   const [statsScope, setStatsScope] = useState<StatsScope>('today')
   const [collectDialogOpen, setCollectDialogOpen] = useState(false)
   const [collectDialogMode, setCollectDialogMode] = useState<'collect' | 'full'>('collect')
+  const [preflightRunning, setPreflightRunning] = useState(false)
 
   const todayJobs = useMemo(
     () => workbench.pending_confirmation.filter(job => !confirmedDeliveryIds.has(job.id)),
@@ -457,6 +458,20 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     }
   }
 
+  const runStandalonePreflight = async () => {
+    if (modePending || preflightRunning) return
+    try {
+      setPreflightRunning(true)
+      setNotice('正在检查全流程运行环境...')
+      const ok = await runPreflight('full')
+      setNotice(ok ? '全流程预检通过，可以开始任务。' : '仍有问题需要处理，请查看检查结果。')
+    } catch {
+      setNotice('预检失败，请确认 BossHunter 后端仍在运行。')
+    } finally {
+      setPreflightRunning(false)
+    }
+  }
+
   const startCollection = async (options: Record<string, unknown>) => {
     const mode = collectDialogMode
     setModePending(mode)
@@ -533,7 +548,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     if (!ids.length || ids.some(id => sendingGreetingIds.has(id))) return
     const count = ids.length
     setSendingGreetingIds(prev => new Set([...prev, ...ids]))
-    setDeliveryNotice(`正在将 ${count} 个岗位加入发送队列...`)
+    setNotice(`正在将 ${count} 个岗位加入发送队列...`)
     try {
       const res = await fetch('/api/workbench/deliver', {
         method: 'POST',
@@ -546,7 +561,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       }
       const data = await res.json().catch(() => ({}))
       await refresh()
-      setDeliveryNotice(
+      setNotice(
         data.already_queued_count === count
           ? `所选 ${count} 个岗位已在当前发送队列中，请等待依次发送。`
           : data.queued_count
@@ -554,7 +569,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             : `已直接进入发送流程 ${count} 个岗位。`
       )
     } catch (err) {
-      setDeliveryNotice(err instanceof Error ? err.message : '发送失败')
+      setNotice(err instanceof Error ? err.message : '发送失败')
     } finally {
       setSendingGreetingIds(prev => new Set([...prev].filter(id => !ids.includes(id))))
     }
@@ -627,6 +642,10 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 </div>
               )}
             </div>
+            <Button variant="secondary" size="sm" onClick={runStandalonePreflight} disabled={refreshing || Boolean(modePending) || preflightRunning}>
+              <ShieldCheck className={cn('mr-2 h-4 w-4', preflightRunning && 'animate-spin')} />
+              {preflightRunning ? '预检中' : '全流程预检'}
+            </Button>
             <span className="rounded-full bg-[#FFF0E5] px-3 py-2 text-xs font-black text-primary">
               {activeTask ? `${activeTask.label}中` : '当前空闲'}
             </span>
@@ -680,7 +699,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         </div>
         {notice && <div className="mt-3 rounded-2xl bg-[#FFF0E5] px-4 py-3 text-sm text-primary">{notice}</div>}
         {preflightChecks.some(check => check.status !== 'pass') && (
-          <PreflightPanel checks={preflightChecks} checking={Boolean(modePending)} onRetry={retryPreflight} />
+          <PreflightPanel checks={preflightChecks} checking={Boolean(modePending) || preflightRunning} onRetry={retryPreflight} />
         )}
         {error && <div className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-danger">{error}</div>}
         {visibleTask && (
@@ -849,7 +868,6 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(workbench.send_errors.map(job => job.id))}>放弃全部</Button>
             </div>
           </div>
-          {deliveryNotice && <div className="mb-4 rounded-2xl bg-white px-4 py-3 text-sm font-bold text-danger">{deliveryNotice}</div>}
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {workbench.send_errors.map(job => (
               <div key={job.id} className="rounded-2xl border border-red-100 bg-white p-4">

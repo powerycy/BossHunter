@@ -35,6 +35,7 @@ class AiPreflightTests(unittest.TestCase):
 		self.assertEqual(checks[0]["status"], "pass")
 		self.assertIn("连接正常", checks[0]["message"])
 		http_get.assert_called_once()
+		self.assertFalse(http_get.call_args.kwargs["trust_env"])
 
 	def test_openai_compatible_provider_requires_base_url(self):
 		config = {
@@ -52,6 +53,50 @@ class AiPreflightTests(unittest.TestCase):
 		self.assertEqual(checks[0]["status"], "error")
 
 	@patch("bosshunter.web.preflight.httpx.get")
+	def test_ai_client_initialization_error_is_reported_as_runtime_failure(self, http_get):
+		"""客户端初始化失败发生在请求前，应提示本地环境且不得泄露配置。"""
+		api_key = "secret-key-that-must-not-leak"
+		base_url = "https://private-api.example/v1"
+		http_get.side_effect = TypeError(f"failed with {api_key} at {base_url}")
+		config = {
+			"ai": {
+				"provider": "openai_compatible",
+				"service": "custom",
+				"base_url": base_url,
+				"api_key": api_key,
+				"model": "private-model",
+			}
+		}
+
+		checks = check_ai_connection(config, required=True)
+
+		self.assertEqual(checks[0]["id"], "ai_runtime")
+		self.assertEqual(checks[0]["status"], "error")
+		self.assertIn("运行环境", checks[0]["message"])
+		self.assertIn("Python", checks[0]["detail"])
+		self.assertIn("HTTPX", checks[0]["detail"])
+		self.assertIn("BossHunter", checks[0]["detail"])
+		self.assertNotIn(api_key, str(checks))
+		self.assertNotIn(base_url, str(checks))
+
+	@patch("bosshunter.web.preflight.sys.version", "3.13.0a5 (test build)")
+	@patch("bosshunter.web.preflight.sys.version_info", Mock(releaselevel="alpha"))
+	@patch("bosshunter.web.preflight.httpx.get")
+	def test_prerelease_python_adds_runtime_warning(self, http_get):
+		"""预发布 Python 可能存在依赖兼容风险，连接成功时也应明确警告。"""
+		http_get.return_value = Mock(status_code=200)
+		config = {"ai": {"api_key": "secret-key", "model": "claude-sonnet-4-6"}}
+
+		checks = check_ai_connection(config, required=True)
+
+		self.assertEqual(checks[0]["status"], "pass")
+		warning = next(check for check in checks if check["id"] == "python_runtime")
+		self.assertEqual(warning["status"], "warning")
+		self.assertIn("预发布", warning["message"])
+		self.assertIn("3.13.0a5", warning["detail"])
+		self.assertNotIn("secret-key", str(checks))
+
+	@patch("bosshunter.web.preflight.httpx.get")
 	def test_ai_timeout_has_specific_feedback(self, http_get):
 		http_get.side_effect = httpx.ReadTimeout("timed out")
 		config = {"ai": {"api_key": "secret-key", "model": "claude-sonnet-4-6"}}
@@ -60,6 +105,25 @@ class AiPreflightTests(unittest.TestCase):
 
 		self.assertEqual(checks[0]["status"], "error")
 		self.assertIn("连接超时", checks[0]["message"])
+
+	@patch("bosshunter.web.preflight.httpx.get")
+	def test_invalid_ai_base_url_has_specific_feedback(self, http_get):
+		http_get.side_effect = httpx.InvalidURL("Invalid port: ':1'")
+		config = {
+			"ai": {
+				"provider": "openai_compatible",
+				"service": "custom",
+				"base_url": "http://::1:8000",
+				"api_key": "secret-key",
+				"model": "local-model",
+			}
+		}
+
+		checks = check_ai_connection(config, required=True)
+
+		self.assertEqual(checks[0]["status"], "error")
+		self.assertIn("地址无效", checks[0]["message"])
+		self.assertIn("[::1]", checks[0]["detail"])
 
 
 class BrowserPreflightTests(unittest.TestCase):
