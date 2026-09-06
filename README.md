@@ -43,7 +43,8 @@
 | 人工确认 | 投递前必须审核，支持逐个或批量确认 |
 | 个性化沟通 | 根据岗位 JD 和个人简历，为已确认岗位生成招呼语 |
 | 保守发送 | 随机间隔、时间窗口、每日上限和发送前浏览 |
-| 工作台与跟进 | 管理岗位、投递状态和 HR 回复，并辅助准备定制简历 |
+| 工作台与跟进 | 管理岗位、投递状态和 HR 回复 |
+| 定制化简历 | 识别 HR 的简历请求，并结合岗位 JD 辅助生成定制化简历 |
 
 ### 平台能力边界
 
@@ -108,24 +109,43 @@ bosshunter run
 
 | 日期 | 版本号 | 类型 | 更新内容 |
 |---|---|---|---|
-| 2026-08-29 | v2.3.2 | 稳定性与平台适配 | 合入猎聘只读采集后端（前端入口待接入）、BOSS 搜索筛选和安全岗位链接；修复 AI 凭据、错误提示、评分恢复与监测回复，并补齐采集器和运行边界测试。 |
+| 2026-09-01 | v2.3.2 | 采集与简历稳定性 | 完成 51job API 只读采集的安全整合和真实环境验证；修复智联登录误判、单平台阻断后续任务和中文 PDF 简历乱码。 |
 | 2026-08-25 | v2.3.1 | 多平台与安全整合 | 合入智联/51job 只读采集、外部平台人工投递闭环、岗位池与筛选增强、Windows 兼容、招呼语与消息判定修复，并重整 BOSS 页面访问保护设置。 |
 
 完整版本历史、升级说明和验证记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 🧭 现任维护者
 
-维护者按责任域展示，不进行名次竞争。候选人通过治理 PR 正式晋升后才会出现在这里。
+4 名正式维护者共同维护全项目，不设置固定模块；擅长方向仅用于协作参考。
 
-| GitHub | 角色 | 负责范围 | 任期 |
-|---|---|---|---|
-| [@powerycy](https://github.com/powerycy) 跑跑蹦蹦跳跳 | 项目负责人 | 全项目；核心与安全最终审批 | 项目发起至今 |
-| [@yuppiez99999](https://github.com/yuppiez99999) | 平台适配维护者 | 招聘平台采集器、城市数据、适配测试与平台域 PR 治理 | 2026-08-29 起 |
-| [@yukinoshi](https://github.com/yukinoshi) | 产品与 AI 维护者 | AI 评分、招呼语、错误恢复与产品域 PR 治理；高风险路径转核心与安全复核 | 2026-08-29 起 |
-| [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 核心与安全维护者 | 发送安全、运行时、数据库、监测链路与核心域 PR 治理；高风险修改与项目负责人共同复核 | 2026-08-30 起 |
-| [@bianshilong0604](https://github.com/bianshilong0604) | 产品与 AI 维护者 | Web 工作台、AI 评分、招呼语与产品域 PR 治理；高风险路径转核心与安全复核 | 2026-08-30 起 |
+| GitHub | 身份 | 贡献占比 | 擅长方向 | 任期 |
+|---|---|---|---|---|
+| [@yuppiez99999](https://github.com/yuppiez99999) | 正式维护者（Write） | 33.9%（试算） | 平台采集、城市数据与测试 | 2026-08-29 起 |
+| [@yukinoshi](https://github.com/yukinoshi) | 正式维护者（Write） | 28.8%（试算） | AI、错误恢复与产品流程 | 2026-08-29 起 |
+| [@bianshilong0604](https://github.com/bianshilong0604) | 正式维护者（Write） | 26.3%（试算） | Web、产品流程与隐私边界 | 2026-08-30 起 |
+| [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 正式维护者（Write） | 11.0%（试算） | 运行时、发送安全与监测链路 | 2026-08-30 起 |
+| [@powerycy](https://github.com/powerycy) 跑跑蹦蹦跳跳 | 项目负责人（Admin） | 不参评 | 项目治理与发布协调 | 项目发起至今 |
 
-[查看候选与历任维护者、任期和治理贡献](MAINTAINERS.md) · [查看维护者统计与治理规则](GOVERNANCE.md)
+以上为截至 **2026-09-03**、尚未经双人复核的基线试算。维护者任职满 30 天后，按任期开始至核算日的全部维护成果计算正式贡献占比；不是只计算最近 30 天，也不会每 30 天重置。维护贡献只计算 Review、问题闭环、安全复核、发布验证和治理交接，不计算本人提交的功能或修复。
+
+[查看任期与贡献详情](MAINTAINERS.md#现任维护者贡献详情) · [查看审批及核算规则](GOVERNANCE.md)
+
+## 🔥 近 30 天贡献榜 Top 10
+
+统计窗口：**2026-08-03 至 2026-09-01（Asia/Shanghai）**。采用与总榜相同的影响维度，只计算该窗口内被主线采纳的部分。
+
+| 排名 | 贡献者 | 本期主要贡献 |
+|:---:|---|---|
+| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | 可恢复岗位工具与智联统一采集架构 |
+| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | 评分 JSON 兼容、错误传播、暂停恢复与凭据优先级 |
+| 🥉 | [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 监测会话闭环、安全操作、本地凭据迁移与面板交互 |
+| 4 | [@yuppiez99999](https://github.com/yuppiez99999) | 平台采集回归、能力边界、注册模型与 51job API 安全复核 |
+| 5 | [@yuj-029](https://github.com/yuj-029) | 51job API 只读采集、保守采样与断点续采核心 |
+| 6 | [@haohao-fly](https://github.com/haohao-fly) | 岗位筛选、评分与投递队列 |
+| 7 | [@meixiaoxie](https://github.com/meixiaoxie) | 配置安全、公司屏蔽与城市查询 |
+| 7 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | 会话送达、消息方向与招呼语约束 |
+| 7 | [@hdfhssg](https://github.com/hdfhssg) | 学历、招聘类型与岗位池增强 |
+| 10 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | 招呼语队列体验与虚构网址防护 |
 
 ## 🏆 贡献总榜 Top 10
 
@@ -133,35 +153,24 @@ bosshunter run
 
 | 排名 | 贡献者 | 贡献度 | 主要贡献方向 |
 |:---:|---|:---:|---|
-| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | **12%** | 岗位导出、城市目录、回收站、独立 AI 评分与多平台采集架构 |
-| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | **11.5%** | AI 兼容、评分恢复、错误传播、凭据优先级与 Windows 运行时兼容 |
-| 🥉 | [@GioiaZheng](https://github.com/GioiaZheng) | **10.5%** | API Key 安全、PDF 依赖降级与人工确认流程修复 |
-| 4 | [@atticus-zhou](https://github.com/atticus-zhou) | **8.5%** | AI 重试、浏览器交互、送达验证与防重复发送 |
-| 5 | [@haohao-fly](https://github.com/haohao-fly) | **7.5%** | 岗位筛选、评分重试、投递队列与任务保护 |
-| 6 | [@meixiaoxie](https://github.com/meixiaoxie) | **6.5%** | 配置安全、公司屏蔽、城市查询与 Windows 回归测试 |
-| 6 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | **6.5%** | 送达确认、消息方向识别与招呼语约束 |
-| 6 | [@hdfhssg](https://github.com/hdfhssg) | **6.5%** | 学历与招聘类型筛选、岗位池与投递队列 |
-| 9 | [@yuppiez99999](https://github.com/yuppiez99999) | **5%** | 平台安全回归、采集器测试、运行边界与猎聘适配验证 |
-| 10 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | **4.5%** | 招呼语发送队列进度、任务状态与生成网址安全校验 |
-
-## 🔥 近 30 天贡献榜 Top 10
-
-统计窗口：**2026-08-01 至 2026-08-30（Asia/Shanghai）**。采用与总榜相同的影响维度，只计算该窗口内被主线采纳的部分。
-
-| 排名 | 贡献者 | 本期主要贡献 |
-|:---:|---|---|
-| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | 可恢复岗位工具与智联统一采集架构 |
-| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | AI 评分、错误恢复、凭据解析与 Windows 运行时兼容 |
-| 🥉 | [@atticus-zhou](https://github.com/atticus-zhou) | AI 与招呼语可靠性、送达验证 |
-| 4 | [@haohao-fly](https://github.com/haohao-fly) | 岗位筛选、评分与投递队列 |
-| 5 | [@meixiaoxie](https://github.com/meixiaoxie) | 配置安全、公司屏蔽与城市查询 |
-| 5 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | 会话送达、消息方向与招呼语约束 |
-| 5 | [@hdfhssg](https://github.com/hdfhssg) | 学历、招聘类型与岗位池增强 |
-| 8 | [@yuppiez99999](https://github.com/yuppiez99999) | BOSS/51job/猎聘采集测试、运行边界与平台治理 |
-| 9 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | 招呼语队列体验与虚构网址防护 |
-| 10 | [@Nourishman](https://github.com/Nourishman) | PDF 简历与确认流程修复 |
+| 🥇 | [@zhenian-666](https://github.com/zhenian-666) | **11%** | 岗位导出、城市目录、回收站、独立 AI 评分与多平台采集架构 |
+| 🥈 | [@yukinoshi](https://github.com/yukinoshi) | **10%** | AI 兼容、评分恢复、错误传播与凭据优先级 |
+| 🥉 | [@GioiaZheng](https://github.com/GioiaZheng) | **9.5%** | API Key 安全、PDF 依赖降级与人工确认流程修复 |
+| 4 | [@atticus-zhou](https://github.com/atticus-zhou) | **8%** | AI 重试、浏览器交互、送达验证与防重复发送 |
+| 5 | [@yuppiez99999](https://github.com/yuppiez99999) | **7.5%** | 平台采集回归、能力边界、注册模型与 51job API 安全复核 |
+| 6 | [@haohao-fly](https://github.com/haohao-fly) | **7%** | 岗位筛选、评分重试、投递队列与任务保护 |
+| 7 | [@meixiaoxie](https://github.com/meixiaoxie) | **6%** | 配置安全、公司屏蔽、城市查询与 Windows 回归测试 |
+| 7 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | **6%** | 送达确认、消息方向识别与招呼语约束 |
+| 7 | [@hdfhssg](https://github.com/hdfhssg) | **6%** | 学历与招聘类型筛选、岗位池与投递队列 |
+| 10 | [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | **5.5%** | 监测会话闭环、安全操作、本地凭据迁移与面板交互 |
 
 [查看完整榜单、证据链接、历月快照与计算口径](CONTRIBUTORS.md)
+
+## 许可证
+
+本项目源码公开，采用 [PolyForm Noncommercial License 1.0.0](LICENSE)。许可证允许符合其定义的非商业用途，以及为这些用途修改和分发本软件；商业使用不在该许可证的授权范围内，需事先取得另行书面授权。
+
+因此，BossHunter 属于 **source-available（源码可用）的非商业许可软件**，不是 [OSI 定义下的开源软件](https://opensource.org/osd)。
 
 ## 参与项目
 

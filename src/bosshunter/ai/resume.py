@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 
 from bosshunter.ai.credentials import call_anthropic_text
-from bosshunter.browser import close_tab, evaluate, new_tab, print_pdf, screenshot
+from bosshunter.browser import close_tab, evaluate, new_tab, print_pdf, screenshot, wait_for_load
 from bosshunter.cancellation import OperationCancelled, run_cancellable, stop_requested
 from bosshunter.db import get_db
 
@@ -591,23 +591,17 @@ def _resume_html(markdown_text: str, *, image_mode: bool = False) -> str:
 
 
 def _render_pdf(markdown_text: str, output_path: Path) -> bool:
-    """Render markdown to PDF via Chrome CDP, with xhtml2pdf fallback."""
+    """Render markdown to PDF via Chrome CDP.
+
+    If Chrome is unavailable, keep the UTF-8 Markdown instead of producing a
+    PDF with missing CJK glyphs through a font-less fallback renderer.
+    """
     full_html = _resume_html(markdown_text)
 
     # Strategy 1: Use Chrome CDP to print PDF (preferred, no extra deps)
     if _render_pdf_via_cdp(full_html, output_path):
         return True
-
-    # Strategy 2: Fallback to xhtml2pdf (requires cairo on Windows)
-    try:
-        from xhtml2pdf import pisa
-    except (ImportError, OSError):
-        return False
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "wb") as f:
-        status = pisa.CreatePDF(full_html, dest=f, encoding="utf-8")
-    return not status.err
+    return False
 
 
 def _png_dimensions(path: Path) -> tuple[int, int] | None:
@@ -678,26 +672,37 @@ def _render_pdf_via_cdp(html_content: str, output_path: Path) -> bool:
     import tempfile
     import time
 
+    # The Browser Runtime is a separate process and may have a different
+    # working directory. Always send it an absolute destination so a relative
+    # resume_output_dir cannot create the PDF somewhere else.
+    output_path = output_path.expanduser().resolve()
     temp_html = Path(tempfile.gettempdir()) / "bosshunter_resume.html"
     temp_html.write_text(html_content, encoding="utf-8")
     file_url = f"file:///{temp_html.as_posix()}"
 
-    target_id = None
     try:
-        target_id = new_tab(file_url, background=True)
-        if not target_id:
-            return False
-
-        time.sleep(2)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        if print_pdf(target_id, output_path):
-            return output_path.exists() and output_path.stat().st_size > 0
-        return False
-    except Exception:
+        for attempt in range(2):
+            target_id = None
+            try:
+                target_id = new_tab(file_url, background=True)
+                if target_id and wait_for_load(target_id, timeout=10):
+                    # Give Chrome a brief turn to resolve system fonts after
+                    # the document load event before printing the page.
+                    time.sleep(0.25)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.unlink(missing_ok=True)
+                    if print_pdf(target_id, output_path):
+                        if output_path.exists() and output_path.stat().st_size > 0:
+                            return True
+            except Exception:
+                pass
+            finally:
+                if target_id:
+                    close_tab(target_id)
+            if attempt == 0:
+                time.sleep(0.5)
         return False
     finally:
-        if target_id:
-            close_tab(target_id)
         temp_html.unlink(missing_ok=True)
 
 
