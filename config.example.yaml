@@ -108,6 +108,8 @@ ai:
   # greeting_timeout_seconds: 180
   greeting_review_threshold: 7
   greeting_max_iterations: 2
+  greeting_style_suggestions: true  # 生成原文与优化预览；关闭后只保留首次生成结果
+  greeting_auto_apply_style: false  # 默认不自动替换，需在页面选择原文或优化版
   resume_max_pages: 3
   # 建议在本地面板填写 api_key；它会单独保存在忽略提交的本地凭据文件中，不写入 config.yaml
   # base_url 填写后优先生效；留空时才读取对应环境变量或使用服务商默认地址

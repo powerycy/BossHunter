@@ -49,6 +49,7 @@ from bosshunter.db import (
 	permanent_delete_jobs,
 	query_jobs,
 	restore_jobs,
+	select_job_greeting,
 	soft_delete_jobs,
 	update_job_status,
 )
@@ -160,6 +161,21 @@ def _serialize_history_items(items):
 		record["resolved"] = bool(record.get("resolved"))
 		serialized.append(record)
 	return serialized
+
+
+def _serialize_job(item):
+	"""Expose greeting style issues as a list while retaining DB compatibility."""
+	record = dict(item)
+	raw_issues = record.get("greeting_style_issues")
+	if isinstance(raw_issues, str):
+		try:
+			parsed = json.loads(raw_issues)
+		except (TypeError, ValueError):
+			parsed = []
+		record["greeting_style_issues"] = [str(issue) for issue in parsed] if isinstance(parsed, list) else []
+	elif not isinstance(raw_issues, list):
+		record["greeting_style_issues"] = []
+	return record
 
 
 def _mask_api_key(key):
@@ -901,7 +917,7 @@ def api_jobs():
 	try:
 		jobs, total = query_jobs(db, deleted=deleted, limit=limit, offset=offset)
 		response.headers["X-Total-Count"] = str(total)
-		return _json_response(jobs)
+		return _json_response([_serialize_job(job) for job in jobs])
 	finally:
 		db.close()
 
@@ -1223,20 +1239,20 @@ def api_workbench():
 			"funnel": get_funnel_stats(db),
 			"funnel_today": get_funnel_stats(db, today=True),
 			"pending_confirmation": [
-				job for job in get_jobs_pending_confirmation(db)
+				_serialize_job(job) for job in get_jobs_pending_confirmation(db)
 				if int(job.get("score") or 0) >= threshold
 				and platform_supports(str(job.get("source_platform") or "boss"), "deliver")
 			],
 			"pending_greetings": [
-				job for job in get_jobs_ready_to_send(db)
+				_serialize_job(job) for job in get_jobs_ready_to_send(db, include_pending_review=True)
 				if platform_supports(str(job.get("source_platform") or "boss"), "deliver")
 			],
 			"send_errors": [
-				job for job in get_jobs_with_send_errors(db)
+				_serialize_job(job) for job in get_jobs_with_send_errors(db)
 				if platform_supports(str(job.get("source_platform") or "boss"), "deliver")
 			],
 			"needs_resume": [
-				job for job in get_jobs_needing_resume(db)
+				_serialize_job(job) for job in get_jobs_needing_resume(db)
 				if platform_supports(str(job.get("source_platform") or "boss"), "deliver")
 			],
 			"send_quota": {
@@ -1567,7 +1583,7 @@ def api_workbench_deliver():
 				).fetchall()
 			}
 			platform_rows = validation_db.execute(
-				f"SELECT id, status, greeting, COALESCE(source_platform, 'boss') AS source_platform FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
+				f"SELECT id, status, greeting, greeting_selection, COALESCE(source_platform, 'boss') AS source_platform FROM jobs WHERE deleted_at IS NULL AND id IN ({placeholders})",
 				job_ids,
 			).fetchall()
 		finally:
@@ -1586,6 +1602,17 @@ def api_workbench_deliver():
 				"unsupported_platform": "unknown",
 				"invalid_ids": unsupported,
 			}, 403)
+		pending_review_ids = [
+			str(row["id"])
+			for row in platform_rows
+			if direct_send and str(row["greeting_selection"] or "") == "pending"
+		]
+		if pending_review_ids:
+			return _json_response({
+				"error": "请先预览并选择原文或优化版，再发送招呼语",
+				"code": "greeting_review_required",
+				"invalid_ids": pending_review_ids,
+			}, 409)
 		allowed_statuses = {"ready", "approved", "error"} if direct_send else {"ready", "approved"}
 		completed_statuses = {"sent", "replied", "resume_sent", "needs_resume", "follow_up_sent"}
 		already_sent_ids = {
@@ -1701,6 +1728,9 @@ def api_workbench_deliver():
 
 		deliver_options = {"_workbench_job_ids": job_ids}
 		if direct_send:
+			# The greeting is already finalized on the review card. Keep direct
+			# send separate from generation so a click cannot replace the text or
+			# move the job back into greeting review.
 			deliver_options["_workbench_skip_greeting"] = True
 		task = task_runner.start("deliver", _task_config(deliver_options))
 		return _json_response(task)
@@ -1749,7 +1779,29 @@ def api_job_detail(job_id):
 		row = db.execute("SELECT * FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)).fetchone()
 		if not row:
 			return _json_response({"error": "岗位不存在"}, 404)
-		return _json_response(dict(row))
+		return _json_response(_serialize_job(row))
+	finally:
+		db.close()
+
+
+@app.route("/api/jobs/<job_id>/greeting-selection", method="POST")
+def api_job_greeting_selection(job_id):
+	body = request.json or {}
+	db = _get_web_db()
+	try:
+		with job_mutation_lock:
+			updated = select_job_greeting(
+				db,
+				job_id,
+				str(body.get("selection") or ""),
+				edited_greeting=str(body.get("greeting") or ""),
+				confirmed=body.get("confirmed") is True,
+			)
+		return _json_response(_serialize_job(updated))
+	except KeyError:
+		return _json_response({"error": "岗位不存在"}, 404)
+	except ValueError as exc:
+		return _json_response({"error": str(exc)}, 409)
 	finally:
 		db.close()
 
