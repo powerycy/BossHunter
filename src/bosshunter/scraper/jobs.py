@@ -18,7 +18,7 @@ from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest
 from bosshunter.collection.platforms.boss import BossBrowser, BossCollector, generate_boss_job_id
 from bosshunter.config import CITY_CODES
-from bosshunter.db import get_db, insert_job, job_exists
+from bosshunter.db import get_db, insert_job, job_exists, recompute_outsourcing
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.outsourcing import load_rules
 from bosshunter.platform_safety import PlatformSafetyStop
@@ -92,6 +92,7 @@ def _scrape_jobs_impl(
     progress_callback = config.get("_workbench_collect_progress")
     profile = config.get("profile", {}) if isinstance(config.get("profile"), dict) else {}
     outsourcing_rules = load_rules(config)
+    recompute_outsourcing(db, outsourcing_rules)
 
     def emit() -> None:
         if callable(progress_callback):

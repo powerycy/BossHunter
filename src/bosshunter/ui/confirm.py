@@ -4,7 +4,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt
 
-from bosshunter.db import get_db, get_jobs_pending_confirmation, serialize_job, update_job_status, add_history
+from bosshunter.db import get_db, get_jobs_pending_confirmation, serialize_job, update_job_status, add_history, recompute_outsourcing
+from bosshunter.outsourcing import load_rules
 
 console = Console()
 
@@ -22,6 +23,7 @@ def _outsourcing_badge(job: dict) -> str:
 def show_confirmation(config: dict) -> bool:
     """Display jobs for confirmation. Returns True if any jobs were approved."""
     db = get_db()
+    recompute_outsourcing(db, load_rules(config))
     jobs = [serialize_job(job) for job in get_jobs_pending_confirmation(db)]
 
     if not jobs:

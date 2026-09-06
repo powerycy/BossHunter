@@ -21,7 +21,7 @@ from bosshunter.collection.platforms.liepin import LiepinCollector, get_liepin_c
 from bosshunter.collection.platforms.zhilian import ZhilianCollector, get_zhilian_city_code
 from bosshunter.collection.registry import CollectorRegistry
 from bosshunter.collection_run_store import create_collection_run, update_collection_run
-from bosshunter.db import get_db, insert_job_if_new, job_identity_exists
+from bosshunter.db import get_db, insert_job_if_new, job_identity_exists, recompute_outsourcing
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.outsourcing import load_rules
 
@@ -227,6 +227,7 @@ class _SharedProcessor:
         self.config = config
         self.emit = emit
         self.outsourcing_rules = load_rules(config)
+        recompute_outsourcing(conn, self.outsourcing_rules)
         self.progress = CollectionProgress(
             run_id=run_id, platform=request.platform, platform_index=platform_index,
             platform_total=platform_total, phase="queued", target=None,

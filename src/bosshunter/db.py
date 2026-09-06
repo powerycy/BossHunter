@@ -13,6 +13,7 @@ from bosshunter.outsourcing import (
     Rules,
     compute_outsourcing_columns,
     parse_persisted_columns,
+    rules_version,
 )
 
 
@@ -166,10 +167,12 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_v1_3(conn)
     _migrate_v1_4(conn)
     _migrate_v1_5(conn)
+    _migrate_outsourcing(conn)
     _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
     _init_collection_runs(conn)
     _init_collect_progress(conn)
+    _init_score_traces(conn)
 
 
 def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
@@ -452,6 +455,7 @@ def permanent_delete_jobs(
     with conn:
         placeholders = ",".join("?" for _ in ids)
         conn.execute(f"DELETE FROM history WHERE job_id IN ({placeholders})", ids)
+        conn.execute(f"DELETE FROM score_traces WHERE job_id IN ({placeholders})", ids)
         cursor = conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders}) AND deleted_at IS NOT NULL", ids)
         if cursor.rowcount != len(ids):
             raise JobDeletionConflictError("永久删除数量校验失败，事务已回滚")
@@ -504,6 +508,7 @@ def insert_job_if_new(
         "outsourcing_matches": os_columns["outsourcing_matches"],
         "outsourcing_layers": os_columns["outsourcing_layers"],
         "outsourcing_updated_at": os_columns["outsourcing_updated_at"],
+        "outsourcing_rules_version": os_columns["outsourcing_rules_version"],
     })
     cursor = conn.execute(
         """
@@ -512,13 +517,13 @@ def insert_job_if_new(
             hr_name, hr_title, hr_active, company_size, company_industry, url,
             source_platform, source_job_id, source_keyword, source_city_code,
             outsourcing_level, outsourcing_confirmed, outsourcing_matches,
-            outsourcing_layers, outsourcing_updated_at
+            outsourcing_layers, outsourcing_updated_at, outsourcing_rules_version
         ) VALUES (
             :id, :title, :company, :salary, :city, :experience, :education, :recruitment_type, :jd,
             :hr_name, :hr_title, :hr_active, :company_size, :company_industry, :url,
             :source_platform, :source_job_id, :source_keyword, :source_city_code,
             :outsourcing_level, :outsourcing_confirmed, :outsourcing_matches,
-            :outsourcing_layers, :outsourcing_updated_at
+            :outsourcing_layers, :outsourcing_updated_at, :outsourcing_rules_version
         )
         """,
         values,
@@ -546,6 +551,48 @@ def update_job_score(conn: sqlite3.Connection, job_id: str, score: int, reason: 
     conn.commit()
 
 
+def persist_job_score_and_trace(
+    conn: sqlite3.Connection,
+    job_id: str,
+    score: int,
+    reason: str,
+    trace: dict[str, Any],
+) -> None:
+    """Atomically persist a completed structured score and its safe explanation trace."""
+    trace_json = json.dumps(trace, ensure_ascii=False, separators=(",", ":"))
+    with conn:
+        cursor = conn.execute(
+            "UPDATE jobs SET score = ?, score_reason = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND deleted_at IS NULL",
+            (score, reason, job_id),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError("岗位不存在或已进入回收站，未保存评分追踪")
+        conn.execute(
+            """
+            INSERT INTO score_traces (job_id, schema_version, trace_json)
+            VALUES (?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                schema_version = excluded.schema_version,
+                trace_json = excluded.trace_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (job_id, int(trace.get("schema_version", 1)), trace_json),
+        )
+
+
+def get_score_trace(conn: sqlite3.Connection, job_id: str) -> tuple[bool, dict[str, Any] | None]:
+    """Return whether a trace row exists and its parsed object, if it is valid JSON."""
+    row = conn.execute("SELECT trace_json FROM score_traces WHERE job_id = ?", (job_id,)).fetchone()
+    if row is None:
+        return False, None
+    try:
+        trace = json.loads(row["trace_json"])
+    except (TypeError, json.JSONDecodeError):
+        return True, None
+    return True, trace if isinstance(trace, dict) else None
+
+
 def update_job_greeting(conn: sqlite3.Connection, job_id: str, greeting: str) -> None:
     """Update job greeting message."""
     conn.execute(
@@ -569,6 +616,21 @@ def add_history(conn: sqlite3.Connection, job_id: str, action: str, detail: str 
     conn.execute(
         "INSERT INTO history (job_id, action, detail) VALUES (?, ?, ?)",
         (job_id, action, detail)
+    )
+    conn.commit()
+
+
+def update_job_last_error(
+    conn: sqlite3.Connection,
+    job_id: str,
+    error_detail: str,
+    error_code: str = "",
+) -> None:
+    """Persist the latest send-failure reason + code so lists can surface and classify it."""
+    conn.execute(
+        "UPDATE jobs SET last_error = ?, last_error_code = ?, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
+        (error_detail, error_code, job_id)
     )
     conn.commit()
 
@@ -714,13 +776,20 @@ def _migrate_v1_4(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v1_5(conn: sqlite3.Connection) -> None:
-    """Persist outsourcing signals alongside each job row.
+    """Keep main's failure-reporting migration independent of outsourcing."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "last_error" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN last_error TEXT")
+    if "last_error_code" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN last_error_code TEXT")
+    conn.commit()
 
-    Adds the five columns produced by :func:`compute_outsourcing_columns`
-    so the scraper can write them at insert time and the API can read them
-    back as typed fields. Existing rows are backfilled once using the
-    built-in default rules so users see badges immediately after upgrading
-    — re-scoring later with custom rules will overwrite these values.
+
+def _migrate_outsourcing(conn: sqlite3.Connection) -> None:
+    """Add outsourcing columns, independently of main's numbered migrations.
+
+    First-time backfill uses defaults. Config-aware collection and display
+    entry points refresh all rows with their current rules before use.
     """
     cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
     additions = {
@@ -729,39 +798,47 @@ def _migrate_v1_5(conn: sqlite3.Connection) -> None:
         "outsourcing_matches": "TEXT",
         "outsourcing_layers": "TEXT",
         "outsourcing_updated_at": "TIMESTAMP",
+        "outsourcing_rules_version": "TEXT",
     }
     for name, definition in additions.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_outsourcing_level "
-        "ON jobs(outsourcing_level)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_outsourcing_level ON jobs(outsourcing_level)")
+    conn.commit()
+    if additions.keys() - cols:
+        recompute_outsourcing(conn, _default_outsourcing_rules())
 
-    if "outsourcing_level" not in cols:
-        # Backfill: compute the level for every active row using built-in
-        # default rules. We project the columns we need so the migration
-        # doesn't pin the schema to fields the scraper doesn't supply.
-        rules = _default_outsourcing_rules()
+
+def recompute_outsourcing(conn: sqlite3.Connection, rules: Rules) -> int:
+    """Atomically refresh existing rows using the same rules as new inserts.
+
+    All rows, including recycled ones, use current configuration. Only
+    outdated rule versions or invalid timestamps need computation. Repeated
+    reads preserve timestamps and never change workflow/history data.
+    """
+    changed = 0
+    with conn:
         rows = conn.execute(
-            "SELECT id, title, company, jd, company_industry FROM jobs"
+            "SELECT * FROM jobs WHERE outsourcing_rules_version IS NOT ? "
+            "OR datetime(outsourcing_updated_at) IS NULL",
+            (rules_version(rules),),
         ).fetchall()
         for row in rows:
-            payload = {k: row[k] for k in row.keys()}
-            data = compute_outsourcing_columns(payload, rules)
+            data = compute_outsourcing_columns(dict(row), rules)
             conn.execute(
                 """
-                UPDATE jobs SET
-                    outsourcing_level = :outsourcing_level,
+                UPDATE jobs SET outsourcing_level = :outsourcing_level,
                     outsourcing_confirmed = :outsourcing_confirmed,
                     outsourcing_matches = :outsourcing_matches,
                     outsourcing_layers = :outsourcing_layers,
-                    outsourcing_updated_at = CURRENT_TIMESTAMP
+                    outsourcing_updated_at = :outsourcing_updated_at,
+                    outsourcing_rules_version = :outsourcing_rules_version
                 WHERE id = :id
                 """,
                 {**data, "id": row["id"]},
             )
-    conn.commit()
+            changed += 1
+    return changed
 
 
 def _migrate_platform_access_events(conn: sqlite3.Connection) -> None:
@@ -816,6 +893,23 @@ def _init_collection_runs(conn: sqlite3.Connection) -> None:
             finished_at TIMESTAMP NULL
         );
         CREATE INDEX IF NOT EXISTS idx_collection_runs_status ON collection_runs(status);
+        """
+    )
+    conn.commit()
+
+
+def _init_score_traces(conn: sqlite3.Connection) -> None:
+    """Create the current-score explanation store without rewriting existing jobs."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS score_traces (
+            job_id TEXT PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            trace_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES jobs(id)
+        );
         """
     )
     conn.commit()

@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from functools import lru_cache
 
 # Strong outsourcing signals — these phrases and the curated vendor list are
 # treated as "confirmed outsourcing" by the UI (darker badge).
@@ -316,13 +320,8 @@ def detect_outsourcing_signals(job: dict, deal_breakers: list[str] | None = None
 #                                                       risk_events + user_marks;
 #                                                       opt-in, default off)
 #   L5 user mark (button)                            → confirmed (Phase 2)
-#   L6 cross-field contradiction (industry 自研 vs  → silent demotion
-#       signals)                                       (suspected→clean or
-#                                                       confirmed→suspected)
-#
-# Precedence: L5 > L4 > L0/L1 > L3 > L2, with L6 able to demote one step.
-# L4 forward propagation requires ≥ N independent sources (see
-# ``should_forward_propagate_outsourcing`` in db.py).
+# Industry categories and self-development claims do not cancel evidence.
+# L4/L5 and cross-job propagation are not connected to persistence in this PR.
 
 
 # L3 structural clue vocabulary. JD-only: "驻场补贴/项目奖金/出差补贴" are
@@ -334,26 +333,13 @@ _L3_STRUCTURAL_JD: tuple[str, ...] = (
     "客户现场",
 )
 
-# L3 employment-mode tells on title. BOSS exposes ``employment_type`` only
-# on some jobs; when absent we apply the heuristic, otherwise we skip the
-# title check to avoid double-counting.
+# L3 title clues are weak evidence only, not a verified employment type.
 _L3_EMPLOYMENT_TITLE: tuple[str, ...] = (
     "6个月",
     "项目周期",
     "短期",
     "兼职",
 )
-
-# L6 industry whitelist — companies that claim a self-developed product
-# line. Any industry token in this list triggers a demotion when the
-# job's own detection is only suspected or when an industry claim
-# contradicts a confirmed verdict.
-_L6_SELF_DEVELOPED_TOKENS: tuple[str, ...] = (
-    "互联网",
-    "自研",
-    "产品",
-)
-
 
 @dataclass(frozen=True)
 class Rules:
@@ -374,6 +360,13 @@ class Rules:
     forward_propagate_n: int
 
 
+@lru_cache(maxsize=64)
+def rules_version(rules: Rules) -> str:
+    """Identify both the matcher revision and the effective configuration."""
+    payload = json.dumps(asdict(rules), ensure_ascii=False, sort_keys=True)
+    return "outsourcing-v2:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def load_rules(config: dict | None) -> Rules:
     """Merge ``config['outsourcing_rules']`` with the built-in defaults.
 
@@ -386,11 +379,11 @@ def load_rules(config: dict | None) -> Rules:
     rules_cfg = cfg.get("outsourcing_rules", {}) if isinstance(cfg, dict) else {}
     if not isinstance(rules_cfg, dict):
         rules_cfg = {}
-    enabled = bool(rules_cfg.get("enabled", True))
+    enabled = _rule_bool(rules_cfg.get("enabled"), default=True)
 
-    user_companies = tuple(rules_cfg.get("companies_user", []) or ())
-    user_hard = tuple(rules_cfg.get("keywords_hard_user", []) or ())
-    user_soft = tuple(rules_cfg.get("keywords_soft_user", []) or ())
+    user_companies = _rule_strings(rules_cfg.get("companies_user"))
+    user_hard = _rule_strings(rules_cfg.get("keywords_hard_user"))
+    user_soft = _rule_strings(rules_cfg.get("keywords_soft_user"))
 
     companies = _dedup_preserve_order(OUTSOURCING_COMPANIES + user_companies)
     keywords_hard = _dedup_preserve_order(OUTSOURCING_KEYWORDS_HARD + user_hard)
@@ -401,11 +394,38 @@ def load_rules(config: dict | None) -> Rules:
         companies=companies,
         keywords_hard=keywords_hard,
         keywords_soft=keywords_soft,
-        detect_structural=bool(rules_cfg.get("detect_structural", True)),
-        use_reply_history=bool(rules_cfg.get("use_reply_history", False)),
-        use_user_marks=bool(rules_cfg.get("use_user_marks", True)),
-        forward_propagate_n=int(rules_cfg.get("forward_propagate_n", 2)),
+        detect_structural=_rule_bool(rules_cfg.get("detect_structural"), default=True),
+        use_reply_history=_rule_bool(rules_cfg.get("use_reply_history"), default=False),
+        use_user_marks=_rule_bool(rules_cfg.get("use_user_marks"), default=True),
+        forward_propagate_n=_rule_count(rules_cfg.get("forward_propagate_n")),
     )
+
+
+def _rule_strings(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(item.strip() for item in value if isinstance(item, str) and item.strip())
+
+
+def _rule_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"false", "off", "no", "0"}:
+            return False
+        if normalized in {"true", "on", "yes", "1"}:
+            return True
+    return default
+
+
+def _rule_count(value: object) -> int:
+    try:
+        return max(2, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 2
 
 
 def _dedup_preserve_order(items: tuple[str, ...]) -> tuple[str, ...]:
@@ -422,32 +442,33 @@ def _dedup_preserve_order(items: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(out)
 
 
-# Token-stripping regex for whole-token company matching: drop everything
-# that's not a Chinese ideograph, a letter, or a digit so vendor names
-# like "博朗软件" don't substring-match a legal name like "上海博朗实业".
 _TOKEN_RE = re.compile(r"[^一-鿿\w]+", re.UNICODE)
+_LEGAL_SUFFIX_RE = re.compile(r"(?:股份有限公司|有限责任公司|有限公司)$")
+
+
+def _company_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value)).casefold()
+    normalized = _TOKEN_RE.sub("", normalized)
+    return _LEGAL_SUFFIX_RE.sub("", normalized)
 
 
 def _match_company_strict(company: str, vendors: tuple[str, ...]) -> list[str]:
-    """Whole-token vendor match (L0).
+    """Match complete normalized names, allowing only common legal suffixes.
 
-    Returns the vendor names whose normalised form appears as a whole
-    token inside the normalised company field. The substring fallback is
-    unsafe for company names because Chinese vendor names share many
-    short suffixes ("软件/科技/信息/技术") with legitimate employers —
-    "上海博朗实业" would otherwise match "博朗软件".
+    Regional subsidiaries and trade names need explicit registry entries;
+    a short name such as 法本 must never match 法本文化传媒有限公司.
     """
     if not company or not vendors:
         return []
-    haystack = _TOKEN_RE.sub("", str(company)).lower()
+    haystack = _company_key(company)
     if not haystack:
         return []
     hits: list[str] = []
     for vendor in vendors:
-        needle = _TOKEN_RE.sub("", str(vendor)).lower()
+        needle = _company_key(vendor)
         if not needle:
             continue
-        if needle in haystack and vendor not in hits:
+        if needle == haystack and vendor not in hits:
             hits.append(vendor)
     return hits
 
@@ -455,30 +476,19 @@ def _match_company_strict(company: str, vendors: tuple[str, ...]) -> list[str]:
 def _match_structural(job: dict) -> list[dict]:
     """L3 structural clues (suspected only).
 
-    JD-side pay-structure tells always fire. Title-side employment-mode
-    tells only fire when ``employment_type`` is missing on the row (BOSS
-    surfaces it inconsistently, and we don't want to contradict an
-    explicit ``full-time`` claim).
+    Use only fields actually persisted by the collectors. Title wording
+    does not establish employment type and can only produce suspicion.
     """
     hits: list[dict] = []
     jd = job.get("jd", "") or ""
     for kw in _L3_STRUCTURAL_JD:
         if kw in jd:
             hits.append({"layer": "L3", "keyword": kw, "field": "jd"})
-    if not job.get("employment_type"):
-        title = job.get("title", "") or ""
-        for kw in _L3_EMPLOYMENT_TITLE:
-            if kw in title:
-                hits.append({"layer": "L3", "keyword": kw, "field": "title"})
+    title = job.get("title", "") or ""
+    for kw in _L3_EMPLOYMENT_TITLE:
+        if kw in title:
+            hits.append({"layer": "L3", "keyword": kw, "field": "title"})
     return hits
-
-
-def _match_cross_field_contradiction(job: dict) -> bool:
-    """L6 industry-claims-self-developed trigger."""
-    industry = job.get("company_industry", "") or ""
-    if not industry:
-        return False
-    return any(tok in industry for tok in _L6_SELF_DEVELOPED_TOKENS)
 
 
 def _dedup_layers(layers: list[dict]) -> list[str]:
@@ -492,31 +502,29 @@ def _dedup_layers(layers: list[dict]) -> list[str]:
 
 
 def compute_outsourcing_columns(job: dict, rules: Rules) -> dict:
-    """Compute the five jobs-table columns to persist at insert time.
+    """Compute the evidence snapshot and its effective rules version.
 
     Returns a dict with the column names (``outsourcing_level``,
     ``outsourcing_confirmed``, ``outsourcing_matches``,
     ``outsourcing_layers``) plus an explicit ``outsourcing_updated_at``
-    set to ``CURRENT_TIMESTAMP`` (the DB default would also work, but
-    returning the value lets ``insert_job`` write it verbatim when needed
-    by tests or batch scripts).
+    set to a real UTC timestamp suitable for SQLite parameter binding.
 
     The matchers intentionally do not consume ``deal_breakers`` — those
     are user-config exclusion words independent of the outsourcing enum
     (kept orthogonal in the schema: a job can be ``deal_breaker=True``
     AND ``outsourcing_level=clean``).
 
-    L4 reply-text and L5 user-mark are NOT applied here — those are
-    cross-job signals that the scraper wires in via the forward-prop
-    gate (``db.should_forward_propagate_outsourcing``).
+    L4 reply-text, L5 user marks and cross-job propagation are not applied.
     """
+    updated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     if not rules.enabled:
         return {
             "outsourcing_level": "clean",
             "outsourcing_confirmed": 0,
             "outsourcing_matches": None,
             "outsourcing_layers": None,
-            "outsourcing_updated_at": None,
+            "outsourcing_updated_at": updated_at,
+            "outsourcing_rules_version": rules_version(rules),
         }
 
     layers: list[dict] = []
@@ -544,20 +552,13 @@ def compute_outsourcing_columns(job: dict, rules: Rules) -> dict:
     has_confirmed = any(m["layer"] in ("L0", "L1") for m in layers)
     level = "confirmed" if has_confirmed else ("suspected" if layers else "clean")
 
-    # L6 — industry-claims-self-developed silent demotion (one step down).
-    if level in ("confirmed", "suspected") and _match_cross_field_contradiction(job):
-        if level == "confirmed":
-            level = "suspected"
-        else:
-            level = "clean"
-            layers = []
-
     return {
         "outsourcing_level": level,
-        "outsourcing_confirmed": 1 if has_confirmed else 0,
+        "outsourcing_confirmed": int(level == "confirmed"),
         "outsourcing_matches": json.dumps(layers, ensure_ascii=False) if layers else None,
         "outsourcing_layers": json.dumps(_dedup_layers(layers), ensure_ascii=False) if layers else None,
-        "outsourcing_updated_at": "CURRENT_TIMESTAMP",
+        "outsourcing_updated_at": updated_at,
+        "outsourcing_rules_version": rules_version(rules),
     }
 
 
@@ -601,21 +602,31 @@ def parse_persisted_columns(row: dict) -> dict:
     errors fall back to empty lists so a corrupted row never breaks the
     API.
     """
-    matches_raw = row.get("outsourcing_matches")
-    layers_raw = row.get("outsourcing_layers")
-    try:
-        matches = json.loads(matches_raw) if matches_raw else []
-    except (TypeError, ValueError):
-        matches = []
-    try:
-        layers = json.loads(layers_raw) if layers_raw else []
-    except (TypeError, ValueError):
-        layers = []
+    matches = _json_list(row.get("outsourcing_matches"))
+    layers = _json_list(row.get("outsourcing_layers"))
+    keywords = []
+    for match in matches:
+        keyword = match.get("keyword") if isinstance(match, dict) else match
+        if isinstance(keyword, str) and keyword and keyword not in keywords:
+            keywords.append(keyword)
+    level = row.get("outsourcing_level")
+    if level not in ("clean", "suspected", "confirmed"):
+        level = "suspected" if keywords else "clean"
     return {
-        "outsourcing": bool(matches),
-        "outsourcing_confirmed": bool(row.get("outsourcing_confirmed")),
-        "outsourcing_matches": [m.get("keyword", "") for m in matches if isinstance(m, dict)],
-        "outsourcing_layers": layers,
-        "outsourcing_level": row.get("outsourcing_level") or "clean",
+        "outsourcing": level != "clean",
+        "outsourcing_confirmed": level == "confirmed",
+        "outsourcing_matches": keywords,
+        "outsourcing_layers": [layer for layer in layers if isinstance(layer, str)],
+        "outsourcing_level": level,
         "outsourcing_updated_at": row.get("outsourcing_updated_at"),
     }
+
+
+def _json_list(value: object) -> list:
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else None
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []

@@ -118,7 +118,7 @@ platforms:
             reopened.close()
 
     def test_collection_risk_stops_and_records_safe_reason(self):
-        db = Mock()
+        db = get_db(Path(":memory:"))
         progress = Mock()
         progress.add_task.return_value = "task"
         context = Mock()
@@ -148,7 +148,7 @@ platforms:
         self.assertLessEqual(lock_call.kwargs["minutes"], 10)
 
     def test_transient_collection_risk_is_ignored_without_locking(self):
-        db = Mock()
+        db = get_db(Path(":memory:"))
         progress = Mock()
         progress.add_task.return_value = "task"
         context = Mock()
@@ -182,7 +182,7 @@ platforms:
         guard_cls.return_value.lock.assert_not_called()
 
     def test_consecutive_page_failures_end_collection_without_risk_lock(self):
-        db = Mock()
+        db = get_db(Path(":memory:"))
         progress = Mock()
         progress.add_task.return_value = "task"
         context = Mock()

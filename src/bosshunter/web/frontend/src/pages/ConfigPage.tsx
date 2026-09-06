@@ -398,7 +398,7 @@ export default function ConfigPage() {
                     <span className="text-xs text-muted">{enabled ? '已启用' : '未启用'}</span>
                   </div>
                   {enabled && <div className="mt-4 space-y-3">
-                    <Field label="搜索关键词">
+                    <Field label="搜索关键词" hint={platform === 'boss' ? '输入岗位后请按回车键确认，多岗位用","隔开，否则配置无法保存。' : undefined}>
                       <TagsInput value={Array.isArray(search.keywords) ? search.keywords : []} onChange={value => updatePlatformSearch(platform, 'keywords', value)} placeholder="如：人力、产品运营" />
                     </Field>
                     <Field label="搜索城市">
@@ -789,10 +789,13 @@ function SectionCard({ title, sectionKey, expanded, toggle, children }: {
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
     <div>
-      <label className="block text-xs text-foreground mb-1.5">{label}</label>
+      <div className="mb-1.5 flex items-baseline justify-between gap-2">
+        <label className="block text-xs text-foreground">{label}</label>
+        {hint && <span className="text-[11px] leading-4 text-muted">{hint}</span>}
+      </div>
       {children}
     </div>
   )

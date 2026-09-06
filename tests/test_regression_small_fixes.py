@@ -376,7 +376,9 @@ class ConfirmationUiTests(unittest.TestCase):
         ]
         prompt_ask.return_value = "q"
 
-        result = show_confirmation({})
+        with patch("bosshunter.ui.confirm.recompute_outsourcing") as refresh:
+            result = show_confirmation({})
+        self.assertEqual(refresh.call_args.args[0], db)
 
         self.assertFalse(result)
         self.assertEqual(prompt_ask.call_args_list[0].kwargs["default"], "s")

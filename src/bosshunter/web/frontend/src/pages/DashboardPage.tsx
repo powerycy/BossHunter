@@ -1,3 +1,4 @@
+import { OutsourcingBadge } from '@/components/jobs/OutsourcingBadge'
 import { useEffect, useMemo, useState } from 'react'
 import { useDashboard, type CollectionProgress, type HistoryItem, type Job, type WorkbenchTask } from '@/hooks/useDashboard'
 import { useJobSearch, type JobSortKey, type JobSortOrder } from '@/hooks/useJobSearch'
@@ -26,6 +27,7 @@ import {
   MessageCircle,
   Play,
   RefreshCw,
+  ShieldCheck,
   Send,
   Square,
   Trash2,
@@ -344,6 +346,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const [statsScope, setStatsScope] = useState<StatsScope>('today')
   const [collectDialogOpen, setCollectDialogOpen] = useState(false)
   const [collectDialogMode, setCollectDialogMode] = useState<'collect' | 'full'>('collect')
+  const [preflightRunning, setPreflightRunning] = useState(false)
 
   const todayJobs = useMemo(
     () => workbench.pending_confirmation.filter(job => !confirmedDeliveryIds.has(job.id)),
@@ -452,6 +455,20 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       setNotice('重新检查失败，请确认 BossHunter 后端仍在运行。')
     } finally {
       setModePending(null)
+    }
+  }
+
+  const runStandalonePreflight = async () => {
+    if (modePending || preflightRunning) return
+    try {
+      setPreflightRunning(true)
+      setNotice('正在检查全流程运行环境...')
+      const ok = await runPreflight('full')
+      setNotice(ok ? '全流程预检通过，可以开始任务。' : '仍有问题需要处理，请查看检查结果。')
+    } catch {
+      setNotice('预检失败，请确认 BossHunter 后端仍在运行。')
+    } finally {
+      setPreflightRunning(false)
     }
   }
 
@@ -621,6 +638,10 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 </div>
               )}
             </div>
+            <Button variant="secondary" size="sm" onClick={runStandalonePreflight} disabled={refreshing || Boolean(modePending) || preflightRunning}>
+              <ShieldCheck className={cn('mr-2 h-4 w-4', preflightRunning && 'animate-spin')} />
+              {preflightRunning ? '预检中' : '全流程预检'}
+            </Button>
             <span className="rounded-full bg-[#FFF0E5] px-3 py-2 text-xs font-black text-primary">
               {activeTask ? `${activeTask.label}中` : '当前空闲'}
             </span>
@@ -674,7 +695,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         </div>
         {notice && <div className="mt-3 rounded-2xl bg-[#FFF0E5] px-4 py-3 text-sm text-primary">{notice}</div>}
         {preflightChecks.some(check => check.status !== 'pass') && (
-          <PreflightPanel checks={preflightChecks} checking={Boolean(modePending)} onRetry={retryPreflight} />
+          <PreflightPanel checks={preflightChecks} checking={Boolean(modePending) || preflightRunning} onRetry={retryPreflight} />
         )}
         {error && <div className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-danger">{error}</div>}
         {visibleTask && (
@@ -813,7 +834,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             {workbench.needs_resume.slice(0, 4).map(job => (
               <div key={job.id} className="rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="font-black">{job.company}｜{job.title}</div>
+                  <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
                   <span className="rounded-full bg-[#FFF0E5] px-2 py-1 text-[11px] font-black text-primary">待发简历</span>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-muted">HR 已请求简历，系统已准备定制化简历下载入口。</p>
@@ -846,7 +867,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               <div key={job.id} className="rounded-2xl border border-red-100 bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="font-black">{job.company}｜{job.title}</div>
+                    <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
                     <div className="mt-1 text-xs text-danger">最近失败原因：{job.last_error || '发送失败，等待重试'}</div>
                   </div>
                   <span className="rounded-full bg-red-50 px-2 py-1 text-[11px] font-black text-danger">发送失败</span>
@@ -881,7 +902,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               <div key={job.id} className="rounded-2xl border border-primary/20 bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="font-black">{job.company}｜{job.title}</div>
+                    <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
                     <div className="mt-1 text-xs text-primary">已生成招呼语，等待发送</div>
                   </div>
                   <span className="rounded-full bg-[#FFF0E5] px-2 py-1 text-[11px] font-black text-primary">待发送</span>
@@ -986,7 +1007,7 @@ function JobActionCard({ job, selected, onToggle, onDetail, onReject }: { job: J
     <div className={`rounded-2xl border p-4 ${selected ? 'border-primary bg-[#FFFCFA]' : 'border-card-border bg-[#FFFCFA]'}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="font-black">{job.company}｜{job.title}</div>
+          <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
           <div className="mt-1 text-xs text-muted">{jobSubtitle(job)}</div>
         </div>
         <input type="checkbox" checked={selected} onChange={onToggle} className="mt-1 h-4 w-4 accent-primary" />
@@ -1008,7 +1029,7 @@ function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void }) {
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <div className="text-xs font-black tracking-[0.18em] text-primary">岗位详情</div>
-            <h3 className="mt-1 text-2xl font-black">{job.company}｜{job.title}</h3>
+            <h3 className="mt-1 flex flex-wrap items-center gap-2 text-2xl font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></h3>
             <p className="mt-1 text-sm text-muted">{job.salary || '薪资未填'} · {job.city || '城市未填'} · {getStatusLabel(job.status)}</p>
           </div>
           <Button variant="secondary" size="sm" onClick={onClose}>关闭</Button>

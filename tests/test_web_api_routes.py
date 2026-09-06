@@ -58,6 +58,58 @@ class WebApiRouteTests(unittest.TestCase):
         # Cleanup
         server.set_base_dir(self.original_base_dir)
 
+    def test_outsourcing_rules_refresh_old_jobs_in_every_review_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, {**_job("outsourcing-review"), "company": "测试供应商"})
+                update_job_score(db, "outsourcing-review", 85, "synthetic score")
+                update_job_status(db, "outsourcing-review", "ready")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+            paths = {
+                "/api/jobs": lambda payload: payload[0],
+                "/api/jobs/search": lambda payload: payload["items"][0],
+                "/api/jobs/outsourcing-review": lambda payload: payload,
+                "/api/workbench": lambda payload: payload["pending_confirmation"][0],
+            }
+            versions = []
+            for enabled, expected in ((True, "confirmed"), (False, "clean")):
+                (base_dir / "config.yaml").write_text(yaml.safe_dump({
+                    "outsourcing_rules": {"companies_user": ["测试供应商"], "enabled": enabled},
+                }), encoding="utf-8")
+                for path, get_record in paths.items():
+                    with self.subTest(enabled=enabled, path=path):
+                        status, _, body = self._request(path)
+                        self.assertTrue(status.startswith("200"), body)
+                        record = get_record(json.loads(body))
+                        self.assertEqual(record["outsourcing_level"], expected)
+                        self.assertEqual(record["outsourcing_confirmed"], enabled)
+                        self.assertIsInstance(record["outsourcing_matches"], list)
+                        self.assertEqual(record["status"], "ready")
+                versions.append(record["outsourcing_rules_version"])
+            self.assertNotEqual(*versions)
+
+    def test_bad_outsourcing_json_cannot_break_job_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("malformed-outsourcing"))
+                server.set_base_dir(base_dir)
+                for raw in ("1", "null", "{}", '[{"keyword":{}}]'):
+                    db.execute("UPDATE jobs SET outsourcing_matches=?,outsourcing_layers=?", (raw, raw))
+                    db.commit()
+                    status, _, body = self._request("/api/jobs/malformed-outsourcing")
+                    self.assertTrue(status.startswith("200"), body)
+                    record = json.loads(body)
+                    self.assertEqual(record["outsourcing_matches"], [])
+                    self.assertEqual(record["outsourcing_layers"], [])
+            finally:
+                db.close()
+
     def _request(self, path: str, method: str = "GET", json_body: dict | None = None):
         if "?" in path:
             path_info, query_string = path.split("?", 1)
