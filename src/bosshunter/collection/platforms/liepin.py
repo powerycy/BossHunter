@@ -28,6 +28,7 @@ import json
 import random
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -60,9 +61,11 @@ _INTERNSHIP_TITLE_TERMS = ("实习", "intern", "internship", "管培")
 WAVE_SHORT_PROB = 0.60
 WAVE_MEDIUM_PROB = 0.85
 
-# Liepin uses 3-digit city codes passed via the ``dqs`` parameter. Only codes
+# Liepin city codes: municipalities use 3 digits, other cities 6 digits. Only codes
 # verified live are bundled; unknown cities are rejected instead of guessing.
-CITY_SNAPSHOT = (
+CITY_SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "data" / "liepin_cities.json"
+
+CITY_SNAPSHOT_FALLBACK = (
     {"name": "北京", "code": "010"},
     {"name": "上海", "code": "020"},
     {"name": "广州", "code": "050"},
@@ -85,19 +88,27 @@ CITY_SNAPSHOT = (
 
 
 def load_liepin_city_snapshot() -> dict[str, Any]:
+    try:
+        payload = json.loads(CITY_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        payload = {}
+    cities = payload.get("cities") if isinstance(payload, dict) and isinstance(payload.get("cities"), list) else []
+    if not cities:
+        cities = [dict(item) for item in CITY_SNAPSHOT_FALLBACK]
     return {
         "schema": "bosshunter.liepin_cities.v1",
-        "source": "verified_snapshot",
-        "note": "当前内置已核验的猎聘 3 位城市编码（dqs 参数）；其他城市需核验后再加入。",
-        "cities": [dict(item) for item in CITY_SNAPSHOT],
+        "source": str(payload.get("source") or "verified_snapshot") if isinstance(payload, dict) else "verified_snapshot",
+        "fetched_at": payload.get("fetched_at") if isinstance(payload, dict) else None,
+        "note": payload.get("note", "猎聘 3 位城市编码（dqs 参数）") if isinstance(payload, dict) else "猎聘 3 位城市编码（dqs 参数）",
+        "cities": cities,
     }
 
 
 def get_liepin_city_code(city: str) -> str | None:
     normalized = str(city or "").strip().removesuffix("市")
-    for item in CITY_SNAPSHOT:
-        if item["name"].removesuffix("市") == normalized:
-            return item["code"]
+    for item in load_liepin_city_snapshot()["cities"]:
+        if str(item.get("name", "")).removesuffix("市") == normalized:
+            return item.get("code")
     return None
 
 
@@ -352,7 +363,6 @@ class LiepinCollector:
                 if not self._navigate(hooks, target_id, search_url, "猎聘搜索页"):
                     return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "猎聘搜索页导航失败")
                 try:
-                    keyword_retriable_failure = False
                     for page in range(start_page, request.max_pages + 1):
                         if hooks.stop_event is not None and hooks.stop_event.is_set():
                             return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
@@ -380,10 +390,10 @@ class LiepinCollector:
                         if status == "empty":
                             break
                         if status == "waiting":
-                            keyword_retriable_failure = True
-                            hooks.on_event(phase="retry", keyword=keyword, city=city, page=page,
-                                           message="猎聘列表页渲染超时(waiting)，标记为可重试失败，不写词完成断点")
-                            break
+                            return PlatformCollectionResult(
+                                self.platform, "completed_with_shortage", "list_not_ready",
+                                "猎聘列表页渲染超时，保留上一完整页断点，下次重试",
+                            )
                         if status != "ready" or not isinstance(payload.get("jobs"), list):
                             return PlatformCollectionResult(self.platform, "blocked", "selector_changed", "猎聘列表页结构与预期不一致")
 
@@ -446,14 +456,23 @@ class LiepinCollector:
                             hooks.on_parse_failed("猎聘详情页JD不可用，仅保存列表信息")
                             if not hooks.on_candidate(candidate):
                                 return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")
-                        # 页级断点：只在页内无临时失败时记录，保留上一完整页供下次重试
-                        if not page_had_transient_failure and self.safety_conn is not None:
+                        # A later successful page cannot cover a gap in an
+                        # earlier page. Stop before advancing either checkpoint.
+                        if not hooks.can_checkpoint():
+                            return PlatformCollectionResult(
+                                self.platform, "failed", "save_failed",
+                                "猎聘岗位保存失败，保留上一完整页断点，下次重试",
+                            )
+                        if page_had_transient_failure:
+                            return PlatformCollectionResult(
+                                self.platform, "completed_with_shortage", "detail_unavailable",
+                                "猎聘详情页暂时不可用，保留上一完整页断点，下次重试",
+                            )
+                        if self.safety_conn is not None:
                             upsert_page_progress(self.safety_conn, "liepin", city, keyword, page)
                 finally:
                     self.browser.close_tab(target_id)
-                # 词结束：只在非可重试失败时标记词级断点 + 清页级断点
-                # waiting 超时等可重试失败不标记完成，下次采集会重新尝试该词
-                if not keyword_retriable_failure and self.safety_conn is not None:
+                if self.safety_conn is not None:
                     mark_combo_collected(self.safety_conn, "liepin", city, keyword)
                     delete_page_progress(self.safety_conn, "liepin", city, keyword)
         return PlatformCollectionResult(self.platform, "completed", "search_exhausted", "猎聘搜索结果已采集完毕")

@@ -351,6 +351,7 @@ class CollectionOrchestrator:
                     on_candidate=processor.save,
                     on_parse_failed=lambda reason, p=processor: self._parse_failed(p, reason),
                     on_event=lambda p=processor, **kwargs: p.event(**kwargs),
+                    can_checkpoint=lambda p=processor: p.progress.save_failed == 0,
                 )
                 try:
                     collector = (
