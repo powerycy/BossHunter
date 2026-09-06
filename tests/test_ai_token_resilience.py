@@ -335,7 +335,7 @@ class ScorerTokenResilienceTests(unittest.TestCase):
             patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
             patch("bosshunter.ai.scorer._call_claude", side_effect=[first, review]) as call_ai,
             patch("bosshunter.ai.scorer.update_job_quick_score"),
-            patch("bosshunter.ai.scorer.update_job_score") as update_score,
+            patch("bosshunter.ai.scorer.persist_job_score_and_trace") as persist_score,
             patch("bosshunter.ai.scorer.update_job_status"),
         ):
             scored, filtered = scorer.score_jobs(
@@ -347,8 +347,8 @@ class ScorerTokenResilienceTests(unittest.TestCase):
 
         self.assertEqual((scored, filtered), (1, 0))
         self.assertEqual(call_ai.call_count, 2)
-        self.assertEqual(update_score.call_args.args[2], 71)
-        self.assertIn("二次复核", update_score.call_args.args[3])
+        self.assertEqual(persist_score.call_args.args[2], 71)
+        self.assertIn("二次复核", persist_score.call_args.args[3])
 
     def test_ai_calls_run_with_configured_concurrency_but_db_writes_stay_on_main_thread(self):
         db = MagicMock()
@@ -740,6 +740,7 @@ class ScorerTokenResilienceTests(unittest.TestCase):
             patch("bosshunter.ai.scorer.update_job_quick_score"),
             patch("bosshunter.ai.scorer.update_job_score") as update_score,
             patch("bosshunter.ai.scorer.update_job_status") as update_status,
+            patch("bosshunter.ai.scorer.persist_job_score_and_trace") as persist_score,
         ):
             scored, filtered = scorer.score_jobs(
                 {
@@ -751,14 +752,52 @@ class ScorerTokenResilienceTests(unittest.TestCase):
 
         self.assertEqual((scored, filtered), (1, 0))
         self.assertEqual(call_ai.call_count, 3)
-        self.assertEqual(update_score.call_count, 2)
+        self.assertEqual(update_score.call_count, 1)
         self.assertEqual(
             update_score.call_args_list[0].args,
             (db, "1", 0, "AI评分失败: AI 未返回评分内容"),
         )
+        self.assertEqual(persist_score.call_count, 1)
+        self.assertEqual(persist_score.call_args.args[1], "2")
+        self.assertEqual(persist_score.call_args.args[2], 82)
         update_status.assert_called_once_with(db, "2", "ready")
         self.assertTrue(any("已跳过 公司 1｜AI 产品经理 1" in message for message in logs))
         self.assertEqual(checkpoints[-1]["status"], "completed_with_errors")
+
+    def test_deleted_job_mid_batch_is_skipped_and_batch_continues(self):
+        db = MagicMock()
+        jobs = [_job("1"), _job("2")]
+        checkpoints: list[dict] = []
+
+        with (
+            patch("bosshunter.ai.scorer.get_db", return_value=db),
+            patch("bosshunter.ai.scorer._load_resume", return_value="真实简历"),
+            patch("bosshunter.ai.scorer.get_jobs_by_status", return_value=jobs),
+            patch("bosshunter.ai.scorer.quick_score", return_value=(80, "通过")),
+            patch(
+                "bosshunter.ai.scorer._call_claude",
+                side_effect=[_score_response(82), _score_response(78)],
+            ),
+            patch("bosshunter.ai.scorer.update_job_quick_score"),
+            patch("bosshunter.ai.scorer.update_job_score"),
+            patch("bosshunter.ai.scorer.update_job_status") as update_status,
+            patch(
+                "bosshunter.ai.scorer.persist_job_score_and_trace",
+                side_effect=[ValueError("岗位不存在或已进入回收站，未保存评分追踪"), None],
+            ) as persist_score,
+        ):
+            scored, filtered = scorer.score_jobs(
+                {
+                    "scoring": {"threshold": 70},
+                    "_workbench_log": lambda message: None,
+                    "_workbench_score_checkpoint": checkpoints.append,
+                }
+            )
+
+        self.assertEqual((scored, filtered), (1, 0))
+        self.assertEqual(persist_score.call_count, 2)
+        update_status.assert_called_once_with(db, "2", "ready")
+        self.assertEqual(checkpoints[-1]["status"], "completed")
 
     def test_truncation_retry_empty_response_stays_job_level(self):
         db = MagicMock()
