@@ -119,6 +119,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_v1_2(conn)
     _migrate_v1_3(conn)
     _migrate_v1_4(conn)
+    _migrate_v1_5(conn)
     _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
     _init_collection_runs(conn)
@@ -497,6 +498,21 @@ def add_history(conn: sqlite3.Connection, job_id: str, action: str, detail: str 
     conn.commit()
 
 
+def update_job_last_error(
+    conn: sqlite3.Connection,
+    job_id: str,
+    error_detail: str,
+    error_code: str = "",
+) -> None:
+    """Persist the latest send-failure reason + code so lists can surface and classify it."""
+    conn.execute(
+        "UPDATE jobs SET last_error = ?, last_error_code = ?, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
+        (error_detail, error_code, job_id)
+    )
+    conn.commit()
+
+
 def get_jobs_by_status(conn: sqlite3.Connection, status: str) -> list[dict]:
     """Get all jobs with a given status."""
     rows = conn.execute(
@@ -634,6 +650,16 @@ def _migrate_v1_4(conn: sqlite3.Connection) -> None:
         WHERE recruitment_type IS NULL OR TRIM(recruitment_type) = '' OR recruitment_type = 'unknown'
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_recruitment_type ON jobs(recruitment_type)")
+    conn.commit()
+
+
+def _migrate_v1_5(conn: sqlite3.Connection) -> None:
+    """Add last_error columns to surface real failure reason and allow classification."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "last_error" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN last_error TEXT")
+    if "last_error_code" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN last_error_code TEXT")
     conn.commit()
 
 
