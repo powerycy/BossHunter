@@ -331,7 +331,11 @@ class LiepinCollector:
                                    message=f"猎聘 {keyword} 断点续采：{self._resume_ttl_hours()}h 内已完成，整词跳过")
                     continue
                 # 页级断点：从上次采到页码的下一页继续
-                saved_page = get_page_progress(self.safety_conn, "liepin", city, keyword) if self.safety_conn is not None else 0
+                saved_page = (
+                    get_page_progress(self.safety_conn, "liepin", city, keyword, within_hours=self._resume_ttl_hours())
+                    if self.safety_conn is not None
+                    else 0
+                )
                 start_page = saved_page + 1 if saved_page > 0 else 1
                 if start_page > request.max_pages:
                     if self.safety_conn is not None:
@@ -348,6 +352,7 @@ class LiepinCollector:
                 if not self._navigate(hooks, target_id, search_url, "猎聘搜索页"):
                     return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "猎聘搜索页导航失败")
                 try:
+                    keyword_retriable_failure = False
                     for page in range(start_page, request.max_pages + 1):
                         if hooks.stop_event is not None and hooks.stop_event.is_set():
                             return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
@@ -372,11 +377,17 @@ class LiepinCollector:
                                 return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                         if status == "blocked":
                             return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "猎聘出现验证或限流信号，已停止整个平台任务")
-                        if status in {"empty", "waiting"}:
+                        if status == "empty":
+                            break
+                        if status == "waiting":
+                            keyword_retriable_failure = True
+                            hooks.on_event(phase="retry", keyword=keyword, city=city, page=page,
+                                           message="猎聘列表页渲染超时(waiting)，标记为可重试失败，不写词完成断点")
                             break
                         if status != "ready" or not isinstance(payload.get("jobs"), list):
                             return PlatformCollectionResult(self.platform, "blocked", "selector_changed", "猎聘列表页结构与预期不一致")
 
+                        page_had_transient_failure = False
                         for raw_item in payload["jobs"]:
                             candidate = self._candidate_from_list(raw_item, city, keyword)
                             if candidate is None:
@@ -394,10 +405,12 @@ class LiepinCollector:
                             detail_target = self.browser.new_tab(detail_initial_url, background=True)
                             if not detail_target:
                                 hooks.on_parse_failed("无法打开猎聘详情页")
+                                page_had_transient_failure = True
                                 continue
                             if not self._navigate(hooks, detail_target, candidate.url, "猎聘详情页"):
                                 self.browser.close_tab(detail_target)
                                 hooks.on_parse_failed("猎聘详情页导航失败")
+                                page_had_transient_failure = True
                                 continue
                             try:
                                 self.browser.wait_for_load(detail_target, timeout=15)
@@ -433,13 +446,14 @@ class LiepinCollector:
                             hooks.on_parse_failed("猎聘详情页JD不可用，仅保存列表信息")
                             if not hooks.on_candidate(candidate):
                                 return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")
-                        # 页级断点：每采完一页立即记录页码
-                        if self.safety_conn is not None:
+                        # 页级断点：只在页内无临时失败时记录，保留上一完整页供下次重试
+                        if not page_had_transient_failure and self.safety_conn is not None:
                             upsert_page_progress(self.safety_conn, "liepin", city, keyword, page)
                 finally:
                     self.browser.close_tab(target_id)
-                # 词结束：标记词级断点 + 清页级断点
-                if self.safety_conn is not None:
+                # 词结束：只在非可重试失败时标记词级断点 + 清页级断点
+                # waiting 超时等可重试失败不标记完成，下次采集会重新尝试该词
+                if not keyword_retriable_failure and self.safety_conn is not None:
                     mark_combo_collected(self.safety_conn, "liepin", city, keyword)
                     delete_page_progress(self.safety_conn, "liepin", city, keyword)
         return PlatformCollectionResult(self.platform, "completed", "search_exhausted", "猎聘搜索结果已采集完毕")
