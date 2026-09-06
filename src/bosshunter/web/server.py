@@ -49,6 +49,8 @@ from bosshunter.db import (
 	permanent_delete_jobs,
 	query_jobs,
 	restore_jobs,
+	serialize_job,
+	recompute_outsourcing,
 	soft_delete_jobs,
 	update_job_status,
 )
@@ -134,7 +136,15 @@ def set_base_dir(base_dir: Path | str) -> None:
 
 def _get_web_db():
 	"""Open the dashboard database from the resolved runtime data directory."""
-	return get_db(DATA_DIR / "bosshunter.db")
+	from bosshunter.outsourcing import load_rules
+
+	db = get_db(DATA_DIR / "bosshunter.db")
+	try:
+		recompute_outsourcing(db, load_rules(load_config(CONFIG_PATH)))
+		return db
+	except Exception:
+		db.close()
+		raise
 
 
 def _json_response(data, status_code=200):
@@ -901,7 +911,7 @@ def api_jobs():
 	try:
 		jobs, total = query_jobs(db, deleted=deleted, limit=limit, offset=offset)
 		response.headers["X-Total-Count"] = str(total)
-		return _json_response(jobs)
+		return _json_response([serialize_job(job) for job in jobs])
 	finally:
 		db.close()
 
@@ -1049,7 +1059,7 @@ def api_job_search():
 			rows = filtered_rows
 		total = len(rows)
 		return _json_response({
-			"items": rows[offset:offset + limit],
+			"items": [serialize_job(row) for row in rows[offset:offset + limit]],
 			"total": total,
 			"all_total": all_total,
 			"limit": limit,
@@ -1223,20 +1233,20 @@ def api_workbench():
 			"funnel": get_funnel_stats(db),
 			"funnel_today": get_funnel_stats(db, today=True),
 			"pending_confirmation": [
-				job for job in get_jobs_pending_confirmation(db)
+				serialize_job(job) for job in get_jobs_pending_confirmation(db)
 				if int(job.get("score") or 0) >= threshold
 				and platform_supports(str(job.get("source_platform") or "boss"), "deliver")
 			],
 			"pending_greetings": [
-				job for job in get_jobs_ready_to_send(db)
+				serialize_job(job) for job in get_jobs_ready_to_send(db)
 				if platform_supports(str(job.get("source_platform") or "boss"), "deliver")
 			],
 			"send_errors": [
-				job for job in get_jobs_with_send_errors(db)
+				serialize_job(job) for job in get_jobs_with_send_errors(db)
 				if platform_supports(str(job.get("source_platform") or "boss"), "deliver")
 			],
 			"needs_resume": [
-				job for job in get_jobs_needing_resume(db)
+				serialize_job(job) for job in get_jobs_needing_resume(db)
 				if platform_supports(str(job.get("source_platform") or "boss"), "deliver")
 			],
 			"send_quota": {
@@ -1749,7 +1759,7 @@ def api_job_detail(job_id):
 		row = db.execute("SELECT * FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)).fetchone()
 		if not row:
 			return _json_response({"error": "岗位不存在"}, 404)
-		return _json_response(dict(row))
+		return _json_response(serialize_job(dict(row)))
 	finally:
 		db.close()
 

@@ -101,10 +101,10 @@ class CollectionOrchestratorTests(TestCase):
             config = {"profile": {"deal_breakers": ["黑名单词"]}}
             real_insert = __import__("bosshunter.db", fromlist=["insert_job_if_new"]).insert_job_if_new
 
-            def insert(record_conn, record):
+            def insert(record_conn, record, **kwargs):
                 if record.get("source_job_id") == "save-fail":
                     raise RuntimeError("fixture save failure")
-                return real_insert(record_conn, record)
+                return real_insert(record_conn, record, **kwargs)
 
             with patch("bosshunter.collection.orchestrator.insert_job_if_new", side_effect=insert):
                 result = CollectionOrchestrator(config, db_path=db_path, registry=registry).run(

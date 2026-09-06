@@ -1,3 +1,4 @@
+import { OutsourcingBadge } from '@/components/jobs/OutsourcingBadge'
 import { useEffect, useMemo, useState } from 'react'
 import { useDashboard, type CollectionProgress, type HistoryItem, type Job, type WorkbenchTask } from '@/hooks/useDashboard'
 import { useJobSearch, type JobSortKey, type JobSortOrder } from '@/hooks/useJobSearch'
@@ -833,7 +834,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             {workbench.needs_resume.slice(0, 4).map(job => (
               <div key={job.id} className="rounded-2xl border border-card-border bg-[#FFFCFA] p-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="font-black">{job.company}｜{job.title}</div>
+                  <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
                   <span className="rounded-full bg-[#FFF0E5] px-2 py-1 text-[11px] font-black text-primary">待发简历</span>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-muted">HR 已请求简历，系统已准备定制化简历下载入口。</p>
@@ -866,7 +867,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               <div key={job.id} className="rounded-2xl border border-red-100 bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="font-black">{job.company}｜{job.title}</div>
+                    <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
                     <div className="mt-1 text-xs text-danger">最近失败原因：{job.last_error || '发送失败，等待重试'}</div>
                   </div>
                   <span className="rounded-full bg-red-50 px-2 py-1 text-[11px] font-black text-danger">发送失败</span>
@@ -901,7 +902,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               <div key={job.id} className="rounded-2xl border border-primary/20 bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="font-black">{job.company}｜{job.title}</div>
+                    <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
                     <div className="mt-1 text-xs text-primary">已生成招呼语，等待发送</div>
                   </div>
                   <span className="rounded-full bg-[#FFF0E5] px-2 py-1 text-[11px] font-black text-primary">待发送</span>
@@ -1006,7 +1007,7 @@ function JobActionCard({ job, selected, onToggle, onDetail, onReject }: { job: J
     <div className={`rounded-2xl border p-4 ${selected ? 'border-primary bg-[#FFFCFA]' : 'border-card-border bg-[#FFFCFA]'}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="font-black">{job.company}｜{job.title}</div>
+          <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
           <div className="mt-1 text-xs text-muted">{jobSubtitle(job)}</div>
         </div>
         <input type="checkbox" checked={selected} onChange={onToggle} className="mt-1 h-4 w-4 accent-primary" />
@@ -1028,7 +1029,7 @@ function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void }) {
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <div className="text-xs font-black tracking-[0.18em] text-primary">岗位详情</div>
-            <h3 className="mt-1 text-2xl font-black">{job.company}｜{job.title}</h3>
+            <h3 className="mt-1 flex flex-wrap items-center gap-2 text-2xl font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></h3>
             <p className="mt-1 text-sm text-muted">{job.salary || '薪资未填'} · {job.city || '城市未填'} · {getStatusLabel(job.status)}</p>
           </div>
           <Button variant="secondary" size="sm" onClick={onClose}>关闭</Button>

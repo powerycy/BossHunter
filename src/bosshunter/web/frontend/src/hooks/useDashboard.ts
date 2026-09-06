@@ -40,6 +40,10 @@ interface Job {
   deleted_reason?: string | null
   resume_path?: string
   last_error?: string
+  outsourcing_level?: 'clean' | 'suspected' | 'confirmed'
+  outsourcing_confirmed?: boolean
+  outsourcing_matches?: string[] | null
+  outsourcing_updated_at?: string | null
 }
 
 interface TopCompany {

@@ -6,6 +6,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from bosshunter.outsourcing import (
+    OUTSOURCING_COMPANIES,
+    OUTSOURCING_KEYWORDS_HARD,
+    OUTSOURCING_KEYWORDS_SOFT,
+    Rules,
+    compute_outsourcing_columns,
+    parse_persisted_columns,
+    rules_version,
+)
+
 
 DB_PATH = Path("./data/bosshunter.db")
 MAX_JOB_IDS = 1000
@@ -14,6 +24,43 @@ DELETION_PROTECTED_HISTORY_ACTIONS = {
     "sent", "manual_sent", "replied", "resume_sent", "needs_resume", "follow_up_sent", "reply_pending", "auto_replied",
 }
 EXTERNAL_MANUAL_SEND_PLATFORMS = {"zhilian", "51job"}
+
+
+def _default_outsourcing_rules() -> Rules:
+    """Built-in default rules used when callers don't pass one.
+
+    Mirrors the built-in vendor registry / keyword lists so the migration
+    backfill and ad-hoc insert paths still detect outsourcing signals
+    without depending on the config loader.
+    """
+    return Rules(
+        enabled=True,
+        companies=OUTSOURCING_COMPANIES,
+        keywords_hard=OUTSOURCING_KEYWORDS_HARD,
+        keywords_soft=OUTSOURCING_KEYWORDS_SOFT,
+        detect_structural=True,
+        use_reply_history=False,
+        use_user_marks=True,
+        forward_propagate_n=2,
+    )
+
+
+def serialize_job(row: dict[str, Any]) -> dict[str, Any]:
+    """Hydrate persisted outsourcing JSON columns into typed fields.
+
+    Callers usually select with ``SELECT *`` and ship rows to the frontend
+    as-is; this helper rewrites the four outsourcing columns into the
+    shape :func:`parse_persisted_columns` returns so the frontend can
+    read ``outsourcing_level`` / ``outsourcing_matches`` directly without
+    parsing JSON itself.
+    """
+    parsed = parse_persisted_columns(row)
+    row["outsourcing_level"] = parsed["outsourcing_level"]
+    row["outsourcing_confirmed"] = parsed["outsourcing_confirmed"]
+    row["outsourcing_matches"] = parsed["outsourcing_matches"]
+    row["outsourcing_layers"] = parsed["outsourcing_layers"]
+    row["outsourcing_updated_at"] = parsed["outsourcing_updated_at"]
+    return row
 
 
 class JobDeletionConfirmationError(ValueError):
@@ -120,6 +167,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_v1_3(conn)
     _migrate_v1_4(conn)
     _migrate_v1_5(conn)
+    _migrate_outsourcing(conn)
     _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
     _init_collection_runs(conn)
@@ -414,8 +462,20 @@ def permanent_delete_jobs(
     return {"requested_count": len(ids), "affected_count": len(ids)}
 
 
-def insert_job_if_new(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
-    """Insert a job atomically and return True only when a row was inserted."""
+def insert_job_if_new(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    *,
+    rules: Rules | None = None,
+) -> bool:
+    """Insert a job atomically and return True only when a row was inserted.
+
+    When ``rules`` is provided, the outsourcing detection columns are
+    computed from the job and written alongside the row. When omitted, the
+    built-in defaults are used so ad-hoc inserts (tests, replays) keep the
+    table consistent without forcing every caller to plumb a Rules
+    instance.
+    """
     values = {
         "id": str(job.get("id") or ""),
         "title": str(job.get("title") or ""),
@@ -441,16 +501,29 @@ def insert_job_if_new(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
         "source_keyword": job.get("source_keyword", ""),
         "source_city_code": job.get("source_city_code", ""),
     }
+    os_columns = compute_outsourcing_columns(values, rules or _default_outsourcing_rules())
+    values.update({
+        "outsourcing_level": os_columns["outsourcing_level"],
+        "outsourcing_confirmed": os_columns["outsourcing_confirmed"],
+        "outsourcing_matches": os_columns["outsourcing_matches"],
+        "outsourcing_layers": os_columns["outsourcing_layers"],
+        "outsourcing_updated_at": os_columns["outsourcing_updated_at"],
+        "outsourcing_rules_version": os_columns["outsourcing_rules_version"],
+    })
     cursor = conn.execute(
         """
         INSERT OR IGNORE INTO jobs (
             id, title, company, salary, city, experience, education, recruitment_type, jd,
             hr_name, hr_title, hr_active, company_size, company_industry, url,
-            source_platform, source_job_id, source_keyword, source_city_code
+            source_platform, source_job_id, source_keyword, source_city_code,
+            outsourcing_level, outsourcing_confirmed, outsourcing_matches,
+            outsourcing_layers, outsourcing_updated_at, outsourcing_rules_version
         ) VALUES (
             :id, :title, :company, :salary, :city, :experience, :education, :recruitment_type, :jd,
             :hr_name, :hr_title, :hr_active, :company_size, :company_industry, :url,
-            :source_platform, :source_job_id, :source_keyword, :source_city_code
+            :source_platform, :source_job_id, :source_keyword, :source_city_code,
+            :outsourcing_level, :outsourcing_confirmed, :outsourcing_matches,
+            :outsourcing_layers, :outsourcing_updated_at, :outsourcing_rules_version
         )
         """,
         values,
@@ -459,9 +532,14 @@ def insert_job_if_new(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
     return cursor.rowcount == 1
 
 
-def insert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
+def insert_job(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    *,
+    rules: Rules | None = None,
+) -> bool:
     """Backward-compatible insert entry point; returns whether it was new."""
-    return insert_job_if_new(conn, job)
+    return insert_job_if_new(conn, job, rules=rules)
 
 
 def update_job_score(conn: sqlite3.Connection, job_id: str, score: int, reason: str) -> None:
@@ -698,13 +776,69 @@ def _migrate_v1_4(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v1_5(conn: sqlite3.Connection) -> None:
-    """Add last_error columns to surface real failure reason and allow classification."""
+    """Keep main's failure-reporting migration independent of outsourcing."""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
     if "last_error" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN last_error TEXT")
     if "last_error_code" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN last_error_code TEXT")
     conn.commit()
+
+
+def _migrate_outsourcing(conn: sqlite3.Connection) -> None:
+    """Add outsourcing columns, independently of main's numbered migrations.
+
+    First-time backfill uses defaults. Config-aware collection and display
+    entry points refresh all rows with their current rules before use.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    additions = {
+        "outsourcing_level": "TEXT DEFAULT 'clean'",
+        "outsourcing_confirmed": "INTEGER DEFAULT 0",
+        "outsourcing_matches": "TEXT",
+        "outsourcing_layers": "TEXT",
+        "outsourcing_updated_at": "TIMESTAMP",
+        "outsourcing_rules_version": "TEXT",
+    }
+    for name, definition in additions.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_outsourcing_level ON jobs(outsourcing_level)")
+    conn.commit()
+    if additions.keys() - cols:
+        recompute_outsourcing(conn, _default_outsourcing_rules())
+
+
+def recompute_outsourcing(conn: sqlite3.Connection, rules: Rules) -> int:
+    """Atomically refresh existing rows using the same rules as new inserts.
+
+    All rows, including recycled ones, use current configuration. Only
+    outdated rule versions or invalid timestamps need computation. Repeated
+    reads preserve timestamps and never change workflow/history data.
+    """
+    changed = 0
+    with conn:
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE outsourcing_rules_version IS NOT ? "
+            "OR datetime(outsourcing_updated_at) IS NULL",
+            (rules_version(rules),),
+        ).fetchall()
+        for row in rows:
+            data = compute_outsourcing_columns(dict(row), rules)
+            conn.execute(
+                """
+                UPDATE jobs SET outsourcing_level = :outsourcing_level,
+                    outsourcing_confirmed = :outsourcing_confirmed,
+                    outsourcing_matches = :outsourcing_matches,
+                    outsourcing_layers = :outsourcing_layers,
+                    outsourcing_updated_at = :outsourcing_updated_at,
+                    outsourcing_rules_version = :outsourcing_rules_version
+                WHERE id = :id
+                """,
+                {**data, "id": row["id"]},
+            )
+            changed += 1
+    return changed
 
 
 def _migrate_platform_access_events(conn: sqlite3.Connection) -> None:
