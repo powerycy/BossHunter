@@ -1,53 +1,54 @@
-# The project owner governs only the two contribution records and decides
-# maintenance contribution scores. Do not request technical reviews from them.
+# The project owner governs the two contribution records and their scores,
+# and also participates in the formal technical maintainer review pool.
 /CONTRIBUTORS.md @powerycy
 /MAINTENANCE_CONTRIBUTIONS.md @powerycy
 
 # README, including display-only contribution summaries, is maintained by the
 # formal maintainers. Copy published scores; do not rescore in README changes.
-/README.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/README.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
 
 # CODEOWNERS lists eligible reviewers. Governance requires two different
 # non-author maintainers for high-risk changes; enforce that count with branch
 # protection, a Ruleset, or an equivalent blocking check.
-# Replace individual owners with visible organization teams after those teams
-# exist and have Write access.
+# Rulesets additionally require approvals from the organization team
+# @shengjidaguai-china/bosshunter-maintainers. Keep its active membership
+# aligned with this pool; repository permissions do not imply team membership.
 
 # Current formal maintainer review pool.
-/GOVERNANCE.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/MAINTAINERS.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/CONTRIBUTING.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/.github/CODEOWNERS @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/.github/PUBLISH_CHECKLIST.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/.github/workflows/ @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/GOVERNANCE.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/MAINTAINERS.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/CONTRIBUTING.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/.github/CODEOWNERS @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/.github/PUBLISH_CHECKLIST.md @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/.github/workflows/ @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
 
 # Core and safety: delivery, browser control, credentials, data, and releases.
-/src/bosshunter/executor/ @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/browser/ @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/throttle.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/platform_safety.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/collection/capabilities.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/config.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/db.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/main.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/pipeline.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/cancellation.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/collection_run_store.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/scoring_run_store.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/ai/credentials.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/ai/scorer.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/ai/greeter.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/ai/resume.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/web/server.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/web/tasks.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/web/preflight.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/web/resume_upload.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/web/config_schema.json @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/ui/confirm.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/config.example.yaml @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/pyproject.toml @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/web/frontend/package.json @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
-/src/bosshunter/web/frontend/package-lock.json @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604
+/src/bosshunter/executor/ @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/browser/ @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/throttle.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/platform_safety.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/collection/capabilities.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/config.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/db.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/main.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/pipeline.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/cancellation.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/collection_run_store.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/scoring_run_store.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/ai/credentials.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/ai/scorer.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/ai/greeter.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/ai/resume.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/web/server.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/web/tasks.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/web/preflight.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/web/resume_upload.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/web/config_schema.json @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/ui/confirm.py @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/config.example.yaml @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/pyproject.toml @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/web/frontend/package.json @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
+/src/bosshunter/web/frontend/package-lock.json @yuppiez99999 @yukinoshi @fengziliang43-cmyk @bianshilong0604 @powerycy
 
 # Ordinary paths intentionally have no required Code Owner. Any formal
 # maintainer may review them after PR + CI under the governance approval rule.
