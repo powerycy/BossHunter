@@ -986,7 +986,7 @@ def get_recent_history(conn: sqlite3.Connection, limit: int = 10) -> list[dict]:
                       SELECT 1
                       FROM history r
                       WHERE r.job_id = h.job_id
-                        AND r.action IN ('needs_resume', 'resume_sent')
+                        AND r.action IN ('needs_resume', 'resume_sent', 'resume_failed_dismissed')
                         AND r.id > h.id
                     )
                   )
@@ -1086,7 +1086,7 @@ def get_unresolved_resume_failures(conn: sqlite3.Connection) -> list[dict]:
             SELECT 1
             FROM history r
             WHERE r.job_id = h.job_id
-              AND r.action IN ('needs_resume', 'resume_sent')
+              AND r.action IN ('needs_resume', 'resume_sent', 'resume_failed_dismissed')
               AND r.id > h.id
           )
         ORDER BY h.created_at DESC, h.id DESC

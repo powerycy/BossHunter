@@ -18,6 +18,7 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from bosshunter.db import (
     add_history,
     get_db,
+    get_unresolved_resume_failures,
     insert_job,
     update_job_greeting,
     update_job_score,
@@ -2547,6 +2548,120 @@ class WebApiRouteTests(unittest.TestCase):
             self.assertEqual(paused_calls[1].kwargs.get("error"), None)
             self.assertEqual(task.error, ai_pause)
             self.assertTrue(task.stop_requested.is_set())
+
+    def test_web_api_resume_retry_success_marks_needs_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("resume-retry-ok"))
+                add_history(db, "resume-retry-ok", "resume_failed", json.dumps({"schema": "resume_failed.v2", "system_reason": "fail"}))
+                history_id = db.execute(
+                    "SELECT id FROM history WHERE job_id = ? AND action = ?",
+                    ("resume-retry-ok", "resume_failed"),
+                ).fetchone()["id"]
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+            fake_resume = base_dir / "data" / "resumes" / "retry.pdf"
+            fake_resume.parent.mkdir(parents=True, exist_ok=True)
+            fake_resume.write_text("pdf", encoding="utf-8")
+            with patch("bosshunter.ai.resume.generate_tailored_resume", return_value=fake_resume):
+                status, _, body = self._request(f"/api/history/{history_id}/resume-retry", method="POST", json_body={})
+            self.assertTrue(status.startswith("200"), body)
+            payload = json.loads(body)
+            self.assertTrue(payload["success"])
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                job_status = verify_db.execute("SELECT status FROM jobs WHERE id = ?", ("resume-retry-ok",)).fetchone()["status"]
+                actions = [row["action"] for row in verify_db.execute("SELECT action FROM history WHERE job_id = ?", ("resume-retry-ok",)).fetchall()]
+            finally:
+                verify_db.close()
+            self.assertEqual(job_status, "needs_resume")
+            self.assertIn("needs_resume", actions)
+
+    def test_web_api_resume_retry_does_not_overwrite_replied_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("resume-retry-replied"))
+                update_job_status(db, "resume-retry-replied", "replied")
+                add_history(db, "resume-retry-replied", "resume_failed", json.dumps({"schema": "resume_failed.v2", "system_reason": "fail"}))
+                history_id = db.execute(
+                    "SELECT id FROM history WHERE job_id = ? AND action = ?",
+                    ("resume-retry-replied", "resume_failed"),
+                ).fetchone()["id"]
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+            fake_resume = base_dir / "data" / "resumes" / "retry.pdf"
+            fake_resume.parent.mkdir(parents=True, exist_ok=True)
+            fake_resume.write_text("pdf", encoding="utf-8")
+            with patch("bosshunter.ai.resume.generate_tailored_resume", return_value=fake_resume):
+                status, _, body = self._request(f"/api/history/{history_id}/resume-retry", method="POST", json_body={})
+            self.assertTrue(status.startswith("200"), body)
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                job_status = verify_db.execute("SELECT status FROM jobs WHERE id = ?", ("resume-retry-replied",)).fetchone()["status"]
+            finally:
+                verify_db.close()
+            self.assertEqual(job_status, "replied")
+
+    def test_web_api_resume_retry_failure_writes_resume_failed_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("resume-retry-fail"))
+                add_history(db, "resume-retry-fail", "resume_failed", json.dumps({"schema": "resume_failed.v2", "system_reason": "old"}))
+                history_id = db.execute(
+                    "SELECT id FROM history WHERE job_id = ? AND action = ?",
+                    ("resume-retry-fail", "resume_failed"),
+                ).fetchone()["id"]
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+            with patch("bosshunter.ai.resume.generate_tailored_resume", return_value=None), patch(
+                "bosshunter.ai.resume.get_last_resume_failure_reason", return_value="test failure"
+            ):
+                status, _, body = self._request(f"/api/history/{history_id}/resume-retry", method="POST", json_body={})
+            self.assertTrue(status.startswith("400"), body)
+            self.assertIn("test failure", body)
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                failed_count = verify_db.execute(
+                    "SELECT COUNT(*) AS cnt FROM history WHERE job_id = ? AND action = ?",
+                    ("resume-retry-fail", "resume_failed"),
+                ).fetchone()["cnt"]
+            finally:
+                verify_db.close()
+            self.assertGreaterEqual(failed_count, 2)
+
+    def test_web_api_resume_dismiss_removes_failure_from_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("resume-dismiss-test"))
+                add_history(db, "resume-dismiss-test", "resume_failed", json.dumps({"schema": "resume_failed.v2", "system_reason": "fail"}))
+                history_id = db.execute(
+                    "SELECT id FROM history WHERE job_id = ? AND action = ?",
+                    ("resume-dismiss-test", "resume_failed"),
+                ).fetchone()["id"]
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+            status, _, body = self._request(f"/api/history/{history_id}/resume-dismiss", method="POST", json_body={})
+            self.assertTrue(status.startswith("200"), body)
+            verify_db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                actions = [row["action"] for row in verify_db.execute("SELECT action FROM history WHERE job_id = ? ORDER BY id", ("resume-dismiss-test",)).fetchall()]
+                unresolved = get_unresolved_resume_failures(verify_db)
+            finally:
+                verify_db.close()
+            self.assertIn("resume_failed_dismissed", actions)
+            self.assertNotIn("resume-dismiss-test", [row["job_id"] for row in unresolved])
 
     def test_outreach_resume_can_be_read_and_explicitly_reviewed(self):
         with tempfile.TemporaryDirectory() as tmp:
