@@ -12,6 +12,8 @@ profile:
   target_cities: ["北京"]
   salary_min: 15  # K
   salary_max: 25  # K
+  salary_ceil_ratio: 1.5  # 岗位薪资下限超过 salary_max × 该倍数时过滤
+  filter_unparsed_salary: true  # 过滤面议或无法解析薪资的岗位
   allow_internship: false
   deal_breakers: ["外包", "996"]
   jd_deal_breakers: []  # 示例：需要排除完整 JD 中的词时再填写
