@@ -56,6 +56,7 @@ from bosshunter.collection.capabilities import platform_supports
 from bosshunter.collection.orchestrator import CollectionOrchestrator, normalize_collection_options
 from bosshunter.collection.platforms.zhilian import load_zhilian_city_snapshot
 from bosshunter.collection.platforms.job51 import load_51job_city_snapshot
+from bosshunter.collection.platforms.liepin import load_liepin_city_snapshot
 from bosshunter.collection_run_store import (
 	get_collection_run,
 	list_collection_runs,
@@ -999,7 +1000,7 @@ def api_job_search():
 		params.append(status_filter)
 	source_platform = request.params.get("source_platform", "").strip()
 	if source_platform:
-		if source_platform not in {"boss", "zhilian", "51job"}:
+		if source_platform not in {"boss", "zhilian", "51job", "liepin"}:
 			return _json_response({"error": "source_platform 参数无效"}, 400)
 		conditions.append("COALESCE(source_platform, 'boss') = ?")
 		params.append(source_platform)
@@ -1507,7 +1508,7 @@ def api_workbench_task_start():
 					"enabled": platform in selected_platforms,
 					"search": value,
 				}
-			for platform in ("boss", "zhilian", "51job"):
+			for platform in ("boss", "zhilian", "51job", "liepin"):
 				if platform not in selected_platforms and isinstance(platform_configs.get(platform), dict):
 					platform_configs[platform]["enabled"] = False
 			base_config["platforms"] = platform_configs
@@ -2125,6 +2126,15 @@ def api_city_snapshot():
 			"note": snapshot.get("note", ""),
 			"cities": snapshot["cities"],
 		})
+	if platform == "liepin":
+		snapshot = load_liepin_city_snapshot()
+		return _json_response({
+			"ok": True,
+			"source": snapshot["source"],
+			"count": len(snapshot["cities"]),
+			"note": snapshot.get("note", ""),
+			"cities": snapshot["cities"],
+		})
 	try:
 		snapshot = load_city_snapshot(BASE_DIR)
 		return _json_response({
@@ -2147,8 +2157,8 @@ def api_city_snapshot():
 @app.route("/api/cities/refresh", method="POST")
 def api_city_refresh():
 	platform = request.params.get("platform", "").strip().lower()
-	if platform in {"zhilian", "51job"}:
-		label = "智联" if platform == "zhilian" else "51job"
+	if platform in {"zhilian", "51job", "liepin"}:
+		label = "智联" if platform == "zhilian" else "51job" if platform == "51job" else "猎聘"
 		return _json_response({
 			"ok": False,
 			"source": "local",

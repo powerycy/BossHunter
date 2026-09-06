@@ -10,7 +10,7 @@
 |---|---|---|
 | `profile` | `resume_path`, `salary_min/max`, `deal_breakers` | 简历、期望薪资与排除条件 |
 | `search` | `keywords`, `cities`, `max_pages` | 默认搜索策略 |
-| `platforms` | `boss`, `zhilian`, `51job` | 各平台开关与独立搜索条件 |
+| `platforms` | `boss`, `zhilian`, `51job`, `liepin` | 各平台开关与独立搜索条件 |
 | `collection` | `daily_search_page_limit`, `risk_pause_*` | 采集额度与风险暂停策略 |
 | `scoring` | `threshold`, `max_candidates` | 评分阈值与候选数量 |
 | `throttle` | `daily_limit`, `interval_min/max`, `send_windows` | 低频发送策略 |
@@ -26,6 +26,7 @@
 - BOSS 直聘：支持采集、AI 处理，以及人工确认后的低频发送和回复监听。
 - 智联招聘：支持只读采集和 AI 处理，不进入自动发送、简历发送或监听。
 - 前程无忧 51job：支持只读采集和 AI 处理，不进入自动发送、简历发送或监听。
+- 猎聘：支持只读采集和 AI 处理，不进入自动发送、简历发送或监听。
 
 外部只读平台应通过岗位池打开经域名校验的原平台链接，人工投递后再标记“已发送”。
 
