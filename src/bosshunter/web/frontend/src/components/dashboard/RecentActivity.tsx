@@ -12,6 +12,8 @@ const ACTION_LABELS: Record<string, string> = {
   sent: '发送',
   manual_sent: '手动已发送',
   replied: '回复',
+  hr_reply_detected: 'HR 消息',
+  auto_replied: '自动回复',
   error: '错误',
   approved: '确认',
   filtered: '过滤',

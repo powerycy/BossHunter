@@ -8,9 +8,7 @@ Serves:
 import json
 import math
 import mimetypes
-import os
 import random
-import tempfile
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -26,7 +24,7 @@ from bosshunter import __version__
 from bosshunter.ai.credentials import get_ai_api_key
 from bosshunter.ai.scorer import sanitize_score_trace
 from bosshunter.cities import CityRefreshError, get_city_map, load_city_snapshot, refresh_city_cache
-from bosshunter.config import AI_SERVICE_PRESETS, load_config, remove_retired_collection_settings
+from bosshunter.config import AI_SERVICE_PRESETS, load_config, remove_retired_collection_settings, save_config
 from bosshunter.db import (
 	JobDeletionConflictError,
 	JobManualSentConflictError,
@@ -41,7 +39,9 @@ from bosshunter.db import (
 	get_jobs_ready_to_send,
 	get_jobs_with_send_errors,
 	get_recent_history,
+	get_recent_monitor_replies,
 	get_score_trace,
+	get_unresolved_reply_pending,
 	get_unresolved_resume_failures,
 	get_stats,
 	get_top_companies,
@@ -196,30 +196,8 @@ def _config_download_payload(config: dict) -> str:
 
 
 def _write_config(config: dict) -> None:
-	"""Atomically replace config.yaml so an interrupted write cannot corrupt it."""
-	CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-	temporary_path = None
-	try:
-		with tempfile.NamedTemporaryFile(
-			"w",
-			encoding="utf-8",
-			dir=CONFIG_PATH.parent,
-			prefix=f".{CONFIG_PATH.name}.",
-			suffix=".tmp",
-			delete=False,
-		) as temporary:
-			temporary_path = Path(temporary.name)
-			yaml.dump(config, temporary, allow_unicode=True, default_flow_style=False, sort_keys=False)
-			temporary.flush()
-			os.fsync(temporary.fileno())
-		os.replace(temporary_path, CONFIG_PATH)
-		temporary_path = None
-	finally:
-		if temporary_path is not None:
-			try:
-				temporary_path.unlink()
-			except FileNotFoundError:
-				pass
+	"""Persist public settings separately from local AI credentials."""
+	save_config(config, CONFIG_PATH)
 
 
 def _sanitize_config_for_write(data):
@@ -438,16 +416,22 @@ def _execute_score(task: WorkbenchTask, config: dict) -> None:
 	def checkpoint(state: dict) -> None:
 		remaining = [str(job_id) for job_id in state.get("remaining_job_ids", []) if str(job_id)]
 		status = str(state.get("status") or "running")
+		pause_reason = str(state.get("pause_reason") or "") if status == "paused" else None
+		# AI 失败暂停时同步写入 error 列与 task.error，前端任务列表才能看到真实原因（issue #100）。
+		error = str(state.get("error") or "") if status == "paused" else None
 		update_scoring_run(
 			db_path,
 			run_id,
 			status=status,
 			remaining_job_ids=remaining,
 			progress={**task.metrics, "remaining": len(remaining)},
-			pause_reason=str(state.get("pause_reason") or "") if status == "paused" else None,
+			pause_reason=pause_reason,
+			error=error or None,
 		)
 		if status == "paused":
 			task.stop_reason = str(state.get("pause_reason") or "评分任务已暂停")
+			if error:
+				task.error = error
 			task.stop_requested.set()
 
 	score_config = dict(config)
@@ -517,6 +501,8 @@ def _execute_monitor(task: WorkbenchTask, config: dict, *, initial_cooldown: boo
 
 	monitor_config = dict(config)
 	monitor_config["_workbench_stop_event"] = task.stop_requested
+	monitor_config["_monitor_reuse_chat_tab"] = True
+	monitor_config["_monitor_runtime_state"] = {}
 	interval_min = get_effective_monitor_interval_minutes(config)
 	interval_sec = max(interval_min * 60, 1)
 	queue_lock = task.context.setdefault("monitor_queue_lock", Lock())
@@ -558,6 +544,8 @@ def _execute_monitor(task: WorkbenchTask, config: dict, *, initial_cooldown: boo
 			wakeup_event.wait(interval_sec)
 			wakeup_event.clear()
 	finally:
+		from bosshunter.executor.monitor import close_monitor_chat_target
+		close_monitor_chat_target(monitor_config)
 		task.context["monitoring"] = False
 		task.context.pop("monitor_wakeup_event", None)
 		task.context.pop("monitor_queue_lock", None)
@@ -785,12 +773,20 @@ def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
 	if not config.get("_workbench_skip_greeting"):
 		_log(task, "生成招呼语")
 		generated_count = generate_greetings(config)
-		_log(task, f"招呼语生成完成：{generated_count}/{len(selected_job_ids) or generated_count}")
+		greeting_report = config.get("_workbench_greeting_report", {})
+		skipped_existing = int(greeting_report.get("skipped_existing", 0) or 0)
+		ready_count = generated_count + skipped_existing
+		_log(task, f"招呼语准备完成：{ready_count}/{len(selected_job_ids) or ready_count}（新生成 {generated_count}）")
 		if task.stop_requested.is_set():
 			return
-		if selected_job_ids and generated_count != len(selected_job_ids):
-			raise RuntimeError(
-				f"招呼语生成失败：选择 {len(selected_job_ids)} 个岗位，仅成功生成 {generated_count} 条；未发送任何消息"
+		if selected_job_ids and ready_count < len(selected_job_ids):
+			missing_count = len(selected_job_ids) - ready_count
+			# 生成失败的岗位保留为待生成且无招呼语文本，本就不会进入发送；其余岗位继续走
+			# 现有人工确认、发送窗口与风控规则（#101 回归：不再因部分失败放弃整个批次）。
+			_log(
+				task,
+				f"{missing_count} 个岗位未生成招呼语，已保留为待生成，请在 BOSS 中手动填写；"
+				"其余岗位继续进入发送流程。",
 			)
 	_log(task, "发送招呼语")
 	# The workbench must obey the same send window and day-off guard as the CLI.
@@ -1078,16 +1074,30 @@ def api_top_companies():
 def api_history():
 	limit = int(request.params.get("limit", 15))
 	include_unresolved = request.params.get("include_unresolved", "").lower() in ("1", "true", "yes")
+	include_monitor_conversations = request.params.get("include_monitor_conversations", "").lower() in ("1", "true", "yes")
 	db = _get_web_db()
 	try:
 		data = get_recent_history(db, limit)
-		if include_unresolved:
+		if include_unresolved or include_monitor_conversations:
+			monitor_replies = get_recent_monitor_replies(db) if include_monitor_conversations else []
+			if include_monitor_conversations:
+				retained_reply_ids = {item["id"] for item in monitor_replies}
+				data = [
+					item for item in data
+					if item["action"] not in ("replied", "auto_replied", "resume_sent") or item["id"] in retained_reply_ids
+				]
 			seen_ids = {item["id"] for item in data}
-			data.extend(
-				item
-				for item in get_unresolved_resume_failures(db)
-				if item["id"] not in seen_ids
-			)
+			extra_groups = []
+			if include_unresolved:
+				extra_groups.extend((
+					get_unresolved_reply_pending(db),
+					get_unresolved_resume_failures(db),
+				))
+			if include_monitor_conversations:
+				extra_groups.append(monitor_replies)
+			for extra_items in extra_groups:
+				data.extend(item for item in extra_items if item["id"] not in seen_ids)
+				seen_ids.update(item["id"] for item in extra_items)
 			data.sort(
 				key=lambda item: (str(item.get("created_at") or ""), int(item.get("id") or 0)),
 				reverse=True,
@@ -1104,6 +1114,97 @@ def api_history_unresolved_replies_count():
 		return _json_response({"count": count_unresolved_monitor_items(db)})
 	finally:
 		db.close()
+
+
+@app.route("/api/history/<history_id>/open-chat", method="POST")
+def api_history_open_chat(history_id):
+	with job_mutation_lock:
+		conflict = _active_task_mutation_error()
+		if conflict is not None:
+			return conflict
+		db = _get_web_db()
+		try:
+			row = db.execute(
+				"""
+				SELECT j.*
+				FROM history h
+				JOIN jobs j ON j.id = h.job_id
+				WHERE h.id = ? AND j.deleted_at IS NULL
+				""",
+				(history_id,),
+			).fetchone()
+			if not row:
+				return _json_response({"error": "监测记录或岗位不存在"}, 404)
+			job = dict(row)
+		finally:
+			db.close()
+
+		if str(job.get("source_platform") or "boss") != "boss":
+			return _json_response({"error": "该平台不支持聊天定位"}, 400)
+
+		from bosshunter.executor.monitor import MonitorRiskDetected, _open_conversation_from_chat_list
+
+		try:
+			target_id = _open_conversation_from_chat_list(
+				job,
+				load_config(CONFIG_PATH),
+				background=False,
+			)
+		except MonitorRiskDetected as exc:
+			return _json_response({"error": f"BOSS 页面出现风险提示：{exc.kind}"}, 409)
+		if not target_id:
+			return _json_response({"error": "已打开 BOSS 聊天页，但没有找到对应联系人"}, 404)
+		return _json_response({"success": True, "message": "已定位到对应聊天对话"})
+
+
+@app.route("/api/history/<history_id>/prepare-reply", method="POST")
+def api_history_prepare_reply(history_id):
+	with job_mutation_lock:
+		conflict = _active_task_mutation_error()
+		if conflict is not None:
+			return conflict
+		db = _get_web_db()
+		try:
+			row = db.execute(
+				"SELECT id, job_id, action FROM history WHERE id = ?",
+				(history_id,),
+			).fetchone()
+			if not row:
+				return _json_response({"error": "待处理记录不存在"}, 404)
+			if row["action"] != "hr_reply_detected":
+				return _json_response({"error": "只能处理刚检测到的 HR 消息"}, 400)
+			resolved = db.execute(
+				"""
+				SELECT 1 FROM history
+				WHERE job_id = ? AND id > ?
+				  AND action IN (
+				    'reply_pending', 'needs_resume', 'resume_failed', 'resume_sent',
+				    'reply_dismissed', 'replied', 'auto_replied', 'rejected'
+				  )
+				LIMIT 1
+				""",
+				(row["job_id"], row["id"]),
+			).fetchone()
+			if resolved:
+				return _json_response({"success": True, "already_processed": True})
+			job_id = str(row["job_id"])
+		finally:
+			db.close()
+
+		from bosshunter.executor.monitor import process_detected_reply
+
+		summary = process_detected_reply(job_id, load_config(CONFIG_PATH))
+		if summary.get("stop_reason"):
+			return _json_response({"error": "读取 BOSS 对话时触发安全停止", "summary": summary}, 409)
+		processed = sum(
+			int(summary.get(key, 0) or 0)
+			for key in ("skipped", "pending", "needs_resume", "rejected", "replied")
+		)
+		if not processed and summary.get("failed"):
+			return _json_response({"error": "读取或处理对话失败，请先打开聊天对话检查", "summary": summary}, 502)
+		if not processed:
+			return _json_response({"error": "没有找到对应的新 HR 对话，请先用“打开聊天对话”检查"}, 404)
+		return _json_response({"success": True, "summary": summary})
 
 
 @app.route("/api/workbench")
@@ -1215,13 +1316,31 @@ def api_scoring_start():
 		if not isinstance(body, dict):
 			raise ValueError("请求体必须是对象")
 		options = _scoring_options_from_body(body)
+		# force=true 允许结束已暂停的旧评分记录后强制开新任务；running 任务不在此列（issue #100）。
+		# 只接受真正的布尔 true：bool("false") 也为真，异常请求会误触发强制重启（#117 review）。
+		force = body.get("force", False) is True
 		config = load_config(CONFIG_PATH)
 		messages = _preflight_messages("rescore", config)
 		if messages:
 			return _json_response({"error": "请先处理评分启动检查", "messages": messages}, 400)
 		active_runs = [run for run in list_scoring_runs(db_path, limit=100) if run.get("status") in {"running", "paused"}]
-		if active_runs:
-			return _json_response({"error": "已有独立评分任务正在运行或等待恢复，请先继续或结束该任务"}, 409)
+		running_runs = [run for run in active_runs if run.get("status") == "running"]
+		paused_runs = [run for run in active_runs if run.get("status") == "paused"]
+		if running_runs:
+			return _json_response({"error": "已有独立评分任务正在运行，请等待其结束或先停止该任务"}, 409)
+		if paused_runs:
+			if not force:
+				return _json_response({
+					"error": "已有等待恢复的评分任务，请先继续或结束该任务；确认问题已修复后也可强制开始新任务",
+					"code": "scoring_run_paused",
+				}, 409)
+			for run in paused_runs:
+				update_scoring_run(
+					db_path,
+					str(run.get("id") or ""),
+					status="stopped",
+					error="已被新的评分任务强制结束",
+				)
 		db = _get_web_db()
 		try:
 			selected = select_scoring_jobs(db, **options)
@@ -1468,16 +1587,45 @@ def api_workbench_deliver():
 				"invalid_ids": unsupported,
 			}, 403)
 		allowed_statuses = {"ready", "approved", "error"} if direct_send else {"ready", "approved"}
-		invalid_status_ids = [
+		completed_statuses = {"sent", "replied", "resume_sent", "needs_resume", "follow_up_sent"}
+		already_sent_ids = {
+			str(row["id"])
+			for row in platform_rows
+			if str(row["status"] or "") in completed_statuses
+		}
+		missing_greeting_ids = {
+			str(row["id"])
+			for row in platform_rows
+			if direct_send
+			and str(row["status"] or "") in allowed_statuses
+			and not str(row["greeting"] or "").strip()
+		}
+		not_ready_ids = {
 			str(row["id"])
 			for row in platform_rows
 			if str(row["status"] or "") not in allowed_statuses
-			or (direct_send and not str(row["greeting"] or "").strip())
+			and str(row["status"] or "") not in completed_statuses
+		}
+		invalid_status_ids = [
+			job_id
+			for job_id in job_ids
+			if job_id in already_sent_ids or job_id in missing_greeting_ids or job_id in not_ready_ids
 		]
 		if invalid_status_ids:
+			if already_sent_ids and not missing_greeting_ids and not not_ready_ids:
+				error = "所选岗位已经投递，不能重复发送"
+			elif missing_greeting_ids and not already_sent_ids and not not_ready_ids:
+				error = "所选岗位尚未生成招呼语，不能直接发送"
+			elif not_ready_ids and not already_sent_ids and not missing_greeting_ids:
+				error = "所选岗位尚未完成评分筛选或人工确认，暂不能投递"
+			else:
+				error = "所选岗位包含尚未准备好、缺少招呼语或已经投递的岗位，暂不能投递"
 			return _json_response({
-				"error": "所选岗位状态不允许投递，不能重复发送已投递岗位",
+				"error": error,
 				"invalid_ids": invalid_status_ids,
+				"already_sent_ids": [job_id for job_id in job_ids if job_id in already_sent_ids],
+				"not_ready_ids": [job_id for job_id in job_ids if job_id in not_ready_ids],
+				"missing_greeting_ids": [job_id for job_id in job_ids if job_id in missing_greeting_ids],
 			}, 409)
 
 		status = task_runner.status()
@@ -1660,6 +1808,11 @@ def api_job_resume_download(job_id):
 
 @app.route("/api/history/<history_id>/reply", method="POST")
 def api_history_reply(history_id):
+	with job_mutation_lock:
+		return _api_history_reply_locked(history_id)
+
+
+def _api_history_reply_locked(history_id):
 	db = _get_web_db()
 	try:
 		body = request.json or {}
@@ -1675,6 +1828,25 @@ def api_history_reply(history_id):
 			return _json_response({"error": "待回复记录不存在"}, 404)
 		if row["action"] != "reply_pending":
 			return _json_response({"error": "只能确认待回复记录"}, 400)
+		latest_pending = db.execute(
+			"SELECT MAX(id) AS id FROM history WHERE job_id = ? AND action = 'reply_pending'",
+			(row["job_id"],),
+		).fetchone()
+		if not latest_pending or int(latest_pending["id"] or 0) != int(row["id"]):
+			return _json_response({"error": "这条建议已不是最新一轮，请刷新后处理最新消息"}, 409)
+		already_resolved = db.execute(
+			"""
+			SELECT 1
+			FROM history
+			WHERE job_id = ?
+			  AND id > ?
+			  AND action IN ('reply_dismissed', 'replied', 'auto_replied')
+			LIMIT 1
+			""",
+			(row["job_id"], row["id"]),
+		).fetchone()
+		if already_resolved:
+			return _json_response({"success": True, "already_resolved": True, "message": "这轮回复已处理。"})
 
 		from bosshunter.executor.monitor import _build_reply_resolution_detail
 
@@ -1700,6 +1872,11 @@ def api_history_reply(history_id):
 
 @app.route("/api/history/<history_id>/dismiss", method="POST")
 def api_history_dismiss(history_id):
+	with job_mutation_lock:
+		return _api_history_dismiss_locked(history_id)
+
+
+def _api_history_dismiss_locked(history_id):
 	db = _get_web_db()
 	try:
 		row = db.execute(
@@ -1710,6 +1887,25 @@ def api_history_dismiss(history_id):
 			return _json_response({"error": "待回复记录不存在"}, 404)
 		if row["action"] != "reply_pending":
 			return _json_response({"error": "只能放弃待回复记录"}, 400)
+		latest_pending = db.execute(
+			"SELECT MAX(id) AS id FROM history WHERE job_id = ? AND action = 'reply_pending'",
+			(row["job_id"],),
+		).fetchone()
+		if not latest_pending or int(latest_pending["id"] or 0) != int(row["id"]):
+			return _json_response({"error": "这条建议已不是最新一轮，请刷新后处理最新消息"}, 409)
+		already_resolved = db.execute(
+			"""
+			SELECT 1
+			FROM history
+			WHERE job_id = ?
+			  AND id > ?
+			  AND action IN ('reply_dismissed', 'replied', 'auto_replied')
+			LIMIT 1
+			""",
+			(row["job_id"], row["id"]),
+		).fetchone()
+		if already_resolved:
+			return _json_response({"success": True, "already_resolved": True, "message": "这轮回复已处理。"})
 
 		from bosshunter.executor.monitor import _build_reply_resolution_detail
 

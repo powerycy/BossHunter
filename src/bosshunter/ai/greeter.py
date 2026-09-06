@@ -3,6 +3,7 @@
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -49,9 +50,19 @@ GREETING_PROMPT = """你是一位求职者，需要在{platform}上给HR发送�
 9. 【严禁】不得把岗位JD中的描述（如公司头衔、项目名）当作我的经历来写
 10. 项目经历只作轻量证据，可不提；如需提及，整条消息最多出现一次“项目”，不得写具体项目名称
 11. 可以压缩和概括“我的背景”，但不得新增事实、夸大结果或改写成更高职级经历
+12. 【严禁】不得生成“我的背景”或“可用亮点”中未明确提供的网址；
+    没有提供网址时，不得输出任何网址
 {critique_section}
 请直接输出招呼语文本，不要加任何标记或解释。
 """
+
+URL_PATTERN = re.compile(
+    r"(?i)(?<![\w@.])(?:"
+    r"(?:https?://|www\.)[^\s<>()\[\]{}\"'，。！？；]+|"
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z]{2,63}(?:[/:?#][^\s<>()\[\]{}\"'，。！？；]+)?"
+    r")"
+)
 
 REVIEW_PROMPT = """请评估以下{platform}招呼语的质量。
 
@@ -72,13 +83,17 @@ REVIEW_PROMPT = """请评估以下{platform}招呼语的质量。
 """
 
 
-def _get_resume_summary(config: dict) -> str:
-    """Get a brief resume summary for greeting generation."""
+def _get_resume_text(config: dict) -> str:
+    """Read the full resume for local-only validation."""
     resume_path = Path(config.get("profile", {}).get("resume_path", "./resume.md"))
     if not resume_path.exists():
         return ""
-    content = resume_path.read_text(encoding="utf-8")
-    return content[:1500]
+    return resume_path.read_text(encoding="utf-8")
+
+
+def _get_resume_summary(config: dict) -> str:
+    """Get the resume prefix allowed in the greeting prompt."""
+    return _get_resume_text(config)[:1500]
 
 
 def _call_claude(
@@ -120,6 +135,39 @@ def _truncate_prompt_text(text: str, limit: int) -> str:
     available = max(limit - len(marker), 2)
     head = max(int(available * 0.7), 1)
     return f"{text[:head]}{marker}{text[-(available - head):]}"
+
+
+def _normalize_url(value: str) -> str:
+    candidate = str(value or "").strip().rstrip(".,;:!?，。！？；、)]}）】》")
+    if candidate.lower().startswith("www."):
+        candidate = f"https://{candidate}"
+    parsed = urlsplit(candidate)
+    if not parsed.netloc:
+        return candidate.lower().rstrip("/")
+    path = parsed.path.rstrip("/")
+    suffix = f"?{parsed.query}" if parsed.query else ""
+    suffix += f"#{parsed.fragment}" if parsed.fragment else ""
+    return f"{parsed.netloc.lower()}{path}{suffix}"
+
+
+def _extract_urls(text: str) -> set[str]:
+    return {
+        normalized
+        for match in URL_PATTERN.findall(str(text or ""))
+        if (normalized := _normalize_url(match))
+    }
+
+
+def _has_untrusted_greeting_url(greeting: str, resume_text: str, config: dict) -> bool:
+    generated_urls = _extract_urls(greeting)
+    if not generated_urls:
+        return False
+    trusted_urls = _extract_urls(resume_text)
+    trusted_urls.update(_extract_urls(_get_resume_text(config)))
+    portfolio_url = str(config.get("profile", {}).get("portfolio_url", "") or "").strip()
+    if portfolio_url:
+        trusted_urls.add(_normalize_url(portfolio_url))
+    return not generated_urls.issubset(trusted_urls)
 
 
 def _notify(config: dict, message: str, *, error: bool = False) -> None:
@@ -379,7 +427,14 @@ def _generate_greeting_once(
     ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
     token_limit = max_tokens if max_tokens is not None else ai_cfg.get("greeting_max_tokens", 8192)
     response = _call_claude(prompt, config, token_limit)
-    return _normalize_greeting_response(response)
+    greeting = _normalize_greeting_response(response)
+    if greeting and _has_untrusted_greeting_url(greeting, resume_summary, config):
+        _notify(
+            config,
+            f"{job['company']}｜{job['title']} 的招呼语包含未提供的网址，已拒绝并重试。",
+        )
+        return None
+    return greeting
 
 
 def _generate_with_token_retry(
@@ -390,8 +445,19 @@ def _generate_with_token_retry(
     recent_openings: list[str] | None = None,
 ) -> str | None:
     """Retry only request-size/output-limit failures without changing batch size."""
+
+    def _once_or_none(*args, **kwargs):
+        try:
+            return _generate_greeting_once(*args, **kwargs)
+        except AIRequestError as exc:
+            # 空响应用保持"空结果"语义：转成 None 走既有的按配置重试与岗位级失败记录，
+            # 不中断整批（#101 回归：整批暂停仅留给鉴权/额度/限流/网络等服务级故障）。
+            if exc.kind == "empty_response":
+                return None
+            raise
+
     try:
-        result = _generate_greeting_once(
+        result = _once_or_none(
             job,
             resume_summary,
             config,
@@ -410,7 +476,7 @@ def _generate_with_token_retry(
                 config,
                 f"{job['company']}｜{job['title']} 未返回完整招呼语，正在重试（{attempt}/{max_attempts}）。",
             )
-            result = _generate_greeting_once(
+            result = _once_or_none(
                 job,
                 resume_summary,
                 config,
@@ -445,7 +511,7 @@ def _generate_with_token_retry(
             raise
 
     try:
-        return _generate_greeting_once(
+        return _once_or_none(
             job,
             resume_summary,
             config,
@@ -504,8 +570,24 @@ def generate_greetings(config: dict) -> int:
     if _workbench_job_ids:
         jobs = [job for job in jobs if str(job["id"]) in _workbench_job_ids]
 
+    requested_count = len(jobs)
+    existing_jobs = [job for job in jobs if str(job.get("greeting") or "").strip()]
+    jobs = [job for job in jobs if not str(job.get("greeting") or "").strip()]
+    config["_workbench_greeting_report"] = {
+        "requested_count": requested_count,
+        "generated_count": 0,
+        "skipped_existing": len(existing_jobs),
+        "failed_count": 0,
+    }
+    for job in existing_jobs:
+        # Keep manually edited text intact while making the job eligible for delivery.
+        update_job_status(db, job["id"], "ready")
+    if existing_jobs:
+        _notify(config, f"已保留 {len(existing_jobs)} 个岗位现有的招呼语，不会用 AI 覆盖。")
+
     if not jobs:
-        console.print("[yellow]没有已确认的岗位可生成招呼语。请先运行 `bosshunter confirm`，或使用 `bosshunter run` 执行完整流程。[/yellow]")
+        if not existing_jobs:
+            console.print("[yellow]没有已确认的岗位可生成招呼语。请先运行 `bosshunter confirm`，或使用 `bosshunter run` 执行完整流程。[/yellow]")
         db.close()
         return 0
 
@@ -567,7 +649,15 @@ def generate_greetings(config: dict) -> int:
                         cancelled = True
                         break
                     except AIRequestError as exc:
-                        pause_after_current = exc.user_message
+                        if exc.kind == "empty_response":
+                            # 质量复核不可用≠生成失败：保留已生成草稿并继续后续岗位（#101 回归）。
+                            _notify(
+                                config,
+                                f"{job['company']}｜{job['title']} 的质量检查未返回内容，已保留可用招呼语并继续。",
+                            )
+                            break
+                        # str(exc) 带 kind/status_code，暂停原因可区分鉴权/限流/额度等类别（issue #101）。
+                        pause_after_current = str(exc)
                         break
                     style_issues = _greeting_style_issues(best_greeting, recent_openings)
                     if review is None and not style_issues:
@@ -595,10 +685,11 @@ def generate_greetings(config: dict) -> int:
                     cancelled = True
                     break
                 except AIRequestError as exc:
+                    # str(exc) 带 kind/status_code，暂停原因可区分鉴权/限流/额度等类别（issue #101）。
                     if best_greeting:
-                        pause_after_current = exc.user_message
+                        pause_after_current = str(exc)
                     else:
-                        pause_reason = exc.user_message
+                        pause_reason = str(exc)
                     break
 
                 if not greeting:
@@ -615,6 +706,7 @@ def generate_greetings(config: dict) -> int:
             if not best_greeting:
                 if not pause_reason and not (stop_event is not None and stop_event.is_set()):
                     add_history(db, job["id"], "greeting_failed", "AI 未返回完整招呼语，岗位保留为待生成")
+                    _notify(config, f"已跳过 {job['company']}｜{job['title']}：AI 未返回完整招呼语，岗位保留为待生成。")
                 progress.update(task, advance=1, description=f"生成招呼语 ({index}/{len(jobs)})")
                 if pause_reason:
                     break
@@ -642,4 +734,8 @@ def generate_greetings(config: dict) -> int:
         )
     if failed:
         _notify(config, f"本轮有 {failed} 个岗位未生成招呼语并保留为待处理，可稍后重试。")
+    config["_workbench_greeting_report"].update({
+        "generated_count": count,
+        "failed_count": failed,
+    })
     return count

@@ -10,7 +10,6 @@
 **解决**：
 - [x] 对外名称改为 `BossHunter`（中性名称）
 - [x] README 免责声明放在最顶部
-- [x] LICENSE 追加 ADDITIONAL DISCLAIMER
 - [x] 代码中移除 "bosshunter" → 改为 "bosshunter"（包名、模块名）
 - [ ] 注释和文档中仅以 "目标平台" 或功能描述指代
 
@@ -79,7 +78,6 @@
 - [x] SKILL.md — Skill 行为定义
 - [x] config.example.yaml — 脱敏配置模板
 - [x] resume.example.md — 简历模板
-- [x] LICENSE — 非商业使用许可 + 额外免责
 - [ ] CONTRIBUTING.md — 贡献指南（可选 Phase 2）
 - [ ] CHANGELOG.md — 版本记录（可选 Phase 2）
 

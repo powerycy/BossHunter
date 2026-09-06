@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
@@ -10,15 +11,16 @@ from typing import Any
 
 import httpx
 
+from bosshunter import __version__
 from bosshunter.ai.credentials import (
 	get_ai_api_key,
 	get_ai_base_url,
+	get_ai_base_url_source,
 	get_ai_key_source,
 	get_ai_service,
 )
 from bosshunter.browser.diagnostics import run_browser_diagnostics
 from bosshunter.collection.orchestrator import normalize_collection_options
-
 
 VALID_MODES = {"full", "collect", "rescore", "monitor"}
 
@@ -102,6 +104,11 @@ def collect_preflight_checks(mode: str, config: dict, options: dict | None = Non
 
 def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, str]]:
 	"""Validate AI credentials and perform a no-token model-list request."""
+	return [*_check_ai_connection(config, required), *_python_runtime_checks()]
+
+
+def _check_ai_connection(config: dict, required: bool) -> list[dict[str, str]]:
+	"""Run the AI configuration and connectivity checks."""
 	ai_cfg = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
 	severity = "error" if required else "warning"
 	provider = str(ai_cfg.get("provider") or "anthropic")
@@ -109,6 +116,7 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 	credential = get_ai_api_key(config)
 	key_source = get_ai_key_source(config)
 	base_url_value = get_ai_base_url(config)
+	base_url_source = get_ai_base_url_source(config)
 	model = str(ai_cfg.get("model") or "").strip()
 	if not credential:
 		return [
@@ -155,7 +163,11 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 			if base_url
 			else "https://api.anthropic.com/v1/models"
 		)
-		auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or ai_cfg.get("auth_token")
+		# 凭证块整体优先：config 任一凭证字段非空就不读 env，与 credentials 解析保持一致。
+		if ai_cfg.get("api_key") or ai_cfg.get("auth_token"):
+			auth_token = ai_cfg.get("auth_token")
+		else:
+			auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
 		headers = (
 			{"Authorization": f"Bearer {auth_token}"}
 			if auth_token
@@ -185,6 +197,19 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 				"无法连接 AI 接口",
 				"请检查 Base URL、网络或代理设置，然后重新检测。",
 				"config",
+			)
+		]
+	except TypeError:
+		# Dependency initialization errors may echo request data, so never expose
+		# the original exception text in this user-facing diagnostic.
+		return [
+			_check(
+				"ai_runtime",
+				"AI 运行环境",
+				severity,
+				"AI 请求尚未发出：本地 Python/HTTPX 运行环境异常",
+				f"当前 Python {sys.version.split()[0]}、HTTPX {httpx.__version__}、BossHunter {__version__}；"
+				"请使用稳定版 Python 3.11、3.12 或 3.13，并重新创建虚拟环境。",
 			)
 		]
 
@@ -239,7 +264,23 @@ def check_ai_connection(config: dict, required: bool = True) -> list[dict[str, s
 			"AI 接口连接",
 			"pass",
 			"AI 接口连接正常",
-			f"已验证凭证和服务地址，当前模型：{model}；Key 来源：{key_source or '未知'}。",
+			f"已验证凭证和服务地址，当前模型：{model}；Key 来源：{key_source or '未知'}；Base URL 来源：{base_url_source or '官方默认'}。",
+		)
+	]
+
+
+def _python_runtime_checks() -> list[dict[str, str]]:
+	"""Warn when dependency behavior may differ on a prerelease interpreter."""
+	if sys.version_info.releaselevel == "final":
+		return []
+	return [
+		_check(
+			"python_runtime",
+			"Python 运行环境",
+			"warning",
+			"当前使用的是 Python 预发布版本",
+			f"检测到 Python {sys.version.split()[0]}；预发布解释器可能与 HTTP 客户端不兼容。"
+			"请使用稳定版 Python 3.11、3.12 或 3.13，并重新创建虚拟环境。",
 		)
 	]
 

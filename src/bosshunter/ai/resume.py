@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 
 from bosshunter.ai.credentials import call_anthropic_text
-from bosshunter.browser import close_tab, new_tab, print_pdf
+from bosshunter.browser import close_tab, new_tab, print_pdf, wait_for_load
 from bosshunter.cancellation import OperationCancelled, run_cancellable, stop_requested
 from bosshunter.db import get_db
 
@@ -422,7 +422,8 @@ def _call_claude(prompt: str, config: dict) -> str | None:
 def _render_pdf(markdown_text: str, output_path: Path) -> bool:
     """Render markdown to PDF via Chrome CDP (Page.printToPDF).
 
-    Falls back to xhtml2pdf if CDP is unavailable.
+    If Chrome is unavailable, keep the UTF-8 Markdown instead of producing a
+    PDF with missing CJK glyphs through a font-less fallback renderer.
     """
     import markdown2
 
@@ -435,18 +436,19 @@ def _render_pdf(markdown_text: str, output_path: Path) -> bool:
 <head>
 <meta charset="utf-8">
 <style>
+    @page {{ size: A4; margin: 12mm; }}
     body {{
         font-family: "Microsoft YaHei", "SimSun", "WenQuanYi Micro Hei", sans-serif;
-        font-size: 11pt;
-        line-height: 1.6;
-        margin: 40px;
+        font-size: 10.5pt;
+        line-height: 1.48;
+        margin: 0;
         color: #333;
     }}
     h1 {{ font-size: 18pt; color: #1a1a1a; border-bottom: 2px solid #333; padding-bottom: 5px; }}
-    h2 {{ font-size: 14pt; color: #2c3e50; margin-top: 20px; }}
+    h2 {{ font-size: 14pt; color: #2c3e50; margin-top: 14px; margin-bottom: 8px; }}
     h3 {{ font-size: 12pt; color: #34495e; }}
     ul {{ padding-left: 20px; }}
-    li {{ margin-bottom: 4px; }}
+    li {{ margin-bottom: 2px; }}
     table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
     th, td {{ border: 1px solid #ddd; padding: 6px 10px; text-align: left; }}
     th {{ background: #f5f5f5; }}
@@ -460,17 +462,7 @@ def _render_pdf(markdown_text: str, output_path: Path) -> bool:
     # Strategy 1: Use Chrome CDP to print PDF (preferred, no extra deps)
     if _render_pdf_via_cdp(full_html, output_path):
         return True
-
-    # Strategy 2: Fallback to xhtml2pdf (requires cairo on Windows)
-    try:
-        from xhtml2pdf import pisa
-    except (ImportError, OSError):
-        return False
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "wb") as f:
-        status = pisa.CreatePDF(full_html, dest=f, encoding="utf-8")
-    return not status.err
+    return False
 
 
 def _render_pdf_via_cdp(html_content: str, output_path: Path) -> bool:
@@ -478,26 +470,37 @@ def _render_pdf_via_cdp(html_content: str, output_path: Path) -> bool:
     import tempfile
     import time
 
+    # The Browser Runtime is a separate process and may have a different
+    # working directory. Always send it an absolute destination so a relative
+    # resume_output_dir cannot create the PDF somewhere else.
+    output_path = output_path.expanduser().resolve()
     temp_html = Path(tempfile.gettempdir()) / "bosshunter_resume.html"
     temp_html.write_text(html_content, encoding="utf-8")
     file_url = f"file:///{temp_html.as_posix()}"
 
-    target_id = None
     try:
-        target_id = new_tab(file_url, background=True)
-        if not target_id:
-            return False
-
-        time.sleep(2)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        if print_pdf(target_id, output_path):
-            return output_path.exists() and output_path.stat().st_size > 0
-        return False
-    except Exception:
+        for attempt in range(2):
+            target_id = None
+            try:
+                target_id = new_tab(file_url, background=True)
+                if target_id and wait_for_load(target_id, timeout=10):
+                    # Give Chrome a brief turn to resolve system fonts after
+                    # the document load event before printing the page.
+                    time.sleep(0.25)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.unlink(missing_ok=True)
+                    if print_pdf(target_id, output_path):
+                        if output_path.exists() and output_path.stat().st_size > 0:
+                            return True
+            except Exception:
+                pass
+            finally:
+                if target_id:
+                    close_tab(target_id)
+            if attempt == 0:
+                time.sleep(0.5)
         return False
     finally:
-        if target_id:
-            close_tab(target_id)
         temp_html.unlink(missing_ok=True)
 
 
@@ -652,8 +655,8 @@ def generate_tailored_resume(job_id: str, config: dict) -> Path | None:
         _resume_failure_reasons.pop(str(job_id), None)
         return pdf_path
     else:
-        console.print(f"[yellow]PDF 渲染库未安装，已保存为 Markdown: {md_path}[/yellow]")
-        console.print('[dim]  安装 PDF fallback 支持: pip install -e ".[pdf]"[/dim]')
+        console.print(f"[yellow]Chrome PDF 渲染暂时不可用，已安全保存为 Markdown: {md_path}[/yellow]")
+        console.print("[dim]  请确认 Chrome 连接后重试；系统不会生成缺少中文字体的 PDF[/dim]")
         db.execute(
             "UPDATE jobs SET resume_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
             (str(md_path), job_id)

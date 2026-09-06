@@ -12,6 +12,7 @@
 - Bug 报告请使用 [Bug 报告模板](.github/ISSUE_TEMPLATE/bug_report.md)
 - 选择器失效请使用 [选择器失效模板](.github/ISSUE_TEMPLATE/selector_broken.md)
 - 新功能建议请先开 Issue 讨论
+- 希望长期参与维护，请阅读 [项目治理](GOVERNANCE.md) 并使用 [候选维护者申请模板](.github/ISSUE_TEMPLATE/maintainer_application.md)
 
 ## 提交 Pull Request
 
@@ -34,8 +35,9 @@
 1. Fork 仓库
 2. 基于 `main` 创建功能分支：`git checkout -b feat/your-feature`
 3. 提交代码，确保 `bosshunter --help` 正常运行
-4. 推送并创建 Pull Request
-5. 等待 review
+4. 运行相关测试；涉及前端时同时确认前端可以构建
+5. 推送并创建 Pull Request
+6. 等待至少 1 名非作者正式维护者 review；高风险 PR 需要 2 名不同的非作者正式维护者批准，其中 1 人明确完成安全检查
 
 ### 代码风格
 
@@ -64,3 +66,11 @@ bosshunter --help
 3. 提交 PR 并说明变化
 
 这是最欢迎的贡献类型之一。
+
+## 成为维护者
+
+BossHunter 的正式维护者共同维护整个项目，不划分固定模块或席位；个人擅长方向只用于协作参考，不限制 review 和跟进范围。候选维护者通常先以 `Triage` 权限进入 2–4 周观察期，不会因为项目贡献排名或维护贡献记录自动获得写权限。
+
+正式维护者连续 14 天没有可核实的维护活动，且未提前声明暂停或请假，将进入联系确认与权限复核流程。有效活动包括 Review、Issue 闭环、安全复核、发布验证和治理交接；机械评论以及维护者自己的功能 PR 不计作维护活动。
+
+候选与晋升标准、权限范围和离任机制详见 [GOVERNANCE.md](GOVERNANCE.md)，现任及历任维护者记录见 [MAINTAINERS.md](MAINTAINERS.md)。
