@@ -2414,9 +2414,29 @@ _STATIC_MIME_TYPES = {
 
 
 def _serve_static(filename: str, root: Path):
-	"""Serve static assets with stable MIME types while retaining range/cache support."""
-	mimetype = _STATIC_MIME_TYPES.get(Path(filename).suffix.lower(), "auto")
-	return static_file(filename, root=str(root), mimetype=mimetype)
+	"""Serve static assets with stable MIME types while retaining range/cache support.
+
+	Reads the file bytes directly instead of relying on ``bottle.static_file``,
+	which gates on ``os.access(..., os.R_OK)``. On macOS (sandboxed/TCC-restricted
+	processes) that check can report a false 403 denial even though the file is
+	actually readable, which makes the dashboard fail to load.
+	"""
+	file_path = (root / filename).resolve()
+	resolved_root = root.resolve()
+	if str(file_path).startswith(str(resolved_root)):
+		try:
+			data = file_path.read_bytes()
+		except OSError:
+			pass
+		else:
+			mimetype = _STATIC_MIME_TYPES.get(Path(filename).suffix.lower(), "auto")
+			if mimetype == "auto":
+				mimetype, _ = mimetypes.guess_type(filename)
+			response.content_type = mimetype or "application/octet-stream"
+			response.headers["Content-Length"] = str(len(data))
+			return data
+
+	return static_file(filename, root=str(root), mimetype="auto")
 
 
 @app.route("/assets/<filepath:path>")
