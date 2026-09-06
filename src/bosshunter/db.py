@@ -698,12 +698,21 @@ def _migrate_v1_4(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v1_5(conn: sqlite3.Connection) -> None:
-    """Add last_error columns to surface real failure reason and allow classification."""
+    """Add last_error columns and editable-resume PNG review metadata."""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
-    if "last_error" not in cols:
-        conn.execute("ALTER TABLE jobs ADD COLUMN last_error TEXT")
-    if "last_error_code" not in cols:
-        conn.execute("ALTER TABLE jobs ADD COLUMN last_error_code TEXT")
+    additions = {
+        "last_error": "TEXT",
+        "last_error_code": "TEXT",
+        "resume_source_path": "TEXT NULL",
+        "resume_image_path": "TEXT NULL",
+        "resume_review_status": "TEXT NOT NULL DEFAULT 'missing'",
+        "resume_generation_source": "TEXT NULL",
+        "resume_failure_reason": "TEXT NULL",
+        "resume_reviewed_at": "TIMESTAMP NULL",
+    }
+    for name, definition in additions.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
     conn.commit()
 
 
