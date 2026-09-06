@@ -589,6 +589,44 @@ class MonitorRiskTests(unittest.TestCase):
 
         self.assertEqual(results, [{"risk": None}] * 4)
 
+    def test_risk_detection_uses_visible_text_rectangles_without_splitting_phrases(self):
+        results = self._detect_risk_in_dom(
+            {
+                "body": '<div data-top style="height:200vh">操作过于频繁</div>',
+                "rects": {"[data-top]": {"left": 10, "top": 10, "width": 500, "height": 1400}},
+            },
+            {
+                "body": '<p data-top>操作过于<strong>频繁</strong></p>',
+                "topSelector": "strong",
+            },
+            {
+                "body": '<p data-top>请完成<strong>验证</strong></p>',
+                "topSelector": "strong",
+            },
+            {
+                "body": '<p data-top>访问被<strong>拒绝</strong></p>',
+                "topSelector": "strong",
+            },
+            {
+                "body": '<p data-top>操作过于<span style="display:none">无关</span>频繁</p>',
+            },
+            {
+                "body": '<div style="visibility:hidden"><span data-top style="visibility:visible">操作过于频繁</span></div>',
+            },
+        )
+
+        self.assertEqual(
+            results,
+            [
+                {"risk": "rate_limit"},
+                {"risk": "rate_limit"},
+                {"risk": "captcha"},
+                {"risk": "blocked"},
+                {"risk": "rate_limit"},
+                {"risk": "rate_limit"},
+            ],
+        )
+
     def test_risk_detection_keeps_visible_and_url_title_safety_signals(self):
         results = self._detect_risk_in_dom(
             {
@@ -605,6 +643,14 @@ class MonitorRiskTests(unittest.TestCase):
                 "body": '<main data-top>普通页面</main>',
             },
             {
+                "title": "BOSS直聘 - 账号异常",
+                "body": '<main data-top>普通页面</main>',
+            },
+            {
+                "title": "访问受限",
+                "body": '<main data-top>普通页面</main>',
+            },
+            {
                 "body": '<div style="display:none"><span data-top>请完成验证</span></div>',
                 "url": "https://www.zhipin.com/security-check",
                 "topSelector": "[data-top]",
@@ -616,6 +662,8 @@ class MonitorRiskTests(unittest.TestCase):
             [
                 {"risk": "captcha"},
                 {"risk": "rate_limit"},
+                {"risk": "blocked"},
+                {"risk": "blocked"},
                 {"risk": "blocked"},
                 {"risk": "blocked"},
                 {"risk": "captcha"},

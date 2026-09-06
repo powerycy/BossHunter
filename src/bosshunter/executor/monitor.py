@@ -124,24 +124,46 @@ JS_DETECT_MONITOR_RISK = """
 (() => {
     // Read only actionable UI content. Hidden templates and elements covered by
     // an unrelated mask must not stop a real session.
-    const visible = (el) => {
+    const hasVisibleStyle = (el) => {
         if (!el) return false;
-        for (let current = el; current && current !== document.documentElement; current = current.parentElement) {
+        for (let current = el; current; current = current.parentElement) {
             const style = window.getComputedStyle(current);
-            if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
+            // display cannot be overridden by descendants and ancestor opacity
+            // always applies. visibility, however, may be reset to visible by a
+            // descendant, so inspect only the target's computed value below.
+            if (style.display === 'none' || Number(style.opacity || 1) === 0) return false;
         }
-        const rect = el.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return false;
-        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-        return !!top && (top === el || el.contains(top));
+        return window.getComputedStyle(el).visibility !== 'hidden';
+    };
+    const visibleAt = (el, rect) => {
+        if (!hasVisibleStyle(el) || rect.width <= 0 || rect.height <= 0) return false;
+        const points = [
+            [rect.left + rect.width / 2, rect.top + rect.height / 2],
+            [rect.left + 1, rect.top + 1],
+            [rect.right - 1, rect.bottom - 1],
+        ];
+        return points.some(([x, y]) => {
+            if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return false;
+            const top = document.elementFromPoint(x, y);
+            return !!top && (top === el || el.contains(top));
+        });
     };
     const visibleText = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        if (node.parentElement && visible(node.parentElement)) visibleText.push(node.nodeValue || '');
+        if (!node.parentElement || !hasVisibleStyle(node.parentElement)) continue;
+        const range = document.createRange();
+        range.selectNode(node);
+        if (Array.from(range.getClientRects()).some((rect) => visibleAt(node.parentElement, rect))) {
+            // Do not insert separators: inline tags split a rendered phrase into
+            // multiple text nodes, while hidden nodes must simply be omitted.
+            visibleText.push(node.nodeValue || '');
+        }
     }
-    const text = visibleText.join(' ');
-    const visibleNodes = Array.from(document.querySelectorAll('body *')).filter(visible);
+    const text = visibleText.join('');
+    const visibleNodes = Array.from(document.querySelectorAll('body *')).filter((el) =>
+        Array.from(el.getClientRects()).some((rect) => visibleAt(el, rect))
+    );
     const title = document.title || '';
     const url = window.location.href || '';
     const hasCaptchaElement = visibleNodes.some((el) =>
@@ -157,11 +179,12 @@ JS_DETECT_MONITOR_RISK = """
     if (/(?:^|[\\/?#=_-])(?:403|forbidden|access-denied)(?:$|[\\/?#=&_-])/i.test(url)) {
         return JSON.stringify({risk: 'blocked'});
     }
-    if (/^(?:403(?:\\s+forbidden)?|forbidden|access denied|访问被拒绝|账号异常|账号受限)/i.test(title.trim())) {
+    if (/^(?:403(?:\\s+forbidden)?|forbidden|access denied)/i.test(title.trim())) {
         return JSON.stringify({risk: 'blocked'});
     }
     if (
         ['账号存在异常', '账号已被限制', '当前账号异常', '访问被拒绝', '账号或请求被拦截'].some(value => text.includes(value)) ||
+        ['账号异常', '访问受限', '访问被拒绝'].some(value => title.includes(value)) ||
         /(?:^|\\s)403(?:\\s+forbidden)?(?=\\s|$)/i.test(text)
     ) return JSON.stringify({risk: 'blocked'});
     return JSON.stringify({risk: null});
