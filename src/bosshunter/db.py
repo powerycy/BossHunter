@@ -1198,9 +1198,18 @@ def prune_collected_combos(conn: sqlite3.Connection, source: str, keep_keywords:
 
 
 def mark_combo_collected(conn: sqlite3.Connection, source: str, city: str, keyword: str) -> None:
-    """标记一个 (source, city, keyword) 组合已完成（INSERT OR IGNORE，幂等）。"""
+    """标记一个 (source, city, keyword) 组合已完成（幂等，刷新 finished_at）。
+
+    使用 ON CONFLICT UPDATE 确保过期重采后 finished_at 被刷新为当前时间，
+    避免每次采集都因旧时间戳过期而重复采集。
+    """
     conn.execute(
-        "INSERT OR IGNORE INTO collect_progress (source, city, keyword) VALUES (?, ?, ?)",
+        """
+        INSERT INTO collect_progress (source, city, keyword, finished_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(source, city, keyword) DO UPDATE SET
+            finished_at = CURRENT_TIMESTAMP
+        """,
         (source, city, keyword),
     )
     conn.commit()
@@ -1221,12 +1230,30 @@ def upsert_page_progress(conn: sqlite3.Connection, source: str, city: str, keywo
     conn.commit()
 
 
-def get_page_progress(conn: sqlite3.Connection, source: str, city: str, keyword: str) -> int:
-    """返回某词已采到的页码（0 = 未采过/无记录）。"""
-    row = conn.execute(
-        "SELECT page FROM collect_progress_page WHERE source = ? AND city = ? AND keyword = ?",
-        (source, city, keyword),
-    ).fetchone()
+def get_page_progress(
+    conn: sqlite3.Connection,
+    source: str,
+    city: str,
+    keyword: str,
+    within_hours: int | None = None,
+) -> int:
+    """返回某词已采到的页码（0 = 未采过/无记录/已过期）。
+
+    within_hours：只返回最近 N 小时内记录的页码；超过该窗口的旧页断点视为"过期"，
+    返回 0 以从头采集。为 None 时返回全部（兼容旧行为）。
+    """
+    if within_hours is not None:
+        row = conn.execute(
+            "SELECT page FROM collect_progress_page "
+            "WHERE source = ? AND city = ? AND keyword = ? "
+            "AND finished_at >= datetime('now', ?)",
+            (source, city, keyword, f"-{int(within_hours)} hours"),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT page FROM collect_progress_page WHERE source = ? AND city = ? AND keyword = ?",
+            (source, city, keyword),
+        ).fetchone()
     return int(row["page"] or 0) if row else 0
 
 
