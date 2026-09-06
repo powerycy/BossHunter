@@ -6,8 +6,9 @@ import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
 import { TagsInput } from '@/components/ui/tags-input'
 import { CityMultiSelect, type CityOption } from '@/components/config/CityMultiSelect'
+import { ResumeUploadSection } from '@/components/config/ResumeUploadSection'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
-import { Save, RotateCcw, Upload, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
+import { Save, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react'
 import { useState, useEffect } from 'react'
 
 const AI_SERVICES = {
@@ -60,8 +61,6 @@ export default function ConfigPage() {
     search: true,
     ...(requestedSection ? { [requestedSection]: true } : {}),
   }))
-  const [resumeInfo, setResumeInfo] = useState<any>(null)
-  const [resumeUploadError, setResumeUploadError] = useState('')
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
   const [cityOptions, setCityOptions] = useState<CityOption[]>([])
   const [zhilianCityOptions, setZhilianCityOptions] = useState<CityOption[]>([])
@@ -70,7 +69,6 @@ export default function ConfigPage() {
   const [cityMessage, setCityMessage] = useState('')
 
   useEffect(() => {
-    fetch('/api/resume').then(r => r.json()).then(setResumeInfo).catch(() => {})
     fetch('/api/cities', { cache: 'no-store' })
       .then(r => r.json())
       .then(data => {
@@ -94,34 +92,6 @@ export default function ConfigPage() {
 
   const toggleSection = (key: string) => {
     setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }))
-  }
-
-  const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setResumeUploadError('')
-    const form = new FormData()
-    form.append('file', file)
-    try {
-      const res = await fetch('/api/resume/upload', { method: 'POST', body: form })
-      const data = await res.json()
-      if (!res.ok || !data.success) {
-        setResumeUploadError(data.error || '简历上传失败')
-        return
-      }
-      setResumeInfo({ filename: data.filename, size: data.size, path: data.path })
-      updateConfig('profile.resume_path', data.path)
-    } catch {
-      setResumeUploadError('网络错误，简历上传失败')
-    } finally {
-      e.target.value = ''
-    }
-  }
-
-  const handleResumeDelete = async () => {
-    await fetch('/api/resume', { method: 'DELETE' })
-    setResumeInfo(null)
-    updateConfig('profile.resume_path', '')
   }
 
   const handleAiTest = async () => {
@@ -292,28 +262,10 @@ export default function ConfigPage() {
         {/* Profile Section */}
         <SectionCard title="个人信息" sectionKey="profile" expanded={expandedSections} toggle={toggleSection}>
           <div className="space-y-4">
-            {/* Resume upload */}
-            <div>
-              <label className="block text-xs text-foreground mb-2">简历文件</label>
-              {resumeInfo ? (
-                <div className="flex items-center gap-3 rounded-md border border-card-border bg-[#FFFCFA] p-3">
-                  <span className="text-sm font-bold text-foreground">📄 {resumeInfo.filename}</span>
-                  <span className="text-xs text-muted">({(resumeInfo.size / 1024).toFixed(1)} KB)</span>
-                  <button onClick={handleResumeDelete} className="ml-auto text-red-400 hover:text-red-300">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : (
-                <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-card-border p-6 transition-colors hover:border-primary/50 hover:bg-[#FFFCFA]">
-                  <Upload className="mb-2 h-6 w-6 text-muted" />
-                  <span className="text-sm text-muted">拖拽或点击上传 (.md、.docx、.pdf)</span>
-                  <input type="file" accept=".md,.docx,.pdf,application/pdf" onChange={handleResumeUpload} className="hidden" />
-                </label>
-              )}
-              {resumeUploadError && (
-                <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-500">{resumeUploadError}</p>
-              )}
-            </div>
+            <ResumeUploadSection
+              currentResumePath={config.profile?.resume_path || ''}
+              updateConfig={updateConfig}
+            />
             <div className="grid grid-cols-2 gap-4">
               <Field label="最高学历">
                 <Select value={config.profile?.education || ''} onChange={e => updateConfig('profile.education', e.target.value)}>
