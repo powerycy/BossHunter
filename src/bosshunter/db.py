@@ -119,10 +119,12 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_v1_2(conn)
     _migrate_v1_3(conn)
     _migrate_v1_4(conn)
+    _migrate_v1_5(conn)
     _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
     _init_collection_runs(conn)
     _init_collect_progress(conn)
+    _init_score_traces(conn)
 
 
 def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
@@ -405,6 +407,7 @@ def permanent_delete_jobs(
     with conn:
         placeholders = ",".join("?" for _ in ids)
         conn.execute(f"DELETE FROM history WHERE job_id IN ({placeholders})", ids)
+        conn.execute(f"DELETE FROM score_traces WHERE job_id IN ({placeholders})", ids)
         cursor = conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders}) AND deleted_at IS NOT NULL", ids)
         if cursor.rowcount != len(ids):
             raise JobDeletionConflictError("永久删除数量校验失败，事务已回滚")
@@ -470,6 +473,48 @@ def update_job_score(conn: sqlite3.Connection, job_id: str, score: int, reason: 
     conn.commit()
 
 
+def persist_job_score_and_trace(
+    conn: sqlite3.Connection,
+    job_id: str,
+    score: int,
+    reason: str,
+    trace: dict[str, Any],
+) -> None:
+    """Atomically persist a completed structured score and its safe explanation trace."""
+    trace_json = json.dumps(trace, ensure_ascii=False, separators=(",", ":"))
+    with conn:
+        cursor = conn.execute(
+            "UPDATE jobs SET score = ?, score_reason = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND deleted_at IS NULL",
+            (score, reason, job_id),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError("岗位不存在或已进入回收站，未保存评分追踪")
+        conn.execute(
+            """
+            INSERT INTO score_traces (job_id, schema_version, trace_json)
+            VALUES (?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                schema_version = excluded.schema_version,
+                trace_json = excluded.trace_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (job_id, int(trace.get("schema_version", 1)), trace_json),
+        )
+
+
+def get_score_trace(conn: sqlite3.Connection, job_id: str) -> tuple[bool, dict[str, Any] | None]:
+    """Return whether a trace row exists and its parsed object, if it is valid JSON."""
+    row = conn.execute("SELECT trace_json FROM score_traces WHERE job_id = ?", (job_id,)).fetchone()
+    if row is None:
+        return False, None
+    try:
+        trace = json.loads(row["trace_json"])
+    except (TypeError, json.JSONDecodeError):
+        return True, None
+    return True, trace if isinstance(trace, dict) else None
+
+
 def update_job_greeting(conn: sqlite3.Connection, job_id: str, greeting: str) -> None:
     """Update job greeting message."""
     conn.execute(
@@ -493,6 +538,21 @@ def add_history(conn: sqlite3.Connection, job_id: str, action: str, detail: str 
     conn.execute(
         "INSERT INTO history (job_id, action, detail) VALUES (?, ?, ?)",
         (job_id, action, detail)
+    )
+    conn.commit()
+
+
+def update_job_last_error(
+    conn: sqlite3.Connection,
+    job_id: str,
+    error_detail: str,
+    error_code: str = "",
+) -> None:
+    """Persist the latest send-failure reason + code so lists can surface and classify it."""
+    conn.execute(
+        "UPDATE jobs SET last_error = ?, last_error_code = ?, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
+        (error_detail, error_code, job_id)
     )
     conn.commit()
 
@@ -637,6 +697,25 @@ def _migrate_v1_4(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_v1_5(conn: sqlite3.Connection) -> None:
+    """Add last_error columns and editable-resume PNG review metadata."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    additions = {
+        "last_error": "TEXT",
+        "last_error_code": "TEXT",
+        "resume_source_path": "TEXT NULL",
+        "resume_image_path": "TEXT NULL",
+        "resume_review_status": "TEXT NOT NULL DEFAULT 'missing'",
+        "resume_generation_source": "TEXT NULL",
+        "resume_failure_reason": "TEXT NULL",
+        "resume_reviewed_at": "TIMESTAMP NULL",
+    }
+    for name, definition in additions.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+    conn.commit()
+
+
 def _migrate_platform_access_events(conn: sqlite3.Connection) -> None:
     """Scope PR #66 access counters to a platform without losing old BOSS events."""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(platform_access_events)").fetchall()}
@@ -689,6 +768,23 @@ def _init_collection_runs(conn: sqlite3.Connection) -> None:
             finished_at TIMESTAMP NULL
         );
         CREATE INDEX IF NOT EXISTS idx_collection_runs_status ON collection_runs(status);
+        """
+    )
+    conn.commit()
+
+
+def _init_score_traces(conn: sqlite3.Connection) -> None:
+    """Create the current-score explanation store without rewriting existing jobs."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS score_traces (
+            job_id TEXT PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            trace_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES jobs(id)
+        );
         """
     )
     conn.commit()
@@ -1102,9 +1198,18 @@ def prune_collected_combos(conn: sqlite3.Connection, source: str, keep_keywords:
 
 
 def mark_combo_collected(conn: sqlite3.Connection, source: str, city: str, keyword: str) -> None:
-    """标记一个 (source, city, keyword) 组合已完成（INSERT OR IGNORE，幂等）。"""
+    """标记一个 (source, city, keyword) 组合已完成（幂等，刷新 finished_at）。
+
+    使用 ON CONFLICT UPDATE 确保过期重采后 finished_at 被刷新为当前时间，
+    避免每次采集都因旧时间戳过期而重复采集。
+    """
     conn.execute(
-        "INSERT OR IGNORE INTO collect_progress (source, city, keyword) VALUES (?, ?, ?)",
+        """
+        INSERT INTO collect_progress (source, city, keyword, finished_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(source, city, keyword) DO UPDATE SET
+            finished_at = CURRENT_TIMESTAMP
+        """,
         (source, city, keyword),
     )
     conn.commit()
@@ -1125,12 +1230,30 @@ def upsert_page_progress(conn: sqlite3.Connection, source: str, city: str, keywo
     conn.commit()
 
 
-def get_page_progress(conn: sqlite3.Connection, source: str, city: str, keyword: str) -> int:
-    """返回某词已采到的页码（0 = 未采过/无记录）。"""
-    row = conn.execute(
-        "SELECT page FROM collect_progress_page WHERE source = ? AND city = ? AND keyword = ?",
-        (source, city, keyword),
-    ).fetchone()
+def get_page_progress(
+    conn: sqlite3.Connection,
+    source: str,
+    city: str,
+    keyword: str,
+    within_hours: int | None = None,
+) -> int:
+    """返回某词已采到的页码（0 = 未采过/无记录/已过期）。
+
+    within_hours：只返回最近 N 小时内记录的页码；超过该窗口的旧页断点视为"过期"，
+    返回 0 以从头采集。为 None 时返回全部（兼容旧行为）。
+    """
+    if within_hours is not None:
+        row = conn.execute(
+            "SELECT page FROM collect_progress_page "
+            "WHERE source = ? AND city = ? AND keyword = ? "
+            "AND finished_at >= datetime('now', ?)",
+            (source, city, keyword, f"-{int(within_hours)} hours"),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT page FROM collect_progress_page WHERE source = ? AND city = ? AND keyword = ?",
+            (source, city, keyword),
+        ).fetchone()
     return int(row["page"] or 0) if row else 0
 
 

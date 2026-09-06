@@ -1,0 +1,75 @@
+name: Publish architecture and preserve demo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/architecture/**'
+      - '.github/workflows/pages-architecture.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/architecture/**'
+      - '.github/workflows/pages-architecture.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-architecture-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Keep the existing Pages demo at its last successfully deployed revision.
+      - name: Check out existing demo source
+        uses: actions/checkout@v4
+        with:
+          ref: e32ef7e98d5b4519d6a2459c31dde1953d040bcf
+          path: .pages-demo
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: .pages-demo/src/bosshunter/web/frontend/package-lock.json
+      - name: Build existing demo
+        working-directory: .pages-demo/src/bosshunter/web/frontend
+        env:
+          VITE_DEMO_ONLY: '1'
+          VITE_BASE_PATH: /BossHunter/
+        run: |
+          npm ci
+          npm run build
+      - name: Add interactive architecture page
+        run: |
+          mkdir -p .pages-demo/src/bosshunter/web/frontend/dist/architecture
+          cp docs/architecture/bosshunter.architecture.html .pages-demo/src/bosshunter/web/frontend/dist/architecture/index.html
+          cp docs/architecture/bosshunter.architecture.json .pages-demo/src/bosshunter/web/frontend/dist/architecture/
+          cp docs/architecture/ARCHIFY-LICENSE.txt .pages-demo/src/bosshunter/web/frontend/dist/architecture/
+          test -s .pages-demo/src/bosshunter/web/frontend/dist/index.html
+          cmp docs/architecture/bosshunter.architecture.html .pages-demo/src/bosshunter/web/frontend/dist/architecture/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .pages-demo/src/bosshunter/web/frontend/dist
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

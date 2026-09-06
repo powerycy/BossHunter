@@ -22,6 +22,7 @@ from bottle import Bottle, request, response, static_file, abort
 
 from bosshunter import __version__
 from bosshunter.ai.credentials import get_ai_api_key
+from bosshunter.ai.scorer import sanitize_score_trace
 from bosshunter.cities import CityRefreshError, get_city_map, load_city_snapshot, refresh_city_cache
 from bosshunter.config import AI_SERVICE_PRESETS, load_config, remove_retired_collection_settings, save_config
 from bosshunter.db import (
@@ -39,6 +40,7 @@ from bosshunter.db import (
 	get_jobs_with_send_errors,
 	get_recent_history,
 	get_recent_monitor_replies,
+	get_score_trace,
 	get_unresolved_reply_pending,
 	get_unresolved_resume_failures,
 	get_stats,
@@ -930,6 +932,28 @@ def _integer_param(name: str, default: int, *, minimum: int, maximum: int | None
 	return value
 
 
+def _score_trace_missing_state(job: dict) -> str:
+	"""Classify a missing trace without inferring an AI failure from incomplete evidence."""
+	reason = str(job.get("score_reason") or "").strip()
+	if reason.startswith("预筛不通过:"):
+		return "prefilter_only"
+	if reason.startswith(("AI评分失败:", "AI 评分失败:", "评分失败:")):
+		return "failed"
+	if reason or str(job.get("status") or "") in {
+		"scored",
+		"ready",
+		"approved",
+		"rejected",
+		"sent",
+		"replied",
+		"resume_sent",
+		"needs_resume",
+		"follow_up_sent",
+	}:
+		return "legacy_missing"
+	return "unavailable"
+
+
 @app.route("/api/jobs/search")
 def api_job_search():
 	try:
@@ -1730,6 +1754,27 @@ def api_job_detail(job_id):
 		db.close()
 
 
+@app.route("/api/jobs/<job_id>/score-trace")
+def api_job_score_trace(job_id):
+	"""Expose the latest validated score explanation without changing job-list payloads."""
+	db = _get_web_db()
+	try:
+		job = db.execute(
+			"SELECT id, status, score_reason FROM jobs WHERE id = ? AND deleted_at IS NULL",
+			(job_id,),
+		).fetchone()
+		if not job:
+			return _json_response({"error": "job_not_found"}, 404)
+		found, stored_trace = get_score_trace(db, job_id)
+		trace = sanitize_score_trace(stored_trace) if found else None
+		if trace is not None:
+			return _json_response({"job_id": job_id, "state": "available", "trace": trace})
+		state = "unavailable" if found else _score_trace_missing_state(dict(job))
+		return _json_response({"job_id": job_id, "state": state})
+	finally:
+		db.close()
+
+
 @app.route("/api/jobs/<job_id>/mark-resume-sent", method="POST")
 def api_job_mark_resume_sent(job_id):
 	db = _get_web_db()
@@ -1757,6 +1802,112 @@ def api_job_resume_download(job_id):
 		if not resume_path.exists():
 			return _json_response({"error": "定制简历文件不存在"}, 404)
 		return static_file(resume_path.name, root=str(resume_path.parent), download=resume_path.name)
+	finally:
+		db.close()
+
+
+@app.route("/api/jobs/<job_id>/outreach-resume")
+def api_job_outreach_resume(job_id):
+	"""Return the editable source and review state without exposing local paths."""
+	db = _get_web_db()
+	try:
+		row = db.execute(
+			"SELECT * FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+		).fetchone()
+		if not row:
+			return _json_response({"error": "岗位不存在"}, 404)
+		job = dict(row)
+		markdown_text = ""
+		source_value = str(job.get("resume_source_path") or "")
+		if source_value:
+			source_path = Path(source_value)
+			if source_path.exists():
+				markdown_text = source_path.read_text(encoding="utf-8")
+		return _json_response({
+			"status": job.get("resume_review_status") or "missing",
+			"source": job.get("resume_generation_source"),
+			"failure_reason": job.get("resume_failure_reason"),
+			"reviewed_at": job.get("resume_reviewed_at"),
+			"markdown": markdown_text,
+			"image_url": f"/api/jobs/{job_id}/outreach-resume/image" if job.get("resume_image_path") else None,
+		})
+	finally:
+		db.close()
+
+
+@app.route("/api/jobs/<job_id>/outreach-resume", method="PUT")
+def api_job_outreach_resume_save(job_id):
+	body = request.json or {}
+	markdown_text = str(body.get("markdown") or "")
+	if len(markdown_text) > 30000:
+		return _json_response({"error": "图片简历内容过长"}, 400)
+	source = "codex" if body.get("source") == "codex" else "human_edit"
+	try:
+		from bosshunter.ai.resume import save_resume_draft
+
+		result = save_resume_draft(job_id, markdown_text, _task_config(), source=source)
+		db = _get_web_db()
+		try:
+			add_history(db, job_id, "outreach_resume_edited", f"已保存并重新渲染图片简历，来源：{source}")
+		finally:
+			db.close()
+		return _json_response({"success": True, "status": "needs_review", "resume_path": result.name})
+	except KeyError:
+		return _json_response({"error": "岗位不存在"}, 404)
+	except ValueError as exc:
+		return _json_response({"error": str(exc)}, 409)
+	except Exception as exc:
+		return _json_response({"error": f"保存图片简历失败：{exc}"}, 500)
+
+
+@app.route("/api/jobs/<job_id>/outreach-resume/review", method="POST")
+def api_job_outreach_resume_review(job_id):
+	body = request.json or {}
+	if body.get("confirmed") is not True:
+		return _json_response({"error": "确认图片简历需要 confirmed=true"}, 400)
+	db = _get_web_db()
+	try:
+		row = db.execute(
+			"SELECT resume_image_path FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+		).fetchone()
+		if not row:
+			return _json_response({"error": "岗位不存在"}, 404)
+		image_path = Path(str(row["resume_image_path"] or ""))
+		if not row["resume_image_path"] or not image_path.exists():
+			return _json_response({"error": "图片简历不存在，请先生成或保存草稿"}, 409)
+		db.execute(
+			"""
+			UPDATE jobs
+			SET resume_review_status = 'ready', resume_reviewed_at = CURRENT_TIMESTAMP,
+				resume_failure_reason = NULL, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ? AND deleted_at IS NULL
+			""",
+			(job_id,),
+		)
+		add_history(db, job_id, "outreach_resume_reviewed", "用户已确认图片简历的事实、隐私和版式")
+		return _json_response({"success": True, "status": "ready"})
+	finally:
+		db.close()
+
+
+@app.route("/api/jobs/<job_id>/outreach-resume/image")
+def api_job_outreach_resume_image(job_id):
+	db = _get_web_db()
+	try:
+		row = db.execute(
+			"SELECT resume_image_path FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+		).fetchone()
+		if not row or not row["resume_image_path"]:
+			return _json_response({"error": "图片简历不存在"}, 404)
+		image_path = Path(str(row["resume_image_path"]))
+		if not image_path.exists():
+			return _json_response({"error": "图片简历文件不存在"}, 404)
+		download = request.params.get("download", "").lower() in {"1", "true", "yes"}
+		return static_file(
+			image_path.name,
+			root=str(image_path.parent),
+			download=image_path.name if download else False,
+		)
 	finally:
 		db.close()
 
@@ -2392,6 +2543,12 @@ def error500(error):
 
 def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = True):
 	"""Start the web server."""
+	if not (FRONTEND_DIR / "index.html").is_file():
+		raise SystemExit(
+			"前端资源未构建：请在 src/bosshunter/web/frontend 下执行 "
+			"`npm ci && npm run build`（或安装官方发布的 wheel）后重试。"
+		)
+
 	if open_browser:
 		import webbrowser
 		import threading

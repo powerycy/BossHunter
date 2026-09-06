@@ -40,7 +40,8 @@ class ConfigCredentialsTests(unittest.TestCase):
             self.assertNotIn(api_key, public_text)
             self.assertNotIn("api_key", public_config["ai"])
             self.assertTrue(private_path.exists())
-            self.assertEqual(stat.S_IMODE(private_path.stat().st_mode), 0o600)
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(private_path.stat().st_mode), 0o600)
             self.assertEqual(load_config(config_path)["ai"]["api_key"], api_key)
 
     def test_migrate_legacy_credentials_is_idempotent(self):

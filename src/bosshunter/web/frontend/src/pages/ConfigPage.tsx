@@ -354,6 +354,23 @@ export default function ConfigPage() {
               min={0}
               max={200}
             />
+            <Field label={`薪资上限放宽倍数：${config.profile?.salary_ceil_ratio ?? 1.5}`}>
+              <Slider
+                value={config.profile?.salary_ceil_ratio ?? 1.5}
+                onChange={value => updateConfig('profile.salary_ceil_ratio', value)}
+                min={1}
+                max={5}
+                step={0.1}
+              />
+              <p className="mt-1 text-xs text-muted">按岗位薪资区间下限判断；下限超过最高薪资 × 放宽倍数时会在 AI 评分前跳过。</p>
+            </Field>
+            <div className="flex items-center justify-between rounded-xl border border-card-border bg-[#FFFCFA] px-3 py-2">
+              <div>
+                <label className="text-xs text-foreground">过滤面议/无法解析薪资</label>
+                <p className="mt-1 text-xs text-muted">关闭后这类岗位会保留给 AI 综合判断。</p>
+              </div>
+              <Switch checked={config.profile?.filter_unparsed_salary ?? true} onChange={v => updateConfig('profile.filter_unparsed_salary', v)} />
+            </div>
             <Field label="排除关键词">
               <TagsInput value={config.profile?.deal_breakers || []} onChange={v => updateConfig('profile.deal_breakers', v)} placeholder="如：外包、996" />
             </Field>
@@ -398,7 +415,7 @@ export default function ConfigPage() {
                     <span className="text-xs text-muted">{enabled ? '已启用' : '未启用'}</span>
                   </div>
                   {enabled && <div className="mt-4 space-y-3">
-                    <Field label="搜索关键词">
+                    <Field label="搜索关键词" hint={platform === 'boss' ? '输入岗位后请按回车键确认，多岗位用","隔开，否则配置无法保存。' : undefined}>
                       <TagsInput value={Array.isArray(search.keywords) ? search.keywords : []} onChange={value => updatePlatformSearch(platform, 'keywords', value)} placeholder="如：人力、产品运营" />
                     </Field>
                     <Field label="搜索城市">
@@ -789,10 +806,13 @@ function SectionCard({ title, sectionKey, expanded, toggle, children }: {
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
     <div>
-      <label className="block text-xs text-foreground mb-1.5">{label}</label>
+      <div className="mb-1.5 flex items-baseline justify-between gap-2">
+        <label className="block text-xs text-foreground">{label}</label>
+        {hint && <span className="text-[11px] leading-4 text-muted">{hint}</span>}
+      </div>
       {children}
     </div>
   )

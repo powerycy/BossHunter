@@ -4,7 +4,6 @@ __pycache__/
 *$py.class
 *.egg-info/
 dist/
-!src/bosshunter/web/frontend/dist/
 build/
 *.egg
 
@@ -37,6 +36,9 @@ data/
 # Node
 node_modules/
 *.tsbuildinfo
+
+# Frontend build output (built on demand, not tracked in VCS)
+src/bosshunter/web/frontend/dist/
 
 # Local generated artifacts
 output/

@@ -351,6 +351,7 @@ class CollectionOrchestrator:
                     on_candidate=processor.save,
                     on_parse_failed=lambda reason, p=processor: self._parse_failed(p, reason),
                     on_event=lambda p=processor, **kwargs: p.event(**kwargs),
+                    can_checkpoint=lambda p=processor: p.progress.save_failed == 0,
                 )
                 try:
                     collector = (
@@ -358,9 +359,10 @@ class CollectionOrchestrator:
                         if platform == "boss" and self._uses_default_registry
                         else Job51Collector(config=self.config, safety_conn=conn)
                         if platform == "51job" and self._uses_default_registry
-
                         else ZhilianCollector(config=self.config, safety_conn=conn)
                         if platform == "zhilian" and self._uses_default_registry
+                        else LiepinCollector(config=self.config, safety_conn=conn)
+                        if platform == "liepin" and self._uses_default_registry
                         else self.registry.get(platform)
                     )
                     result = collector.collect(request, hooks)
