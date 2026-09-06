@@ -12,6 +12,10 @@ from bosshunter.collection.platforms.zhilian import (
     JS_EXTRACT_LIST,
     ZhilianBrowser,
     ZhilianCollector,
+    _analyze_api_response,
+
+    _ApiRateLimiter,
+    _reason_code_for,
     _source_job_id,
     get_zhilian_city_code,
     load_zhilian_city_snapshot,
@@ -724,3 +728,409 @@ class ZhilianResumeCheckpointTests(TestCase):
         get_progress.assert_not_called()
         upsert.assert_not_called()
         mark.assert_not_called()
+
+
+def _api_body(results=None, num_total=0, code=200, api_code=200, message=""):
+    """构造智联 API 响应 JSON body。"""
+    return json.dumps({
+        "code": code,
+        "apiCode": api_code,
+        "message": message,
+        "data": {
+            "results": results or [],
+            "numTotal": num_total,
+            "numFound": num_total,
+            "taskId": "test-task",
+        },
+    }, ensure_ascii=False)
+
+
+def _api_item(**overrides):
+    """构造智联 API item。"""
+    base = {
+        "number": "CC123",
+        "jobName": "AI 工程师",
+        "companyName": "测试科技",
+        "salary": "15-25K",
+        "cityName": "北京",
+        "jobDesc": "负责 AI 系统开发",
+        "workingExp": "3-5年",
+        "education": "本科",
+        "url": "/jobdetail/CC123.htm",
+    }
+    base.update(overrides)
+    return base
+
+
+class ZhilianApiAnalyzeTests(TestCase):
+    """_analyze_api_response 风控分级测试。"""
+
+    def test_l0_normal_with_results(self):
+        body = _api_body(results=[_api_item()], num_total=1)
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["level"], 0)
+        self.assertEqual(r["signal"], "ok")
+        self.assertEqual(len(r["jobs"]), 1)
+        self.assertEqual(r["total"], 1)
+
+    def test_l0_no_results(self):
+        body = _api_body(results=[], num_total=0)
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["level"], 0)
+        self.assertEqual(r["signal"], "no_results")
+        self.assertEqual(r["jobs"], [])
+
+    def test_l1_parse_error(self):
+        r = _analyze_api_response(200, "application/json", "{invalid json")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 1)
+        self.assertEqual(r["signal"], "parse_error")
+
+    def test_l2_empty_items_with_total(self):
+        body = _api_body(results=[], num_total=50)
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 2)
+        self.assertEqual(r["signal"], "empty_items")
+        self.assertEqual(r["total"], 50)
+
+    def test_l2_api_limited(self):
+        body = _api_body(results=[], num_total=0, code=403, message="请求过于频繁")
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 2)
+        self.assertEqual(r["signal"], "api_limited")
+
+    def test_l3_http_error(self):
+        r = _analyze_api_response(403, "text/plain", "Forbidden")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertEqual(r["signal"], "http_error")
+
+    def test_l3_non_json_html(self):
+        r = _analyze_api_response(200, "text/html", "<html><body>Not JSON</body></html>")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertEqual(r["signal"], "non_json")
+
+    def test_l3_non_json_captcha_hint(self):
+        r = _analyze_api_response(200, "text/html", "<html>请完成验证码</html>")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertIn("验证", r["note"])
+
+    def test_l3_non_json_login_hint(self):
+        r = _analyze_api_response(200, "text/html", "<html>请先登录</html>")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertIn("登录", r["note"])
+
+    def test_l3_hard_risk_with_captcha(self):
+        body = _api_body(results=[], num_total=0, code=403, message="请完成验证码")
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertEqual(r["signal"], "hard_risk")
+
+    def test_l3_hard_risk_with_ban(self):
+        body = _api_body(results=[], num_total=0, code=403, message="账号已被封禁")
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertEqual(r["signal"], "hard_risk")
+
+    def test_empty_body(self):
+        r = _analyze_api_response(200, "application/json", "")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 3)
+        self.assertEqual(r["signal"], "non_json")
+
+    def test_results_not_list(self):
+        body = json.dumps({"code": 200, "data": {"results": "not_a_list", "numTotal": 5}})
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["level"], 2)
+        self.assertEqual(r["signal"], "empty_items")
+
+    def test_missing_data_block(self):
+        body = json.dumps({"code": 200})
+        r = _analyze_api_response(200, "application/json", body)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["signal"], "no_results")
+
+
+class ZhilianApiRateLimiterTests(TestCase):
+    """_ApiRateLimiter 速率限制器测试。"""
+
+    def test_light_tier(self):
+        limiter = _ApiRateLimiter(total_requests=30)
+        self.assertEqual(limiter.per_min_limit, 30)
+        self.assertEqual(limiter.gap_range, (2.0, 3.0))
+
+    def test_medium_tier(self):
+        limiter = _ApiRateLimiter(total_requests=100)
+        self.assertEqual(limiter.per_min_limit, 20)
+        self.assertEqual(limiter.gap_range, (3.0, 5.0))
+
+    def test_heavy_tier(self):
+        limiter = _ApiRateLimiter(total_requests=200)
+        self.assertEqual(limiter.per_min_limit, 12)
+        self.assertEqual(limiter.gap_range, (5.0, 8.0))
+
+    def test_default_tier_no_arg(self):
+        limiter = _ApiRateLimiter()
+        self.assertEqual(limiter.per_min_limit, 30)
+
+    def test_set_tier_updates_params(self):
+        limiter = _ApiRateLimiter(total_requests=10)
+        self.assertEqual(limiter.per_min_limit, 30)
+        limiter.set_tier(200)
+        self.assertEqual(limiter.per_min_limit, 12)
+
+    def test_wait_before_request_returns_true_no_stop(self):
+        limiter = _ApiRateLimiter(total_requests=10, no_burst=True)
+        with patch("bosshunter.collection.platforms.zhilian._wait_or_stop", return_value=False):
+            self.assertTrue(limiter.wait_before_request(None))
+
+
+class ZhilianReasonCodeTests(TestCase):
+    """_reason_code_for 映射测试。"""
+
+    def test_parse_error_maps_to_selector_changed(self):
+        self.assertEqual(_reason_code_for({"signal": "parse_error"}), "selector_changed")
+
+    def test_other_signals_map_to_rate_limit(self):
+        for signal in ("http_error", "non_json", "hard_risk", "api_limited", "empty_items", "ok"):
+            self.assertEqual(_reason_code_for({"signal": signal}), "rate_limit")
+
+
+class ZhilianItemToCandidateTests(TestCase):
+    """_item_to_candidate 字段映射测试。"""
+
+    def test_normal_item(self):
+        cand = ZhilianCollector._item_to_candidate(_api_item(), "北京", "530", "AI")
+        self.assertIsNotNone(cand)
+        self.assertEqual(cand.platform, "zhilian")
+        self.assertEqual(cand.source_job_id, "CC123")
+        self.assertEqual(cand.title, "AI 工程师")
+        self.assertEqual(cand.company, "测试科技")
+        self.assertEqual(cand.salary, "15-25K")
+        self.assertEqual(cand.city, "北京")
+        self.assertEqual(cand.jd, "负责 AI 系统开发")
+        self.assertEqual(cand.experience, "3-5年")
+        self.assertEqual(cand.education, "本科")
+        self.assertEqual(cand.source_keyword, "AI")
+
+    def test_missing_job_id_returns_none(self):
+        item = _api_item(number="")
+        self.assertIsNone(ZhilianCollector._item_to_candidate(item, "北京", "530", "AI"))
+
+    def test_missing_title_returns_none(self):
+        item = _api_item(jobName="")
+        self.assertIsNone(ZhilianCollector._item_to_candidate(item, "北京", "530", "AI"))
+
+    def test_alternative_field_names(self):
+        item = {
+            "positionId": "P001",
+            "positionName": "后端开发",
+            "company": " alt公司",
+            "salaryStr": "20-30K",
+            "workCity": "上海",
+            "positionDesc": "后端开发职责",
+            "workYear": "5-10年",
+            "degree": "硕士",
+        }
+        cand = ZhilianCollector._item_to_candidate(item, "上海", "020", "后端")
+        self.assertIsNotNone(cand)
+        self.assertEqual(cand.source_job_id, "P001")
+        self.assertEqual(cand.title, "后端开发")
+        self.assertEqual(cand.company, "alt公司")
+        self.assertEqual(cand.salary, "20-30K")
+        self.assertEqual(cand.city, "上海")
+        self.assertEqual(cand.jd, "后端开发职责")
+
+    def test_url_fallback_from_job_id(self):
+        item = _api_item()
+        del item["url"]
+        cand = ZhilianCollector._item_to_candidate(item, "北京", "530", "AI")
+        self.assertIsNotNone(cand)
+        self.assertIn("CC123", cand.url)
+
+    def test_non_dict_returns_none(self):
+        self.assertIsNone(ZhilianCollector._item_to_candidate("not_a_dict", "北京", "530", "AI"))
+        self.assertIsNone(ZhilianCollector._item_to_candidate(None, "北京", "530", "AI"))
+
+
+class ZhilianApiFetchEnabledTests(TestCase):
+    """_api_fetch_enabled 配置开关测试。"""
+
+    def test_default_disabled(self):
+        self.assertFalse(ZhilianCollector()._api_fetch_enabled())
+
+    def test_enabled_via_config(self):
+        collector = ZhilianCollector(
+            config={"platforms": {"zhilian": {"search": {"api_fetch": True}}}},
+        )
+        self.assertTrue(collector._api_fetch_enabled())
+
+    def test_disabled_explicitly(self):
+        collector = ZhilianCollector(
+            config={"platforms": {"zhilian": {"search": {"api_fetch": False}}}},
+        )
+        self.assertFalse(collector._api_fetch_enabled())
+
+    def test_invalid_config_disabled(self):
+        collector = ZhilianCollector(config={"platforms": "not_a_dict"})
+        self.assertFalse(collector._api_fetch_enabled())
+
+
+class ZhilianCollectApiTests(TestCase):
+    """_collect_api 集成测试（mock browser）。"""
+
+    def setUp(self):
+        self._patches = [
+            patch("bosshunter.collection.platforms.zhilian.SendWindowChecker.is_active", return_value=True),
+            patch("bosshunter.collection.platforms.zhilian.should_take_day_off", return_value=False),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+
+    def _hooks(self, collected):
+        return CollectorHooks(
+            stop_event=None,
+            on_event=lambda **kw: None,
+            on_list_candidate=lambda c: True,
+            on_candidate=lambda c: collected.append(c) or True,
+            on_parse_failed=lambda msg: None,
+        )
+
+    def test_no_host_tab_returns_none(self):
+        browser = ZhilianBrowser(
+            get_page_targets=lambda: [],
+            new_tab=lambda *a, **kw: None,
+            close_tab=lambda t: True,
+            evaluate=lambda *a, **kw: None,
+            scroll=lambda *a, **kw: True,
+            wait_for_load=lambda *a, **kw: True,
+        )
+        collector = ZhilianCollector(browser=browser, sleep=lambda _s: None)
+        request = PlatformCollectionRequest("zhilian", ["AI"], ["北京"], {"北京": "530"}, max_pages=1)
+        result = collector._collect_api(request, self._hooks([]), set())
+        self.assertIsNone(result)
+
+    def test_api_success_collects_jobs(self):
+        api_response = json.dumps({
+            "http_status": 200,
+            "content_type": "application/json",
+            "body": _api_body(results=[_api_item()], num_total=1),
+        })
+        browser = ZhilianBrowser(
+            get_page_targets=lambda: [],
+            new_tab=lambda *a, **kw: "host-1",
+            close_tab=lambda t: True,
+            evaluate=lambda *a, **kw: api_response,
+            scroll=lambda *a, **kw: True,
+            wait_for_load=lambda *a, **kw: True,
+        )
+        collected = []
+        collector = ZhilianCollector(
+            browser=browser, sleep=lambda _s: None,
+            config={"profile": {"deal_breakers": [], "blocked_companies": []}},
+        )
+        request = PlatformCollectionRequest("zhilian", ["AI"], ["北京"], {"北京": "530"}, max_pages=1)
+        result = collector._collect_api(request, self._hooks(collected), set())
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0].source_job_id, "CC123")
+
+    def test_api_non_json_falls_back_to_dom(self):
+        api_response = json.dumps({
+            "http_status": 200,
+            "content_type": "text/html",
+            "body": "<html>Not JSON</html>",
+        })
+        browser = ZhilianBrowser(
+            get_page_targets=lambda: [],
+            new_tab=lambda *a, **kw: "host-1",
+            close_tab=lambda t: True,
+            evaluate=lambda *a, **kw: api_response,
+            scroll=lambda *a, **kw: True,
+            wait_for_load=lambda *a, **kw: True,
+        )
+        collector = ZhilianCollector(browser=browser, sleep=lambda _s: None)
+        request = PlatformCollectionRequest("zhilian", ["AI"], ["北京"], {"北京": "530"}, max_pages=1)
+        result = collector._collect_api(request, self._hooks([]), set())
+        self.assertIsNone(result)
+
+    def test_api_hard_risk_raises_blocked(self):
+        api_response = json.dumps({
+            "http_status": 200,
+            "content_type": "application/json",
+            "body": _api_body(results=[], num_total=0, code=403, message="请完成验证码"),
+        })
+        browser = ZhilianBrowser(
+            get_page_targets=lambda: [],
+            new_tab=lambda *a, **kw: "host-1",
+            close_tab=lambda t: True,
+            evaluate=lambda *a, **kw: api_response,
+            scroll=lambda *a, **kw: True,
+            wait_for_load=lambda *a, **kw: True,
+        )
+        collector = ZhilianCollector(browser=browser, sleep=lambda _s: None)
+        request = PlatformCollectionRequest("zhilian", ["AI"], ["北京"], {"北京": "530"}, max_pages=1)
+        with self.assertRaises(CollectionBlockedError) as ctx:
+            collector._collect_api(request, self._hooks([]), set())
+        self.assertEqual(ctx.exception.code, "rate_limit")
+
+    def test_api_skips_collected_combos(self):
+        api_response = json.dumps({
+            "http_status": 200,
+            "content_type": "application/json",
+            "body": _api_body(results=[_api_item()], num_total=1),
+        })
+        browser = ZhilianBrowser(
+            get_page_targets=lambda: [],
+            new_tab=lambda *a, **kw: "host-1",
+            close_tab=lambda t: True,
+            evaluate=lambda *a, **kw: api_response,
+            scroll=lambda *a, **kw: True,
+            wait_for_load=lambda *a, **kw: True,
+        )
+        collected = []
+        collector = ZhilianCollector(browser=browser, sleep=lambda _s: None)
+        request = PlatformCollectionRequest("zhilian", ["AI"], ["北京"], {"北京": "530"}, max_pages=1)
+        result = collector._collect_api(
+            request, self._hooks(collected), {("北京", "AI")},
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(collected), 0)
+
+    def test_api_empty_page_ends_keyword(self):
+        api_response = json.dumps({
+            "http_status": 200,
+            "content_type": "application/json",
+            "body": _api_body(results=[], num_total=0),
+        })
+        browser = ZhilianBrowser(
+            get_page_targets=lambda: [],
+            new_tab=lambda *a, **kw: "host-1",
+            close_tab=lambda t: True,
+            evaluate=lambda *a, **kw: api_response,
+            scroll=lambda *a, **kw: True,
+            wait_for_load=lambda *a, **kw: True,
+        )
+        collected = []
+        collector = ZhilianCollector(browser=browser, sleep=lambda _s: None)
+        request = PlatformCollectionRequest("zhilian", ["AI"], ["北京"], {"北京": "530"}, max_pages=3)
+        result = collector._collect_api(request, self._hooks(collected), set())
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(collected), 0)
