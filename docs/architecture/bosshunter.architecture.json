@@ -1,0 +1,325 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "BossHunter 项目结构图",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1390,
+      740
+    ],
+    "legend": {
+      "entries": {
+        "frontend": {
+          "label": "交互入口"
+        },
+        "backend": {
+          "label": "本地处理"
+        },
+        "database": {
+          "label": "数据存储"
+        },
+        "security": {
+          "label": "人工确认"
+        },
+        "external": {
+          "label": "外部服务"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "workbench",
+      "type": "frontend",
+      "label": "求职工作台",
+      "sublabel": "React · TypeScript",
+      "pos": [
+        50,
+        310
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "本地 Web 服务",
+      "sublabel": "Bottle · 127.0.0.1:8686",
+      "pos": [
+        330,
+        310
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "命令行入口",
+      "sublabel": "Click · bosshunter",
+      "pos": [
+        330,
+        60
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "orchestration",
+      "type": "backend",
+      "label": "任务编排",
+      "sublabel": "后台线程 · 进度 · 停止",
+      "pos": [
+        610,
+        310
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "approval",
+      "type": "security",
+      "label": "人工确认投递",
+      "sublabel": "选择岗位 · 确认后继续",
+      "pos": [
+        890,
+        310
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "execution",
+      "type": "backend",
+      "label": "投递与回复监测",
+      "sublabel": "招呼语 · 跟进 · 简历",
+      "tag": "仅 BOSS",
+      "pos": [
+        1170,
+        310
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "ai",
+      "type": "backend",
+      "label": "AI 处理模块",
+      "sublabel": "评分 · 招呼语 · 定制简历",
+      "pos": [
+        890,
+        60
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "provider",
+      "type": "external",
+      "label": "AI 服务商",
+      "sublabel": "Anthropic / OpenAI 兼容",
+      "pos": [
+        1170,
+        60
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "database",
+      "type": "database",
+      "label": "SQLite 本地数据库",
+      "sublabel": "岗位 · 历史 · 运行记录",
+      "pos": [
+        330,
+        560
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "collection",
+      "type": "backend",
+      "label": "多平台岗位采集",
+      "sublabel": "串行队列 · 过滤 · 去重",
+      "pos": [
+        610,
+        560
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "浏览器执行层",
+      "sublabel": "HTTP → Node.js → Chrome",
+      "tag": "CDP",
+      "pos": [
+        890,
+        560
+      ],
+      "size": [
+        200,
+        88
+      ]
+    },
+    {
+      "id": "platforms",
+      "type": "external",
+      "label": "招聘平台",
+      "sublabel": "BOSS · 智联 · 51job · 猎聘",
+      "pos": [
+        1170,
+        560
+      ],
+      "size": [
+        200,
+        88
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "workbench-api",
+      "from": "workbench",
+      "to": "api",
+      "label": "HTTP",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cli-orchestration",
+      "from": "cli",
+      "to": "orchestration",
+      "label": "CLI 流程",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "id": "api-orchestration",
+      "from": "api",
+      "to": "orchestration",
+      "label": "调度",
+      "variant": "emphasis"
+    },
+    {
+      "id": "orchestration-approval",
+      "from": "orchestration",
+      "to": "approval",
+      "label": "等待",
+      "variant": "security"
+    },
+    {
+      "id": "approval-execution",
+      "from": "approval",
+      "to": "execution",
+      "label": "已确认",
+      "variant": "emphasis"
+    },
+    {
+      "id": "orchestration-ai",
+      "from": "orchestration",
+      "to": "ai",
+      "label": "评分",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "ai-provider",
+      "from": "ai",
+      "to": "provider",
+      "label": "API"
+    },
+    {
+      "id": "orchestration-collection",
+      "from": "orchestration",
+      "to": "collection",
+      "label": "采集",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 90
+    },
+    {
+      "id": "api-database",
+      "from": "api",
+      "to": "database",
+      "label": "查询与更新",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 90
+    },
+    {
+      "id": "collection-database",
+      "from": "collection",
+      "to": "database",
+      "label": "入库"
+    },
+    {
+      "id": "collection-runtime",
+      "from": "collection",
+      "to": "runtime",
+      "label": "读取页面"
+    },
+    {
+      "id": "execution-runtime",
+      "from": "execution",
+      "to": "runtime",
+      "label": "发送与监测",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "runtime-platforms",
+      "from": "runtime",
+      "to": "platforms",
+      "label": "页面交互"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两种入口，共用业务模块",
+      "items": [
+        "Web：server.py + WorkbenchTaskRunner；CLI：main.py + pipeline.py。",
+        "采集 → AI 评分 → 人工确认 → 招呼语与发送 → 监测。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "数据与 AI 支撑",
+      "items": [
+        "评分、招呼语、执行和监测共用 SQLite；图中省略重复读写线。",
+        "config.yaml 保存配置；本地简历作为 AI 输入，生成 Markdown / PDF。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "当前实现边界",
+      "items": [
+        "四个平台可采集、评分和生成招呼语；自动投递与监测仅 BOSS。",
+        "发送受时间窗口、每日额度与风控约束；监测可调用 AI 准备回复和简历。"
+      ]
+    }
+  ]
+}
