@@ -45,7 +45,7 @@ PAGE_DELAY_MAX_SECONDS = 35.0
 RENDER_POLL_INTERVAL_SECONDS = 0.75
 RENDER_POLL_ATTEMPTS = 10
 
-# Liepin uses 3-digit city codes passed via the ``dqs`` parameter. Only codes
+# Liepin city codes: 直辖市 3-digit, 其余 6-digit, passed via the ``dqs`` parameter. Only codes
 # verified live are bundled; unknown cities are rejected instead of guessing.
 CITY_SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "data" / "liepin_cities.json"
 
