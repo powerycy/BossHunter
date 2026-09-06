@@ -77,6 +77,12 @@ class ConfigExampleTests(unittest.TestCase):
 
         self.assertIs(config["profile"]["allow_internship"], False)
 
+    def test_example_includes_salary_filter_controls(self):
+        config = yaml.safe_load((ROOT / "config.example.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(config["profile"]["salary_ceil_ratio"], 1.5)
+        self.assertIs(config["profile"]["filter_unparsed_salary"], True)
+
     def test_example_defaults_to_disabled_follow_up(self):
         config = yaml.safe_load((ROOT / "config.example.yaml").read_text(encoding="utf-8"))
 
@@ -109,6 +115,8 @@ class ConfigValidationTests(unittest.TestCase):
             config = load_config(config_path)
 
         self.assertIs(config["profile"]["allow_internship"], False)
+        self.assertEqual(config["profile"]["salary_ceil_ratio"], 1.5)
+        self.assertIs(config["profile"]["filter_unparsed_salary"], True)
         self.assertNotIn("prefilter_threshold", config["scoring"])
 
     def test_load_config_defaults_to_disabled_follow_up(self):
@@ -341,6 +349,33 @@ class PrefilterHardGateTests(unittest.TestCase):
 
         self.assertEqual(score, 0)
         self.assertEqual(reason, "薪资低于硬性要求: 12K < 100K")
+
+    def test_salary_ceiling_uses_range_lower_bound(self):
+        from bosshunter.ai.prefilter import quick_score
+
+        config = {"profile": {"deal_breakers": [], "salary_min": 7, "salary_max": 10, "salary_ceil_ratio": 1.0}}
+
+        score, reason = quick_score({"title": "AI产品经理", "jd": "", "salary": "6-11K"}, config)
+
+        self.assertEqual(score, 100, reason)
+        score, reason = quick_score({"title": "AI产品经理", "jd": "", "salary": "15-20K"}, config)
+        self.assertEqual(score, 0)
+        self.assertIn("薪资远超期望上限", reason)
+
+    def test_unparsed_salary_is_filtered_by_default_and_can_be_kept(self):
+        from bosshunter.ai.prefilter import quick_score
+
+        job = {"title": "AI产品经理", "jd": "", "salary": "面议"}
+        score, reason = quick_score(job, {"profile": {"deal_breakers": [], "salary_min": 7}})
+        self.assertEqual(score, 0)
+        self.assertIn("无法解析", reason)
+
+        score, reason = quick_score(
+            job,
+            {"profile": {"deal_breakers": [], "salary_min": 7, "filter_unparsed_salary": False}},
+        )
+        self.assertEqual(score, 100)
+        self.assertIn("交由 AI 判断", reason)
 
     def test_passing_job_returns_hard_gate_pass(self):
         from bosshunter.ai.prefilter import quick_score
@@ -780,6 +815,12 @@ class ConfigPageTests(unittest.TestCase):
         self.assertIn("profile.jd_deal_breakers", self.source)
         self.assertIn("完整 JD 含这些词时会在 AI 评分前跳过", self.source)
 
+    def test_config_page_exposes_salary_filter_controls(self):
+        self.assertIn("薪资上限放宽倍数", self.source)
+        self.assertIn("profile.salary_ceil_ratio", self.source)
+        self.assertIn("过滤面议/无法解析薪资", self.source)
+        self.assertIn("profile.filter_unparsed_salary", self.source)
+
     def test_config_page_api_failure_displays_error_instead_of_infinite_loading(self):
         # Act / Assert
         self.assertIn("error", self.hook_source)
@@ -865,6 +906,15 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(allow_field["type"], "switch")
         self.assertIs(allow_field["default"], False)
 
+    def test_schema_includes_salary_filter_controls(self):
+        profile = next(section for section in self.schema["sections"] if section["key"] == "profile")
+        fields = {field["key"]: field for field in profile["fields"]}
+
+        self.assertEqual(fields["salary_ceil_ratio"]["label"], "薪资上限放宽倍数")
+        self.assertEqual(fields["salary_ceil_ratio"]["default"], 1.5)
+        self.assertEqual(fields["filter_unparsed_salary"]["type"], "switch")
+        self.assertIs(fields["filter_unparsed_salary"]["default"], True)
+
     def test_schema_defaults_to_disabled_follow_up(self):
         follow_up = next(section for section in self.schema["sections"] if section["key"] == "follow_up")
         enabled = next(field for field in follow_up["fields"] if field["key"] == "enabled")
@@ -881,6 +931,11 @@ class ScorerPrefilterTests(unittest.TestCase):
     def test_scorer_no_longer_depends_on_prefilter_threshold(self):
         self.assertNotIn("prefilter_threshold", self.source)
         self.assertIn("if qs == 0:", self.source)
+
+    def test_scorer_prompt_includes_salary_ceiling_context(self):
+        self.assertIn("期望薪资区间", self.source)
+        self.assertIn("薪资上限放宽线", self.source)
+        self.assertIn("salary_ceil_ratio", self.source)
 
 
 if __name__ == "__main__":

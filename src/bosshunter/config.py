@@ -75,6 +75,8 @@ DEFAULTS: dict[str, Any] = {
         "greeting_preference": "",
         "salary_min": 0,
         "salary_max": 0,
+        "salary_ceil_ratio": 1.5,
+        "filter_unparsed_salary": True,
         "allow_internship": False,
         "deal_breakers": [],
         "jd_deal_breakers": [],
