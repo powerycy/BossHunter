@@ -129,11 +129,11 @@ def scroll(target_id: str, y: int = 0, direction: str = "") -> bool:
     return _client().scroll(target_id, y=y, direction=direction)
 
 
-def screenshot(target_id: str, file_path: str | Path) -> bool:
+def screenshot(target_id: str, file_path: str | Path, *, selector: str = "") -> bool:
     """Capture a screenshot to a file."""
     if not _ready():
         return False
-    return _client().screenshot(target_id, file_path)
+    return _client().screenshot(target_id, file_path, selector=selector)
 
 
 def print_pdf(target_id: str, file_path: str | Path) -> bool:
