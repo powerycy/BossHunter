@@ -303,7 +303,11 @@ class BossCollector:
         def limited(reason: str) -> PlatformCollectionResult:
             return PlatformCollectionResult(
                 self.platform, "completed_with_shortage", reason,
-                f"BOSS 采集已达安全上限：{reason}",
+                (
+                    "BOSS 采集暂时暂停：此前检测到风险提示，请稍后重试。"
+                    if reason == "persistent_risk_lock"
+                    else f"BOSS 采集已达安全上限：{reason}"
+                ),
             )
 
         def risk(kind: str, evidence: str = "") -> PlatformCollectionResult:
