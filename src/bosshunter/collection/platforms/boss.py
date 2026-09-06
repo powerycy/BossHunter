@@ -13,10 +13,19 @@ from urllib.parse import quote, urlencode
 
 from bosshunter.ai.prefilter import quick_score
 from bosshunter.browser import close_tab, evaluate, navigate, new_tab, scroll, wait_for_load
-from bosshunter.collection.base import CollectionError, CollectorHooks
+from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
 from bosshunter.config import CITY_CODES
-from bosshunter.db import add_risk_event
+from bosshunter.db import (
+    add_risk_event,
+    delete_page_progress,
+    get_collected_combos,
+    get_page_progress,
+    mark_combo_collected,
+    prune_collected_combos,
+    prune_page_progress,
+    upsert_page_progress,
+)
 from bosshunter.platform_safety import PlatformAccessGuard, PlatformSafetyStop
 from bosshunter.throttle import PageThrottle
 
@@ -247,6 +256,22 @@ class BossCollector:
         self.config = config or {}
         self.safety_conn = safety_conn
 
+    def _resume_ttl_hours(self) -> int:
+        """断点续采有效期（默认 24h），与 51job/zhilian/liepin 同规则。"""
+        search_cfg: dict[str, Any] = {}
+        platforms = self.config.get("platforms", {})
+        if isinstance(platforms, dict) and isinstance(platforms.get("boss"), dict):
+            pf = platforms["boss"]
+            if isinstance(pf.get("search"), dict):
+                search_cfg = pf["search"]
+        elif isinstance(self.config.get("search"), dict):
+            search_cfg = self.config["search"]
+        raw = search_cfg.get("resume_ttl_hours", 24)
+        try:
+            return max(1, min(int(raw or 24), 720))
+        except (TypeError, ValueError):
+            return 24
+
     @staticmethod
     def resolve_city_code(city: str, request: PlatformCollectionRequest) -> str | None:
         return str(request.city_codes.get(city) or CITY_CODES.get(city) or "") or None
@@ -356,6 +381,17 @@ class BossCollector:
             return PlatformCollectionResult(
                 self.platform, "completed_with_shortage", "no_valid_city", "没有有效的 BOSS 搜索组合"
             )
+
+        # 词级断点续采：跳过最近 N 小时内已完成的 (city, keyword) 组合。
+        collected_combos: set[tuple[str, str]] = set()
+        if self.safety_conn is not None:
+            all_keywords = set(request.keywords)
+            prune_collected_combos(self.safety_conn, "boss", all_keywords)
+            prune_page_progress(self.safety_conn, "boss", all_keywords)
+            collected_combos = get_collected_combos(
+                self.safety_conn, "boss", within_hours=self._resume_ttl_hours()
+            )
+
         if guard is not None:
             try:
                 guard.ensure_unlocked()
@@ -366,7 +402,22 @@ class BossCollector:
             for city, city_code, keyword in combos:
                 if hooks.stop_event is not None and hooks.stop_event.is_set():
                     return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
-                for page in range(1, request.max_pages + 1):
+                # 词级断点跳过：TTL 内已完成的组合整词跳过
+                if (city, keyword) in collected_combos:
+                    hooks.on_event(phase="completed_keyword", keyword=keyword, city=city,
+                                   message=f"BOSS {keyword} 断点续采：{self._resume_ttl_hours()}h 内已完成，整词跳过")
+                    continue
+                # 页级断点：从上次采到页码的下一页继续
+                saved_page = get_page_progress(self.safety_conn, "boss", city, keyword) if self.safety_conn is not None else 0
+                start_page = saved_page + 1 if saved_page > 0 else 1
+                if start_page > request.max_pages:
+                    if self.safety_conn is not None:
+                        mark_combo_collected(self.safety_conn, "boss", city, keyword)
+                        delete_page_progress(self.safety_conn, "boss", city, keyword)
+                    hooks.on_event(phase="completed_keyword", keyword=keyword, city=city,
+                                   message=f"BOSS {keyword} 页级断点已超最大页（{saved_page}/{request.max_pages}），视为已采完，跳过")
+                    continue
+                for page in range(start_page, request.max_pages + 1):
                     if hooks.stop_event is not None and hooks.stop_event.is_set():
                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                     hooks.on_event(phase="loading_list", keyword=keyword, city=city, page=page)
@@ -453,8 +504,15 @@ class BossCollector:
                             continue
                         if not hooks.on_candidate(merged):
                             return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")
+                    # 页级断点：每采完一页立即记录页码
+                    if self.safety_conn is not None:
+                        upsert_page_progress(self.safety_conn, "boss", city, keyword, page)
                     if page < request.max_pages and _wait_or_stop(hooks.stop_event, 0.2 * delay_multiplier, self.sleep):
                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                # 词结束：标记词级断点 + 清页级断点
+                if self.safety_conn is not None:
+                    mark_combo_collected(self.safety_conn, "boss", city, keyword)
+                    delete_page_progress(self.safety_conn, "boss", city, keyword)
         finally:
             if worker_target:
                 self.browser.close_tab(worker_target)
