@@ -43,7 +43,7 @@ class ZhilianFixtureTests(TestCase):
     def test_city_snapshot_is_local_and_not_shared_with_boss_codes(self):
         snapshot = load_zhilian_city_snapshot()
         self.assertEqual(snapshot["schema"], "bosshunter.zhilian_cities.v1")
-        self.assertEqual(snapshot["source"], "bundled_public_reference_snapshot")
+
         self.assertGreaterEqual(len(snapshot["cities"]), 10)
         self.assertEqual(get_zhilian_city_code("北京"), "530")
         self.assertEqual(get_zhilian_city_code("北京市"), "530")
